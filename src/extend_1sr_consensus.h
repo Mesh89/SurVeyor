@@ -17,7 +17,7 @@ struct ext_read_t {
 	std::string qname;
 	hts_pos_t start, end;
 	uint8_t mapq;
-	bool rev, same_chr;
+	bool rev, same_chr, left_clipped;
 	int sequence_len = 0;
 	char* sequence = NULL;
 
@@ -32,6 +32,7 @@ struct ext_read_t {
 		mapq = read->core.qual;
 		rev = bam_is_rev(read);
 		same_chr = is_samechr(read);
+		left_clipped = is_left_clipped(read, 1);
 		if (sequence_len < read->core.l_qseq) {
 			if (sequence != NULL) delete[] sequence;
 			sequence = new char[read->core.l_qseq+1];
@@ -46,32 +47,35 @@ struct ext_read_t {
 };
 
 struct ext_read_allocator_t {
-	std::queue<ext_read_t*> reads;
+    std::queue<ext_read_t*> reads;
 
-	ext_read_allocator_t() {}
+    ext_read_allocator_t() {}
 
-	ext_read_t* get(bam1_t* read) {
-		if (reads.empty()) {
-			return new ext_read_t(read);
-		} else {
-			ext_read_t* r = reads.front();
+    ext_read_t* get(bam1_t* read) {
+        ext_read_t* r = nullptr;
+		if (!reads.empty()) {
+			r = reads.front();
 			reads.pop();
-			r->init(read);
-			return r;
 		}
-	}
+        if (!r) return new ext_read_t(read);
+        r->init(read);
+        return r;
+    }
 
-	void release(ext_read_t* read) {
-		reads.push(read);
-	}
+    void release(ext_read_t* read) {
+        reads.push(read);
+    }
 
-	~ext_read_allocator_t() {
-		while (!reads.empty()) {
-			ext_read_t* r = reads.front();
-			reads.pop();
-			delete r;
-		}
-	}
+    ~ext_read_allocator_t() {
+        while (!reads.empty()) {
+            auto* r = reads.front();
+            reads.pop();
+            delete r;
+        }
+    }
+
+    ext_read_allocator_t(const ext_read_allocator_t&) = delete;
+    ext_read_allocator_t& operator=(const ext_read_allocator_t&) = delete;
 };
 
 bool is_vertex_in_cycle(std::vector<std::vector<edge_t> >& l_adj, int i) {
@@ -151,6 +155,7 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			}
 		}
 	}
+	delete[] hp_prefix;
 
 	// sort vectors in kmer_to_idx
 	for (auto& kv : kmer_to_idx) {
@@ -249,6 +254,7 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			}
 		}
 	}
+	delete[] hp_prefix;
 	// Note: vectors are already sorted by first ascending and second ascending due to the way we built them
 
 	std::queue<int> bfs;
@@ -343,8 +349,6 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vector<hts_pair_pos_t>& target_ivals, hts_pos_t contig_len,
 		config_t& config, stats_t& stats, open_samFile_t* bam_file) {
 
-	ext_read_allocator_t ext_read_allocator;
-
 	std::sort(target_ivals.begin(), target_ivals.end(), [](hts_pair_pos_t& a, hts_pair_pos_t& b) {return a.beg < b.beg;});
 
 	std::vector<hts_pair_pos_t> merged_target_ivals;
@@ -357,6 +361,8 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 		}
 	}
 
+	ext_read_allocator_t ext_read_allocator;
+	
 	std::vector<ext_read_t*> reads;
 	bam1_t* read = bam_init1();
 	for (hts_pair_pos_t target_ival : merged_target_ivals) {
@@ -370,52 +376,71 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 		region_reads.reserve(target_ival.end-target_ival.beg+1);
 		ext_read_t* curr_read = nullptr;
 
+		// priority queue to hold left-clipped reads that start at the same position, sorted by mapping quality
+		struct ext_read_cmp_mapq {
+			bool operator()(ext_read_t* a, ext_read_t* b) {
+				return a->mapq > b->mapq;
+			}
+		};
+		std::priority_queue<ext_read_t*, std::vector<ext_read_t*>, ext_read_cmp_mapq> lc_reads_pq;
+
+
 		hts_itr_t* iter = sam_itr_querys(bam_file->idx, bam_file->header, ss.str().c_str());
 		while (sam_itr_next(bam_file->file, iter, read) >= 0) {
 			if (is_unmapped(read) || !is_primary(read)) continue;
-
-			ext_read_t* ext_read = ext_read_allocator.get(read);
 
 			// for same strand pairs that may be due to inversions, add a copy of the unstable end in the the correct orientation
 			// same strand is not always due to inversions (transpositions may also cause this), and we do not know which case we are dealing with
 			// therefore, when there is no clear stable end, and the read may either be the unstable end of an inversion or the stable end of a transposition,
 			// we add a copy of the read in both orientations, and let the extension algorithm decide which one to use
-			if (is_samechr(read) && read->core.qual <= get_mq(read)) {
-				bool was_rced = false;
-				if (!bam_is_rev(read) && !bam_is_mrev(read) && read->core.mpos < read->core.pos) {
-					rc(ext_read->sequence);
-					ext_read->rev = true;
-					was_rced = true;
-				} else if (bam_is_rev(read) && bam_is_mrev(read) && read->core.mpos > read->core.pos) {
-					rc(ext_read->sequence);
-					ext_read->rev = false;
-					was_rced = true;
-				}
-
-				if (was_rced && read->core.qual == get_mq(read)) {
-					ext_read_t* ext_read_orig = ext_read_allocator.get(read);	
-					region_reads.push_back(ext_read_orig);
+			if (is_samechr(read) && is_samestr(read) && read->core.qual <= get_mq(read)) {
+				if ((!bam_is_rev(read) && read->core.mpos < read->core.pos) ||
+					(bam_is_mrev(read) && read->core.mpos > read->core.pos)) {
+					ext_read_t* ext_read_rc = ext_read_allocator.get(read);
+					rc(ext_read_rc->sequence);
+					ext_read_rc->rev = !bam_is_rev(read);
+					region_reads.push_back(ext_read_rc);
 				}
 			}
 
 			// we are downsampling by keeping only the highest mapping quality read at each start position 
-			// (plus all left-clipped reads because they have a legitimate reason for starting at the same position, and all MAPQ 60)
-			if (is_left_clipped(read, 0) || curr_read->mapq == config.high_confidence_mapq) {
-				region_reads.push_back(ext_read);
-			} else if (curr_read == nullptr) {
-				curr_read = ext_read;
-			} else if (curr_read->start == ext_read->start && curr_read->mapq < ext_read->mapq) {
+			// (plus max_depth left-clipped reads because they have a legitimate reason for starting at the same position)
+			if (curr_read == nullptr) {
+				curr_read = ext_read_allocator.get(read);
+			} else if (read->core.pos > curr_read->start) { // new start position, push curr_read and left-clipped reads
+				if (!curr_read->left_clipped) {
+					region_reads.push_back(curr_read);
+				} else {
+					ext_read_allocator.release(curr_read);
+				}
+				while (!lc_reads_pq.empty()) {
+					region_reads.push_back(lc_reads_pq.top());
+					lc_reads_pq.pop();
+				}
+				curr_read = ext_read_allocator.get(read);
+			} else if (curr_read->mapq < read->core.qual || curr_read->left_clipped && !is_left_clipped(read, 1)) {
+				// replace curr_read with the new read if the latter has higher mapping quality or curr_read is left-clipped and the new read is not
 				ext_read_allocator.release(curr_read);
-				curr_read = ext_read;
-			} else if (curr_read->start == ext_read->start && curr_read->mapq >= ext_read->mapq) {
-				ext_read_allocator.release(ext_read);
-			} else {
-				region_reads.push_back(curr_read);
-				curr_read = ext_read;
+				curr_read = ext_read_allocator.get(read);
+			} 
+			
+			if (is_left_clipped(read, 1)) {
+				lc_reads_pq.push(ext_read_allocator.get(read));
+				if (lc_reads_pq.size() > stats.get_max_depth(contig_name)) { 
+					// keep only max_depth left-clipped reads with the highest mapping quality
+					ext_read_allocator.release(lc_reads_pq.top());
+					lc_reads_pq.pop();
+				}
 			}
 		}
-		if (curr_read != nullptr) region_reads.push_back(curr_read);
-		
+		if (curr_read != nullptr) {
+			if (!curr_read->left_clipped) {
+				region_reads.push_back(curr_read);
+			} else {
+				ext_read_allocator.release(curr_read);
+			}
+		}
+
 		reads.insert(reads.end(), region_reads.begin(), region_reads.end());
 		hts_itr_destroy(iter);
 	}
@@ -530,7 +555,7 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	}
 
 	if (!consensus->left_clipped) {
-		if (consensus->clip_len != consensus_t::UNKNOWN_CLIP_LEN) {
+		if (consensus->clip_len != 0) {
 			consensus->clip_len += ext_consensus.length() - consensus->sequence.length();
 		}
 	} else {
@@ -609,7 +634,7 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	}
 
 	if (consensus->left_clipped) {
-		if (consensus->clip_len != consensus_t::UNKNOWN_CLIP_LEN) {
+		if (consensus->clip_len != 0) {
 			consensus->clip_len += ext_consensus.length() - consensus->sequence.length();
 		}
 	} else {
