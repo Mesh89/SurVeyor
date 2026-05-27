@@ -5,7 +5,6 @@
 #include <unordered_map>
 #include <queue>
 #include <stack>
-#include <vector>
 
 #include "../libs/IntervalTree.h"
 #include "htslib/sam.h"
@@ -79,36 +78,6 @@ struct ext_read_allocator_t {
     ext_read_allocator_t& operator=(const ext_read_allocator_t&) = delete;
 };
 
-static void filter_reads_fully_contained_in_seed(std::vector<std::string>& read_seqs,
-		std::vector<int>& read_mapqs, std::vector<hts_pos_t>& read_starts) {
-
-	if (read_seqs.size() <= 1) return;
-
-	const std::string& seed_seq = read_seqs[0];
-	std::vector<std::string> filtered_read_seqs;
-	std::vector<int> filtered_read_mapqs;
-	std::vector<hts_pos_t> filtered_read_starts;
-	filtered_read_seqs.reserve(read_seqs.size());
-	filtered_read_mapqs.reserve(read_mapqs.size());
-	filtered_read_starts.reserve(read_starts.size());
-
-	filtered_read_seqs.push_back(read_seqs[0]);
-	filtered_read_mapqs.push_back(read_mapqs[0]);
-	filtered_read_starts.push_back(read_starts[0]);
-
-	for (size_t i = 1; i < read_seqs.size(); i++) {
-		if (seed_seq.find(read_seqs[i]) != std::string::npos) continue;
-
-		filtered_read_seqs.push_back(read_seqs[i]);
-		filtered_read_mapqs.push_back(read_mapqs[i]);
-		filtered_read_starts.push_back(read_starts[i]);
-	}
-
-	read_seqs.swap(filtered_read_seqs);
-	read_mapqs.swap(filtered_read_mapqs);
-	read_starts.swap(filtered_read_starts);
-}
-
 bool is_vertex_in_cycle(std::vector<std::vector<edge_t> >& l_adj, int i) {
 	std::stack<int> s;
 	for (edge_t& e : l_adj[i]) {
@@ -132,78 +101,14 @@ bool is_vertex_in_cycle(std::vector<std::vector<edge_t> >& l_adj, int i) {
 	return false;
 }
 
-bool break_cycle_at_vertex(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >& l_adj,
-		std::vector<std::vector<edge_t> >& l_adj_rev, int i) {
-
-	struct cycle_edge_t {
-		int from;
-		edge_t edge;
-	};
+std::vector<bool> find_vertices_in_cycles(std::vector<std::vector<edge_t> >& l_adj) {
 
 	int n = l_adj.size();
-	if (i < 0 || i >= n) return false;
-
-	std::stack<int> s;
-	std::vector<bool> visited(n, false);
-	std::vector<int> parent(n, -1);
-	std::vector<edge_t> parent_edge(n);
-	std::vector<cycle_edge_t> cycle;
-
-	parent[i] = i;
-	s.push(i);
-
-	while (cycle.empty() && !s.empty()) {
-		int curr = s.top();
-		s.pop();
-		if (visited[curr]) continue;
-		visited[curr] = true;
-
-		for (edge_t& e : l_adj[curr]) {
-			if (e.next == i) {
-				cycle.push_back({curr, e});
-				int node = curr;
-				while (node != i) {
-					cycle.push_back({parent[node], parent_edge[node]});
-					node = parent[node];
-				}
-				break;
-			}
-			if (!visited[e.next] && parent[e.next] == -1) {
-				parent[e.next] = curr;
-				parent_edge[e.next] = e;
-				s.push(e.next);
-			}
-		}
+	std::vector<bool> in_cycle(n);
+	for (int i = 0; i < n; i++) {
+		in_cycle[i] = is_vertex_in_cycle(l_adj, i);
 	}
-
-	if (cycle.empty()) return false;
-
-	cycle_edge_t weakest = cycle[0];
-	for (cycle_edge_t& ce : cycle) {
-		if (ce.edge.overlap < weakest.edge.overlap ||
-				(ce.edge.overlap == weakest.edge.overlap && ce.edge.score < weakest.edge.score)) {
-			weakest = ce;
-		}
-	}
-
-	std::vector<edge_t>& fwd_edges = l_adj[weakest.from];
-	auto fwd_it = std::find_if(fwd_edges.begin(), fwd_edges.end(), [&weakest](edge_t& e) {
-		return e.next == weakest.edge.next && e.score == weakest.edge.score && e.overlap == weakest.edge.overlap;
-	});
-	if (fwd_it != fwd_edges.end()) {
-		fwd_edges.erase(fwd_it);
-		out_edges[weakest.from]--;
-	}
-
-	std::vector<edge_t>& rev_edges = l_adj_rev[weakest.edge.next];
-	auto rev_it = std::find_if(rev_edges.begin(), rev_edges.end(), [&weakest](edge_t& e) {
-		return e.next == weakest.from && e.score == weakest.edge.score && e.overlap == weakest.edge.overlap;
-	});
-	if (rev_it != rev_edges.end()) {
-		rev_edges.erase(rev_it);
-	}
-
-	return true;
+	return in_cycle;
 }
 
 void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>& read_starts,
@@ -224,10 +129,6 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 
 	int n = read_seqs.size();
 	std::vector<bool> visited(n);
-	std::vector<bool> is_starting_idx(n, false);
-	for (int idx : starting_idxs) {
-		if (idx >= 0 && idx < n) is_starting_idx[idx] = true;
-	}
 
 	// allocate memory for homopolymer prefix array
 	int max_read_len = 0;
@@ -238,8 +139,6 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 
 	std::unordered_map<uint64_t, std::vector<std::pair<int,int>>> kmer_to_idx;
 	for (int i = 0; i < n; i++) {
-		if (is_starting_idx[i]) continue;
-
 		uint64_t kmer = 0;
 
 		// let this string be s2, and the current string we are trying to extend be s1
@@ -278,8 +177,6 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 		visited[curr_node] = true;
 
 		std::string& s1 = read_seqs[curr_node];
-		if (s1.length() < 32) continue;
-
 		uint64_t kmer = 0;
 		for (int j = s1.length()-32; j < s1.length(); j++) {
 			uint64_t nv = nucl_bm[s1[j]];
@@ -289,7 +186,6 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 		int last_accepted_j = -1;
 		for (int i = 0; i < kmer_to_idx[kmer].size(); i++) {
 			int j = kmer_to_idx[kmer][i].first;
-			if (is_starting_idx[j]) continue;
 			if (j == last_accepted_j) continue;
 
 			int p = kmer_to_idx[kmer][i].second; // position of kmer in read j
@@ -328,10 +224,6 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 
 	int n = read_seqs.size();
 	std::vector<bool> visited(n);
-	std::vector<bool> is_starting_idx(n, false);
-	for (int idx : starting_idxs) {
-		if (idx >= 0 && idx < n) is_starting_idx[idx] = true;
-	}
 
 	// allocate memory for homopolymer prefix array
 	int max_read_len = 0;
@@ -342,8 +234,6 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 
 	std::unordered_map<uint64_t, std::vector<std::pair<int, int>>> kmer_to_idx;
 	for (int i = 0; i < n; i++) {
-		if (is_starting_idx[i]) continue;
-
 		uint64_t kmer = 0;
 
 		std::string& seq = read_seqs[i];
@@ -388,7 +278,6 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 		int last_accepted_j = -1;
 		for (int i = 0; i < kmer_to_idx[kmer].size(); i++) {
 			int j = kmer_to_idx[kmer][i].first;
-			if (is_starting_idx[j]) continue;
 			if (j == last_accepted_j) continue;
 
 			int p = kmer_to_idx[kmer][i].second; // position of kmer in read j
@@ -428,8 +317,9 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 		if (!ext_read->rev && ext_read->mapq >= high_confidence_mapq &&
 			!ext_read->same_chr && ext_read->start >= fwd_mates_start && ext_read->start <= fwd_mates_end) {
 			if (mateseqs_w_mapq.count(ext_read->qname) == 0) {
-				throw std::runtime_error("ERROR: mateseqs_w_mapq does not contain " + ext_read->qname);
-			}
+				std::cerr << "ERROR: mateseqs_w_mapq does not contain " << ext_read->qname << std::endl;
+				continue;
+			};
 			std::pair<std::string, int> mateseq_w_mapq = mateseqs_w_mapq[ext_read->qname];
 			rc(mateseq_w_mapq.first);
 			read_seqs.push_back(mateseq_w_mapq.first);
@@ -438,8 +328,9 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 		} else if (ext_read->rev && ext_read->mapq >= high_confidence_mapq &&
 				!ext_read->same_chr && ext_read->end >= rev_mates_start && ext_read->end <= rev_mates_end) {
 			if (mateseqs_w_mapq.count(ext_read->qname) == 0) {
-				throw std::runtime_error("ERROR: mateseqs_w_mapq does not contain " + ext_read->qname);
-			}
+				std::cerr << "ERROR: mateseqs_w_mapq does not contain " << ext_read->qname << std::endl;
+				continue;
+			};
 			std::pair<std::string, int> mateseq_w_mapq = mateseqs_w_mapq[ext_read->qname];
 			read_seqs.push_back(mateseq_w_mapq.first);
 			read_mapqs.push_back(mateseq_w_mapq.second);
@@ -580,10 +471,17 @@ std::vector<ext_read_t*> get_extension_reads_from_consensuses(std::vector<std::s
 }
 
 void break_cycles(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev) {
-
 	int n = l_adj.size();
+	std::vector<bool> in_cycle = find_vertices_in_cycles(l_adj);
 	for (int i = 0; i < n; i++) {
-		while (break_cycle_at_vertex(out_edges, l_adj, l_adj_rev, i));
+		if (in_cycle[i]) {
+			l_adj[i].clear();
+			out_edges[i] = 0;
+		}
+		l_adj_rev[i].erase(
+			std::remove_if(l_adj_rev[i].begin(), l_adj_rev[i].end(), [&in_cycle](edge_t& e) {return in_cycle[e.next];}),
+			l_adj_rev[i].end()
+		);
 	}
 }
 
@@ -603,10 +501,6 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	get_extension_read_seqs(candidate_reads_itree, read_seqs, read_mapqs, read_starts, mateseqs_w_mapq, 
 		target_start, target_end, contig_len, high_confidence_mapq, stats, 5000);
 
-	// remove reads that are fully contained in the seed consensus
-	// this is because the kmer-based graph construction has a blind spot to them, and might use them to extend the consensus
-	filter_reads_fully_contained_in_seed(read_seqs, read_mapqs, read_starts);
-
 	if (read_seqs.size() > 5000) return;
 
 	int n = read_seqs.size();
@@ -614,10 +508,26 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	std::vector<std::vector<edge_t> > l_adj, l_adj_rev;
 	build_graph_fwd(read_seqs, read_starts, std::vector<int>(1, 0), out_edges, l_adj, l_adj_rev, stats.read_len/2, false);
 
-	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+	bool cycle_contains_0 = is_vertex_in_cycle(l_adj, 0);
+	if (cycle_contains_0) {
+		// remove all edges pointing to 0
+		for (int i = 0; i < n; i++) {
+			std::vector<edge_t>& l_adj_i = l_adj[i];
+			l_adj_i.erase(std::remove_if(l_adj_i.begin(), l_adj_i.end(), [](edge_t& e) {return e.next == 0;}), l_adj_i.end());
+			out_edges[i] = l_adj_i.size();
+		}
+		l_adj_rev[0].clear();
+	}
 
-	bool seed_reaches_cycle = std::find(rev_topological_order.begin(), rev_topological_order.end(), 0) == rev_topological_order.end();
-	if (seed_reaches_cycle) { // final fallback - break reachable cycles
+	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+	bool cycle_at_0 = std::find(rev_topological_order.begin(), rev_topological_order.end(), 0) == rev_topological_order.end();
+	if (cycle_at_0) { // try to regenerate the graph enforcing a reference-based order - it might fail due to mates all having pos 0
+		build_graph_fwd(read_seqs, read_starts, std::vector<int>(1, 0), out_edges, l_adj, l_adj_rev, stats.read_len/2, true);
+		rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+	}
+
+	cycle_at_0 = std::find(rev_topological_order.begin(), rev_topological_order.end(), 0) == rev_topological_order.end();
+	if (cycle_at_0) { // final fallback - break cycles brutally
 		break_cycles(out_edges, l_adj, l_adj_rev);
 		rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 	}
@@ -639,9 +549,9 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	std::string ext_consensus = consensus->sequence;
 	while (e.overlap) {
 		ext_consensus += read_seqs[e.next].substr(e.overlap);
+		e = best_edges[e.next];
 		consensus->right_ext_reads++;
 		if (read_mapqs[e.next] >= high_confidence_mapq) consensus->hq_right_ext_reads++;
-		e = best_edges[e.next];
 	}
 
 	if (!consensus->left_clipped) {
@@ -669,14 +579,8 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	read_starts.push_back(INT32_MAX); // we want our consensus to be to the right of every other read that extends it to the left
 
 	get_extension_read_seqs(candidate_reads_itree, read_seqs, read_mapqs, read_starts, mateseqs_w_mapq, target_start, target_end, contig_len, high_confidence_mapq, stats, 5000);
-	
-	// remove reads that are fully contained in the seed consensus
-	// this is because the kmer-based graph construction has a blind spot to them, and might use them to extend the consensus
-	filter_reads_fully_contained_in_seed(read_seqs, read_mapqs, read_starts);
 
-	if (read_seqs.size() > 5000) {
-		return;
-	}
+	if (read_seqs.size() > 5000) return;
 
 	int n = read_seqs.size();
 	std::vector<int> out_edges;
@@ -684,8 +588,26 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	build_graph_rev(read_seqs, read_starts, std::vector<int>(1, 0), out_edges, l_adj, l_adj_rev, stats.read_len/2, false);
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
-	bool seed_reaches_cycle = std::find(rev_topological_order.begin(), rev_topological_order.end(), 0) == rev_topological_order.end();
-	if (seed_reaches_cycle) { // final fallback - break reachable cycles
+
+	bool cycle_at_0 = is_vertex_in_cycle(l_adj, 0);
+	if (cycle_at_0) {
+		// remove all edges pointing to 0
+		for (int i = 0; i < n; i++) {
+			std::vector<edge_t>& l_adj_i = l_adj[i];
+			l_adj_i.erase(std::remove_if(l_adj_i.begin(), l_adj_i.end(), [](edge_t& e) {return e.next == 0;}), l_adj_i.end());
+			out_edges[i] = l_adj_i.size();
+		}
+		l_adj_rev[0].clear();
+	}
+
+	cycle_at_0 = std::find(rev_topological_order.begin(), rev_topological_order.end(), 0) == rev_topological_order.end();
+	if (cycle_at_0) { // try to regenerate the graph enforcing a reference-based order - it might fail due to mates all having pos 0
+		build_graph_rev(read_seqs, read_starts, std::vector<int>(1, 0), out_edges, l_adj, l_adj_rev, stats.read_len/2, true);
+		rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+	}
+
+	cycle_at_0 = std::find(rev_topological_order.begin(), rev_topological_order.end(), 0) == rev_topological_order.end();
+	if (cycle_at_0) { // final fallback - break cycles brutally
 		break_cycles(out_edges, l_adj, l_adj_rev);
 		rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 	}
@@ -704,14 +626,11 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	// 0 is the consensus, we start from there
 	edge_t e = best_edges[0];
 	std::string ext_consensus = consensus->sequence;
-	std::stringstream path_ss;
 	while (e.overlap) {
-		int prepended_len = read_seqs[e.next].length()-e.overlap;
-		std::string prepended_seq = read_seqs[e.next].substr(0, prepended_len);
-		ext_consensus = prepended_seq + ext_consensus;
+		ext_consensus = read_seqs[e.next].substr(0, read_seqs[e.next].length()-e.overlap) + ext_consensus;
+		e = best_edges[e.next];
 		consensus->left_ext_reads++;
 		if (read_mapqs[e.next] >= high_confidence_mapq) consensus->hq_left_ext_reads++;
-		e = best_edges[e.next];
 	}
 
 	if (consensus->left_clipped) {
