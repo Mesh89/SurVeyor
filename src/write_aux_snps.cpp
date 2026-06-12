@@ -183,6 +183,24 @@ bool is_hom_alt(bcf_hdr_t* hdr, bcf1_t* record) {
     return allele1 > 0 && allele1 == allele2;
 }
 
+int get_format_int32_or_default(bcf_hdr_t* hdr, bcf1_t* record, const char* tag, int default_value = 0) {
+    int32_t* values = nullptr;
+    int n_values = 0;
+    int value = default_value;
+    if (bcf_get_format_int32(hdr, record, tag, &values, &n_values) > 0 &&
+            values[0] != bcf_int32_missing && values[0] != bcf_int32_vector_end) {
+        value = values[0];
+    }
+    free(values);
+    return value;
+}
+
+bool ref_support_exceeds_other_alt_support(bcf_hdr_t* hdr, bcf1_t* record) {
+    int rr = get_format_int32_or_default(hdr, record, "RR1") + get_format_int32_or_default(hdr, record, "RR2");
+    int orc = get_format_int32_or_default(hdr, record, "OR1") + get_format_int32_or_default(hdr, record, "OR2");
+    return rr > orc;
+}
+
 void concat_record_ids(bcf_hdr_t* hdr, bcf1_t* record, bcf1_t* other_record) {
     std::string id = get_record_id(record);
     std::string other_id = get_record_id(other_record);
@@ -293,7 +311,8 @@ void add_star_alleles_for_overlapping(bcf_hdr_t* hdr, std::vector<bcf1_t*>& smal
 
 // The group is already sorted by decreasing EPR. Keep at most two ALT alleles at
 // each exact position for INS/DEL/SNP groups. The best call is always kept. If the first two
-// calls are identical hets, merge them into a single 1/1 call. Otherwise, if the
+// calls are identical hets, merge them into a single 1/1 call unless the second
+// call has more REF support than competing ALT support. Otherwise, if the
 // best call is already 1/1, let the second call replace one allele only when its
 // EPR is stronger than the best call's homozygous probability. All later ALT
 // calls are suppressed. Accepted second alleles are folded into the first record
@@ -317,8 +336,11 @@ void apply_multiallelic_logic_to_group(bcf_hdr_t* hdr, std::vector<bcf1_t*>& var
     size_t suppress_from = 2;
 
     if (first_alt_alleles > 0 && second_alt_alleles > 0 && same_record_identity(hdr, first, second)) {
-        if (first_alt_alleles == 1) concat_record_ids(hdr, first, second);
-        set_gt(hdr, first, 1, 1);
+        bool two_hets = first_alt_alleles == 1 && second_alt_alleles == 1;
+        if (!two_hets || !ref_support_exceeds_other_alt_support(hdr, second)) {
+            if (first_alt_alleles == 1) concat_record_ids(hdr, first, second);
+            set_gt(hdr, first, 1, 1);
+        }
         set_gt(hdr, second, 0, 0);
         records_to_remove.push_back(second);
     } else if (first_alt_alleles >= 2) {
