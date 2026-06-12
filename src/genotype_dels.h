@@ -127,17 +127,22 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
             aligner.Align(seq.c_str(), ref_bp1_seq, ref_bp1_len, filter_with_pos, &ref1_aln, 0);
             aligner.Align(seq.c_str(), ref_bp2_seq, ref_bp2_len, filter_with_pos, &ref2_aln, 0);
             ref_aln_score = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln.sw_score : ref2_aln.sw_score;
-            if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= ref_bp1_pos && ref1_aln.ref_end >= ref_bp1_pos) {
+            if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin < ref_bp1_pos && ref1_aln.ref_end >= ref_bp1_pos) {
                 increase_ref_bp1_better = true;
             }
-            if (ref2_aln.sw_score >= ref1_aln.sw_score && ref2_aln.ref_begin <= ref_bp2_pos && ref2_aln.ref_end >= ref_bp2_pos) {
+            if (ref2_aln.sw_score >= ref1_aln.sw_score && ref2_aln.ref_begin < ref_bp2_pos && ref2_aln.ref_end >= ref_bp2_pos) {
                 increase_ref_bp2_better = true;
             }
         }
 
         // align to ALT
-        aligner.Align(seq.c_str(), alt_seq, alt_len, filter_with_pos, &alt_aln, 0);
-        if (alt_aln.sw_score > ref_aln_score) {
+        aligner.Align(seq.c_str(), alt_seq, alt_len, filter_with_pos_and_cigar, &alt_aln, 0);
+        hts_pos_t alt_right_flank_pos = alt_lh_len + del->ins_seq.length();
+        bool alt_spans_left_bp = alt_aln.ref_begin < alt_lh_len && alt_aln.ref_end >= alt_lh_len;
+        bool alt_spans_right_bp = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;
+        bool alt_spans_sv = alt_spans_left_bp || alt_spans_right_bp;
+        if (alt_aln.sw_score > ref_aln_score && alt_spans_sv) {
+            if (is_clipped(alt_aln, config.min_clip_len)) continue;
             alt_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             alt_better_read_scores.push_back(alt_aln.sw_score);
             alt_better_read_positions.push_back(alt_aln.ref_begin);
