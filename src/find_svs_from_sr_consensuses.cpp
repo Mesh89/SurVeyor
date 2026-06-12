@@ -332,13 +332,10 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 
 	for (size_t i = 0; i < consensuses_scored_pairs.size(); i++) {
 		pair_w_score_t& ps = consensuses_scored_pairs[i];
-		bool used_c1 = ps.c1_lc ? used_consensus_lc[ps.c1_idx] : used_consensus_rc[ps.c1_idx];
-		bool used_c2 = ps.c2_lc ? used_consensus_lc[ps.c2_idx] : used_consensus_rc[ps.c2_idx];
 		bool used_dp_cluster = ps.dp_cluster != nullptr && used_ss_clusters.count(ps.dp_cluster.get()) > 0;
-		if (used_c1 || used_c2 || used_dp_cluster) continue;
+		if (svs_by_pair[i].empty()) continue;
 
 		local_svs.insert(local_svs.end(), svs_by_pair[i].begin(), svs_by_pair[i].end());
-		if (svs_by_pair[i].empty()) continue;
 
 		if (ps.c1_lc) used_consensus_lc[ps.c1_idx] = true;
 		else used_consensus_rc[ps.c1_idx] = true;
