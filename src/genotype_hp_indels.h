@@ -832,7 +832,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
 // hp_indels are guaranteed to be on the same chromosome
 void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<sv_t*> hp_indels,
-    stats_t stats, config_t config, contig_map_t& contig_map, bam_pool_t* bam_pool,
+    stats_t& stats, config_t& config, contig_map_t& contig_map, bam_pool_t* bam_pool,
     std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr, 
     std::vector<double>* global_crossing_isize_dist,
     evidence_logger_t* evidence_logger, bool reassign_evidence, evidence_map_t* evidence_map,

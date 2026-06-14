@@ -117,11 +117,11 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         if (ins_start < get_unclipped_start(read) && get_unclipped_end(read) < ins_end) continue;
 
         std::string seq = get_sequence(read);
-
+        
         // align to ALT
         aligner.Align(seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, &alt1_aln, 0);
         aligner.Align(seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_pos, &alt2_aln, 0);
-
+        
         if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins->id)) {
             if (alt1_aln.sw_score >= alt2_aln.sw_score) {
                 ins->sample_info.assigned_to_other_sv_bp1_reads++;
@@ -406,7 +406,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
 }
 
 void genotype_inss(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<insertion_t*> inss,
-    bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t stats, config_t config, contig_map_t& contig_map,
+    bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
     bam_pool_t* bam_pool, std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr,
     std::vector<double>* global_crossing_isize_dist, evidence_logger_t* evidence_logger,
     bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::shared_ptr<sv_t>>* sv_map) {

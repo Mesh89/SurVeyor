@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -769,50 +770,6 @@ IntervalTree<ext_read_t*> get_candidate_reads_for_extension_itree(std::string co
     return IntervalTree<ext_read_t*>(it_ivals);
 }
 
-std::unordered_map<std::string, std::string> assign_reads(std::string in_vcf_fname) {
-    
-    htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
-    if (in_vcf_file == NULL) {
-        throw std::runtime_error("Unable to open file " + in_vcf_fname + ".");
-    }
-
-    bcf_hdr_t* in_vcf_header = bcf_hdr_read(in_vcf_file);
-    if (in_vcf_header == NULL) {
-        throw std::runtime_error("Failed to read the VCF header.");
-    }
-
-    std::unordered_map<std::string, float> sv_epr_map;
-
-    bcf1_t* vcf_record = bcf_init();
-    while (bcf_read(in_vcf_file, in_vcf_header, vcf_record) == 0) {
-        bcf_unpack(vcf_record, BCF_UN_ALL);
-
-        std::string id = vcf_record->d.id;
-        float epr = get_sv_epr(in_vcf_header, vcf_record);
-        sv_epr_map[id] = epr;
-    }
-    hts_close(in_vcf_file);
-    bcf_hdr_destroy(in_vcf_header);
-    bcf_destroy(vcf_record);
-
-    std::string alt_reads_association_fname = workdir + "/alt_reads_to_sv_associations.txt";
-    std::ifstream alt_reads_association_fin(alt_reads_association_fname);
-    std::string sv_id, read_name;
-    int score;
-    std::unordered_map<std::string, std::string> read_to_sv_map;
-    std::unordered_map<std::string, std::pair<int, float>> read_to_score_epr_map;
-    while (alt_reads_association_fin >> sv_id >> read_name >> score) {
-        float epr = sv_epr_map[sv_id];
-        std::pair<int, float> p = {score, epr};
-        if (p > read_to_score_epr_map[read_name]) {
-            read_to_score_epr_map[read_name] = p; // Store the highest score and EPR for the read
-            read_to_sv_map[read_name] = sv_id;
-        }
-    }
-
-    return read_to_sv_map;
-}
-
 void clear_invalid_stat_tests(bcf_hdr_t* hdr, std::vector<std::shared_ptr<deletion_t>>& dels) {
     std::vector<std::pair<std::shared_ptr<deletion_t>, float>> dels_w_epr;
     hts_pos_t chr_len = 0;
@@ -935,6 +892,7 @@ int main(int argc, char* argv[]) {
 	}
 	std::random_shuffle(global_crossing_isize_dist.begin(), global_crossing_isize_dist.end());
 	if (global_crossing_isize_dist.size() > 100000) global_crossing_isize_dist.resize(100000);
+    global_crossing_isize_dist.shrink_to_fit();
 	crossing_isizes_dist_fin.close();
 
     std::string full_cmd_fname = workdir + "/cmd.txt";
@@ -1023,7 +981,7 @@ int main(int argc, char* argv[]) {
             if ((i == hps.size()-1 && !block_hps.empty()) 
             || (block_hps.size() == BLOCK_SIZE && ref_hp_ranges[i].beg != ref_hp_ranges[i+1].beg)) {
                 std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_hps, stats, config, contig_map, bam_pool,
+                        chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool,
                         &mateseqs_w_mapq[contig_map.get_id(contig_name)], 
                         &global_crossing_isize_dist, evidence_logger, reassign_evidence, evidence_map,
                         &sv_map);
@@ -1039,8 +997,8 @@ int main(int argc, char* argv[]) {
             }
             if (block_dels.size() == BLOCK_SIZE || (i == dels.size()-1 && !block_dels.empty())) {
                 std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, stats, config,
-                        contig_map, bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
+                        chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
+                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
                         evidence_logger, reassign_evidence, evidence_map, &sv_map);
                 futures.push_back(std::move(future));
                 block_dels.clear();
@@ -1055,8 +1013,8 @@ int main(int argc, char* argv[]) {
             }
             if (block_dups.size() == BLOCK_SIZE || (i == dups.size()-1 && !block_dups.empty())) {
                 std::future<void> future = thread_pool.push(genotype_dups, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_dups, in_vcf_header, out_vcf_header, stats, config,
-                        contig_map, bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
+                        chr_seqs.get_len(contig_name), block_dups, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
+                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
                         evidence_logger, reassign_evidence, evidence_map, &sv_map);
                 futures.push_back(std::move(future));
                 block_dups.clear();
@@ -1071,8 +1029,8 @@ int main(int argc, char* argv[]) {
             }
             if (block_inss.size() == BLOCK_SIZE || (i == inss.size()-1 && !block_inss.empty())) {
                 std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, stats, config,
-                        contig_map, bam_pool, &mateseqs_w_mapq[contig_id], &global_crossing_isize_dist, evidence_logger,
+                        chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
+                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], &global_crossing_isize_dist, evidence_logger,
                         reassign_evidence, evidence_map, &sv_map);
                 futures.push_back(std::move(future));
                 block_inss.clear();
@@ -1087,8 +1045,8 @@ int main(int argc, char* argv[]) {
             }
             if (block_invs.size() == BLOCK_SIZE || (i == invs.size()-1 && !block_invs.empty())) {
                 std::future<void> future = thread_pool.push(genotype_invs, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_invs, in_vcf_header, out_vcf_header, stats, config,
-                        contig_map, bam_pool, &mateseqs_w_mapq[contig_id]);
+                        chr_seqs.get_len(contig_name), block_invs, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
+                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id]);
                 futures.push_back(std::move(future));
                 block_invs.clear();
             }

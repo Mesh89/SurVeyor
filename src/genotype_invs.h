@@ -510,7 +510,7 @@ bool is_small_inv(inversion_t* inv, stats_t& stats, config_t& config) {
 }
 
 void genotype_invs(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<inversion_t*> invs,
-    bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t stats, config_t config, contig_map_t& contig_map,
+    bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
     bam_pool_t* bam_pool, std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
