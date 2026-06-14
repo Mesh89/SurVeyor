@@ -13,7 +13,7 @@
 #include "var_utils.h"
 #include "vcf_utils.h"
 
-constexpr double MIN_EPR = 0.10;
+constexpr double MIN_EPR = 0.05;
 
 struct bp_support_read_t {
     std::string read_name;
@@ -152,7 +152,7 @@ struct evidence_map_t {
         alt_reads_association_fin.clear();
         alt_reads_association_fin.seekg(0, std::ios::beg);
 
-        // Now, for each SV, we calculate a score S that is the sum of scores of reads that have A (not necessarily unique) 
+        // Now, for each SV, we calculate a score S that is the sum of scores of reads that have a (not necessarily unique) 
         // best association to that SV
         // Then, we assign reads as follows: 
         // - we assign each read with a unique best association to that SV (let us call their number U)
