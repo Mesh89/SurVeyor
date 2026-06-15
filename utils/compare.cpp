@@ -79,7 +79,7 @@ double len_ratio(sv_t* sv1, sv_t* sv2) {
 	else if (sv1->svtype() == "INS" && sv2->svtype() == "INS") {
 		if (sv1->incomplete_ins_seq() && sv2->incomplete_ins_seq()) { // if both are incomplete, we cannot compare lengths
 			return 1.0;
-		} else if (sv1->incomplete_ins_seq() || sv2->incomplete_ins_seq()) { 
+		} else if (sv1->incomplete_ins_seq() || sv2->incomplete_ins_seq()) {
 			// if one is incomplete, we know a lower bound for its length - if it is longer than the full one, we can compute an upper bound for the ratio
 			sv_t* sv_full = sv1->incomplete_ins_seq() ? sv2 : sv1;
 			sv_t* sv_incmpl = sv1->incomplete_ins_seq() ? sv1 : sv2;
@@ -238,7 +238,7 @@ bool check_cmpl_incmpl_seq(std::string& cmpl_seq, std::string& incmpl_seq, bool 
 	right_aln.Clear();
 	aligner.Align(left_seq.data(), cmpl_seq.data(), cmpl_seq.length(), filter, &left_aln, 0);
 	aligner.Align(right_seq.data(), cmpl_seq.data(), cmpl_seq.length(), filter, &right_aln, 0);
-	if (left_aln.query_end-left_aln.query_begin+right_aln.query_end-right_aln.query_begin < incmpl_seq.length()*0.8 || 
+	if (left_aln.query_end-left_aln.query_begin+right_aln.query_end-right_aln.query_begin < incmpl_seq.length()*0.8 ||
 		left_aln.ref_begin > max_len_diff || cmpl_seq.length()-right_aln.ref_end > max_len_diff) return false;
 	// set fields required to compute match score
 	alignment.sw_score = left_aln.sw_score + right_aln.sw_score;
@@ -253,17 +253,17 @@ bool check_incmpl_incmpl_seq(std::string& incmpl_seq1, std::string& incmpl_seq2,
 
 bool check_ins_ins_seq(sv_t* sv1, sv_t* sv2, StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Alignment& alignment) {
 	if (ignore_seq) return true;
-	
+
 	int max_len_diff = (sv1->imprecise || sv2->imprecise) ? max_imprec_len_diff : max_prec_len_diff;
 	double min_len_ratio = (sv1->imprecise || sv2->imprecise) ? min_imprec_len_ratio : min_prec_len_ratio;
 	if (len_diff(sv1, sv2) > max_len_diff || len_ratio(sv1, sv2) < min_len_ratio) return false;
-	
+
 	sv_t* l_sv = sv1->start < sv2->start ? sv1 : sv2;
 	sv_t* r_sv = sv1->start < sv2->start ? sv2 : sv1;
 	char* extra_seq = new char[r_sv->start-l_sv->start+1];
 	strncpy(extra_seq, chr_seqs.get_seq(sv1->chr)+l_sv->start, r_sv->start-l_sv->start);
 	extra_seq[r_sv->start-l_sv->start] = '\0';
-	
+
 	std::string lsv_seq = l_sv->ins_seq + extra_seq;
 	std::string rsv_seq = extra_seq + r_sv->ins_seq;
 	delete[] extra_seq;
@@ -334,7 +334,7 @@ bool is_compatible(sv_t* sv1, sv_t* sv2, StripedSmithWaterman::Aligner& aligner,
 
 bool is_exact_match(sv_t* sv1, sv_t* sv2) {
 	if (sv1 == NULL || sv2 == NULL) return false;
-	
+
 	if (sv1->svtype() != sv2->svtype()) return false;
 	if (sv1->chr != sv2->chr || sv1->start != sv2->start || sv1->end != sv2->end) return false;
 	if (sv1->ins_seq != sv2->ins_seq) return false;
@@ -459,6 +459,61 @@ std::unordered_set<std::string> find_dup_ids(std::vector<std::shared_ptr<sv_t>>&
 	return dup_ids;
 }
 
+bool is_known_hom_alt(sv_t* sv) {
+	return sv->sample_info.gt.size() > 0 &&
+		sv->missing_alleles() == 0 &&
+		sv->allele_count(1) == sv->sample_info.gt.size();
+}
+
+bool is_known_het_alt(sv_t* sv) {
+	return sv->sample_info.gt.size() == 2 &&
+		sv->missing_alleles() == 0 &&
+		sv->allele_count(1) == 1;
+}
+
+std::unordered_map<std::string, int> make_benchmark_match_capacity(const std::vector<std::shared_ptr<sv_t>>& svs, int aux_radius) {
+
+	std::unordered_map<std::string, int> benchmark_match_capacity;
+	for (const std::shared_ptr<sv_t>& sv : svs) {
+		benchmark_match_capacity[sv->id] = 1;
+	}
+	if (aux_radius <= 0) return benchmark_match_capacity;
+
+	std::unordered_map<std::string, std::vector<Interval<std::shared_ptr<sv_t>>>> het_ivals_by_chr;
+	for (const std::shared_ptr<sv_t>& sv : svs) {
+		if (!is_known_het_alt(sv.get())) continue;
+
+		het_ivals_by_chr[sv->chr].push_back(Interval<std::shared_ptr<sv_t>>(sv->start-aux_radius, sv->end+aux_radius, sv));
+	}
+
+	std::unordered_map<std::string, IntervalTree<std::shared_ptr<sv_t>>*> het_itrees;
+	for (auto& chr_windows : het_ivals_by_chr) {
+		het_itrees[chr_windows.first] = new IntervalTree<std::shared_ptr<sv_t>>(chr_windows.second);
+	}
+
+	for (const std::shared_ptr<sv_t>& sv : svs) {
+		if (!is_known_hom_alt(sv.get())) continue;
+
+		bool has_nearby_het = false;
+		auto het_it = het_itrees.find(sv->chr);
+		if (het_it != het_itrees.end()) {
+			for (const Interval<std::shared_ptr<sv_t>>& iv : het_it->second->findOverlapping(sv->start, sv->end)) {
+				if (iv.value->id != sv->id) {
+					has_nearby_het = true;
+					break;
+				}
+			}
+		}
+
+		if (has_nearby_het) {
+			benchmark_match_capacity[sv->id] = 2;
+		}
+	}
+
+	for (auto& chr_tree : het_itrees) delete chr_tree.second;
+	return benchmark_match_capacity;
+}
+
 int main(int argc, char* argv[]) {
 
 	cxxopts::Options options("compare", "Given a VCF file with benchmark deletions and one with the called ones, reports for "
@@ -485,6 +540,7 @@ int main(int argc, char* argv[]) {
 		("l,min_len_ratio_precise", "Minimum length ratio allowed (smallest variant length / largest variant length) between two precise variants.", cxxopts::value<double>()->default_value("0.8"))
 		("L,min_len_ratio_imprecise", "Minimum length ratio allowed (smallest variant length / largest variant length) when at least one variant is imprecise.", cxxopts::value<double>()->default_value("0.5"))
 		("max-repeat-dist", "Maximum distance between two variant in the same tandem repeat.", cxxopts::value<int>()->default_value("1000"))
+		("hom-alt-split-radius", "For called-to-benchmark GT labels, give 1/1 benchmark variants match capacity 2 when a 0/1 benchmark variant is within this distance. Disabled when <= 0.", cxxopts::value<int>()->default_value("0"))
 		("r,report", "Print report only", cxxopts::value<bool>()->default_value("false"))
 		("f,fps", "Print false positive SVs to file.", cxxopts::value<std::string>())
 		("tp", "Print true positive called SVs to file.", cxxopts::value<std::string>())
@@ -529,6 +585,7 @@ int main(int argc, char* argv[]) {
 	bool exclusive = parsed_args["exclusive"].as<bool>();
 	int threads = parsed_args["threads"].as<int>();
 	ignore_seq = parsed_args["ignore-seq"].as<bool>();
+	int hom_alt_split_radius = parsed_args["hom-alt-split-radius"].as<int>();
     if (parsed_args["all-imprecise"].as<bool>()) {
     	max_prec_dist = max_imprec_dist;
     	min_prec_frac_overlap = min_imprec_frac_overlap;
@@ -663,7 +720,7 @@ int main(int argc, char* argv[]) {
 		}
 		benchmark_svs.erase(std::remove_if(benchmark_svs.begin(), benchmark_svs.end(), is_not_pass), benchmark_svs.end());
 		called_svs.erase(std::remove_if(called_svs.begin(), called_svs.end(), is_not_pass), called_svs.end());
-			
+
 	}
 
 	std::unordered_set<std::string> bdup_ids = find_dup_ids(benchmark_svs);
@@ -685,6 +742,8 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
+	std::unordered_map<std::string, int> benchmark_match_capacity = make_benchmark_match_capacity(benchmark_svs, hom_alt_split_radius);
+
 	if (parsed_args.count("reference")) {
 		std::string ref_fname = parsed_args["reference"].as<std::string>();
 		chr_seqs.read_fasta_into_map(ref_fname);
@@ -699,11 +758,11 @@ int main(int argc, char* argv[]) {
 			std::cerr << "Error opening tandem repeat file " << parsed_args["tandem-repeats"].as<std::string>() << std::endl;
 			exit(1);
 		}
-		while (getline(rep_f, line)) {
+			while (getline(rep_f, line)) {
 			if (line.empty() || line[0] == '#') continue;
-			
+
 			std::stringstream ss(line);
-    		repeat_t r;
+			repeat_t r;
 			if (!(ss >> r.chr >> r.start >> r.end)) {
 				std::cerr << "Error parsing line in tandem repeat file: " << line << std::endl;
 				exit(1);
@@ -767,10 +826,10 @@ int main(int argc, char* argv[]) {
 		return false;
 	};
 
-	// sort matches by 
+	// sort matches by
 	// 1. exact matches first
 	// 2. missing gt in the benchmark (less missing alleles first)
-	// 3. rep (false first) 
+	// 3. rep (false first)
 	// 4. score in descending order
 	// 5. consistent ALT reads, in descending order
 	// 6. extended ALT consensus score, in descending order
@@ -811,23 +870,25 @@ int main(int argc, char* argv[]) {
 
 	// count tps (both in benchmark and called) from matches
 	// in exclusive mode, each sv can only be used in one match
-	// for matches where the benchmark sv has missing alleles, since the benchmark does not tell us whether the variant 
+	// for matches where the benchmark sv has missing alleles, since the benchmark does not tell us whether the variant
 	// is present or not, we do count the called SV it as neither a tp nor a fp, based on this match
 	// (if the called SV is matched to another benchmark SV with known genotype, it will be counted based on that match)
-	std::unordered_set<std::string> used_b_sv_ids, used_c_sv_ids;
+	std::unordered_map<std::string, int> benchmark_match_count;
+	std::unordered_set<std::string> used_c_sv_ids;
 	for (sv_match_t& match : matches) {
-		if (exclusive && (used_b_sv_ids.count(match.b_sv->id) || used_c_sv_ids.count(match.c_sv->id))) continue;
+		int b_capacity = benchmark_match_capacity.at(match.b_sv->id);
+		if (exclusive && (benchmark_match_count[match.b_sv->id] >= b_capacity || used_c_sv_ids.count(match.c_sv->id))) continue;
 
 		if (match.b_sv->allele_count(1) == 0 && match.b_sv->missing_alleles() > 0) {
 			c_unknown.insert(match.c_sv->id);
 			unknown_match_by_called[match.c_sv->id] = &match;
-			used_b_sv_ids.insert(match.b_sv->id);
+			benchmark_match_count[match.b_sv->id]++;
 			used_c_sv_ids.insert(match.c_sv->id);
 			continue;
 		}
 
 		b_tps.insert(match.b_sv->id);
-		used_b_sv_ids.insert(match.b_sv->id);
+		benchmark_match_count[match.b_sv->id]++;
 		c_tps.insert(match.c_sv->id);
 		used_c_sv_ids.insert(match.c_sv->id);
 		accepted_matches.push_back(match);
@@ -857,11 +918,18 @@ int main(int argc, char* argv[]) {
 	}
 	if (called_to_benchmark_gts_fout.is_open()) {
 		std::unordered_set<std::string> written_ids;
+		auto called_to_benchmark_gt = [&](sv_match_t& match) {
+			int b_capacity = benchmark_match_capacity.at(match.b_sv->id);
+			if (b_capacity > 1 && benchmark_match_count[match.b_sv->id] > 1) {
+				return std::string("0/1");
+			}
+			return match.b_sv->print_gt();
+		};
 
 		// Selected non-missing benchmark matches are primary labels.
 		for (sv_match_t& match : accepted_matches) {
 			if (match.c_sv != NULL) {
-				called_to_benchmark_gts_fout << match.c_sv->id << " " << match.b_sv->print_gt() << " " << match.exact << " 1" << std::endl;
+				called_to_benchmark_gts_fout << match.c_sv->id << " " << called_to_benchmark_gt(match) << " " << match.exact << " 1" << std::endl;
 				written_ids.insert(match.c_sv->id);
 			}
 		}
@@ -884,7 +952,7 @@ int main(int argc, char* argv[]) {
 			if (match->exact) {
 				called_to_benchmark_gts_fout << id << " " << "./. 0 0" << std::endl;
 			} else {
-				called_to_benchmark_gts_fout << id << " " << match->b_sv->print_gt() << " " << match->exact << " 0" << std::endl;
+				called_to_benchmark_gts_fout << id << " " << called_to_benchmark_gt(*match) << " " << match->exact << " 0" << std::endl;
 			}
 			written_ids.insert(id);
 		}

@@ -109,13 +109,30 @@ def fail(message):
     print(message)
     exit(1)
 
-def get_max_is_from_stats(stats_fname, default=1000):
+def get_max_is_from_stats(stats_fname):
     with open(stats_fname) as stats_file:
         for line in stats_file:
             tokens = line.strip().split()
             if len(tokens) >= 3 and tokens[0] == "max_is" and tokens[1] == ".":
                 return int(tokens[2])
-    return default
+    fail("Error: max_is not found in %s." % stats_fname)
+
+def get_stat_from_stats(stats_fname, stat_name, subname="."):
+    with open(stats_fname) as stats_file:
+        for line in stats_file:
+            tokens = line.strip().split()
+            if len(tokens) >= 3 and tokens[0] == stat_name and tokens[1] == subname:
+                return int(tokens[2])
+    fail("Error: %s %s not found in %s." % (stat_name, subname, stats_fname))
+
+def get_config_value(config_fname, key):
+    if os.path.exists(config_fname):
+        with open(config_fname) as config_file:
+            for line in config_file:
+                tokens = line.strip().split()
+                if len(tokens) >= 2 and tokens[0] == key:
+                    return tokens[1]
+    fail("Error: %s not found in %s." % (key, config_fname))
 
 def validate_workdir_for_execution(workdir, force_workdir):
     if not os.path.exists(workdir):
@@ -333,7 +350,7 @@ def deduplicate_vcf(vcf_fname, deduped_vcf_fname):
     if cmd_args.tr_bed:
         compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s -T %s > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.tr_bed, cmd_args.workdir)
     else:
-        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.workdir) 
+        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.workdir)
     run_cmd(compare_cmd)
 
     with open(cmd_args.workdir + "/compare.txt") as compare_file:
@@ -407,7 +424,10 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     normalise_cmd = SURVEYOR_PATH + "/bin/normalise %s/intermediate_results/out.vcf.gz %s/intermediate_results/out.norm.vcf.gz %s %d %d %d" % (workdir, workdir, reference_fname, cmd_args.threads, cmd_args.min_sv_size, max_is)
     run_cmd(normalise_cmd)
 
-    merge_identical_calls_cmd = SURVEYOR_PATH + "/bin/merge_identical_calls %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s" % (workdir, workdir, reference_fname)
+    expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/out.norm.hap.vcf.gz %s" % (workdir, workdir, reference_fname)
+    run_cmd(expand_aux_haplotypes_cmd)
+
+    merge_identical_calls_cmd = SURVEYOR_PATH + "/bin/merge_identical_calls %s/intermediate_results/out.norm.hap.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s" % (workdir, workdir, reference_fname)
     run_cmd(merge_identical_calls_cmd)
 
 
@@ -554,7 +574,7 @@ elif cmd_args.command == 'generate-training-data':
     shutil.copyfile(cmd_args.workdir + "/stats.txt", os.path.join(cmd_args.outdir, cmd_args.samplename + ".stats"))
 
     # if training-data.reassigned.vcf.gz and training-data.reassigned.INS_TO_DUP.vcf.gz are present,
-    # mark unreliable genotypes in the benchmark variants where FMT/AR1 or FMT/AR2 is different between 
+    # mark unreliable genotypes in the benchmark variants where FMT/AR1 or FMT/AR2 is different between
     # the non-reassigned and reassigned training data
     unreliable_cids = set()
     if not cmd_args.use_reassigned_training_data and \
@@ -604,13 +624,18 @@ elif cmd_args.command == 'generate-training-data':
     else:
         shutil.copyfile(cmd_args.benchmark_vcf, updated_benchmark_vcf_path)
 
-    compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -T %s -R %s --report -c %s -e -t %d --keep-all-called" % (
+    read_len = get_stat_from_stats(cmd_args.workdir + "/stats.txt", "read_len")
+    min_clip_len = int(get_config_value(cmd_args.workdir + "/config.txt", "min_clip_len"))
+    hom_alt_split_radius = max(0, read_len - 2 * min_clip_len)
+
+    compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -T %s -R %s --report -c %s -e -t %d --keep-all-called --hom-alt-split-radius %d" % (
         updated_benchmark_vcf_path,
         sample_training_data_vcf,
         cmd_args.simple_repeat_bed,
         cmd_args.reference,
         os.path.join(cmd_args.outdir, cmd_args.samplename + ".gts.tmp"),
-        cmd_args.threads
+        cmd_args.threads,
+        hom_alt_split_radius
     )
     run_cmd(compare_cmd)
 
