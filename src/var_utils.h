@@ -92,12 +92,16 @@ inline bool should_genotype_as_hp_indel(sv_t* sv, char* chr_seq, hts_pos_t chr_l
 	return ref_hp_len >= MIN_HP_LEN_FOR_HP_GENOTYPING;
 }
 
+inline bool aux_indel_haplotype_order(const std::shared_ptr<sv_t>& a, const std::shared_ptr<sv_t>& b) {
+    if (a->start != b->start) return a->start < b->start;
+    if (a->end != b->end) return a->end < b->end;
+    return a->ins_seq < b->ins_seq;
+}
+
 inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos_t hap_len, 
     std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps) {
     
-    std::sort(aux_indels.begin(), aux_indels.end(), [](std::shared_ptr<sv_t>& a, std::shared_ptr<sv_t>& b) {
-        return a->start < b->start;
-    });
+    std::sort(aux_indels.begin(), aux_indels.end(), aux_indel_haplotype_order);
     std::sort(aux_snps.begin(), aux_snps.end(), [](snp_t& a, snp_t& b) {
         return a.pos < b.pos;
     });
@@ -159,14 +163,10 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
 
     // Note that aux_indels coordinates are in VCF format
 
-    std::sort(aux_indels.begin(), aux_indels.end(),
-              [](const std::shared_ptr<sv_t>& a, const std::shared_ptr<sv_t>& b) {
-                  return a->start < b->start;
-              });
-    std::sort(aux_snps.begin(), aux_snps.end(),
-              [](const snp_t& a, const snp_t& b) {
-                  return a.pos < b.pos;
-              });
+    std::sort(aux_indels.begin(), aux_indels.end(), aux_indel_haplotype_order);
+    std::sort(aux_snps.begin(), aux_snps.end(), [](const snp_t& a, const snp_t& b) {
+        return a.pos < b.pos;
+    });
 
     // Find first SNP / indel strictly to the right of hap_start (mirror of left's >= hap_end skip)
     int curr_snp_idx = 0, curr_indel_idx = 0;
