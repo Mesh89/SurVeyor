@@ -90,7 +90,7 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
         if (del_start < get_unclipped_start(read) && get_unclipped_end(read) < del_end) continue;
 
         // if the read is assigned to a different SV, no need to align it, just count and continue
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, del->id)) {
+        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, del)) {
             del->sample_info.assigned_to_other_sv_bp1_reads++;
             del->sample_info.assigned_to_other_sv_bp2_reads++;
             continue;

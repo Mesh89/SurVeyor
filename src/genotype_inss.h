@@ -122,7 +122,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         aligner.Align(seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, &alt1_aln, 0);
         aligner.Align(seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_pos, &alt2_aln, 0);
         
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins->id)) {
+        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) {
             if (alt1_aln.sw_score >= alt2_aln.sw_score) {
                 ins->sample_info.assigned_to_other_sv_bp1_reads++;
             }

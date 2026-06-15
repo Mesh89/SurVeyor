@@ -637,7 +637,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         // If this read is assigned to a different, non-HP SV, we don't use it for evidence here
         bool discard_read = reassign_evidence;
         for (int i = 0; i < hp_indels.size(); i++) {
-             if (!reassign_evidence || !evidence_map->is_read_assigned_to_different_sv(read, hp_indels[i]->id)) {
+             if (!reassign_evidence || !evidence_map->is_read_assigned_to_different_sv(read, hp_indels[i])) {
                 discard_read = false;
                 break;
             }

@@ -70,7 +70,7 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         if (!is_samechr(read) || is_samestr(read)) continue;
 
         // if the read is assigned to a different SV, no need to align it, just count and continue
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup->id)) {
+        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
             dup->sample_info.assigned_to_other_sv_bp1_reads++;
             continue;
         }
@@ -306,7 +306,7 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         if (dup_start < get_unclipped_start(read) && get_unclipped_end(read) < dup_end) continue;
 
         // if the read is assigned to a different SV, no need to align it, just count and continue
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup->id)) {
+        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
             dup->sample_info.assigned_to_other_sv_bp1_reads++;
             dup->sample_info.assigned_to_other_sv_bp2_reads++;
             continue;

@@ -86,8 +86,7 @@ struct evidence_logger_t {
 };
 
 struct evidence_map_t {
-    std::unordered_map<std::string, std::string> read_to_sv_map;
-    std::unordered_map<std::string, int> read_to_bp_map;
+    std::unordered_map<std::string, int> read_to_hpid_map;
     std::unordered_map<std::string, std::vector<std::pair<std::string, int>>> read_to_non_chosen_svs_map;
 
     evidence_map_t() {}
@@ -105,6 +104,7 @@ struct evidence_map_t {
         }
 
         std::unordered_map<std::string, float> sv_epr_map;
+        std::unordered_map<std::string, int> sv_hpid_map;
 
         bcf1_t* vcf_record = bcf_init();
         while (bcf_read(vcf_file, vcf_header, vcf_record) == 0) {
@@ -114,6 +114,15 @@ struct evidence_map_t {
             id = remove_svid_dup_suffix(id);
             float epr = get_sv_epr(vcf_header, vcf_record);
             sv_epr_map[id] = epr;
+
+            int* hpid_data = NULL;
+            int hpid_len = 0;
+            if (bcf_get_info_int32(vcf_header, vcf_record, "HPID", &hpid_data, &hpid_len) <= 0 || hpid_len == 0) {
+                free(hpid_data);
+                throw std::runtime_error("Missing HPID for SV " + id + ".");
+            }
+            sv_hpid_map[id] = hpid_data[0];
+            free(hpid_data);
         }
         hts_close(vcf_file);
         bcf_hdr_destroy(vcf_header);
@@ -125,24 +134,26 @@ struct evidence_map_t {
         int bp, score;
 
         // tuple fields are: score of the first best association found, sv_id of that association, 
-        // whether the association is unique or not
-        std::unordered_map<std::string, std::tuple<int, std::string, bool>> read_to_best_assoc_map;
+        // whether the association is unique or not, hpid of that association
+        std::unordered_map<std::string, std::tuple<int, std::string, bool, int>> read_to_best_assoc_map;
 
         // For each read, find the best association. Furthermore, flag reads that have a "best" association to multiple SVs
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score) {
             sv_id = remove_svid_dup_suffix(sv_id);
             if (!read_to_best_assoc_map.count(read_name)) {
-                read_to_best_assoc_map[read_name] = {score, sv_id, true};
+                read_to_best_assoc_map[read_name] = {score, sv_id, true, sv_hpid_map[sv_id]};
             } else {
                 auto& curr_best_assoc = read_to_best_assoc_map[read_name];
                 int& best_score = std::get<0>(curr_best_assoc);
                 std::string& best_sv_id = std::get<1>(curr_best_assoc);
                 bool& unique = std::get<2>(curr_best_assoc);
+                int& best_hpid = std::get<3>(curr_best_assoc);
                 if (score > best_score) {
                     best_score = score;
                     best_sv_id = sv_id;
+                    best_hpid = sv_hpid_map[sv_id];
                     unique = true;
-                } else if (score == best_score && sv_id != best_sv_id) {
+                } else if (score == best_score && sv_hpid_map[sv_id] != best_hpid) {
                     unique = false;
                 }
             }
@@ -168,6 +179,7 @@ struct evidence_map_t {
             sv_id = remove_svid_dup_suffix(sv_id);
             auto& best_assoc = read_to_best_assoc_map[read_name];
             int best_score = std::get<0>(best_assoc);
+            int best_hpid = std::get<3>(best_assoc);
             if (score == best_score) {
                 sv_to_S_map[sv_id] += score;
             }
@@ -176,12 +188,11 @@ struct evidence_map_t {
                 bool unique = std::get<2>(best_assoc);
                 if (unique) {
                     sv_to_U_map[sv_id] += 1;
-                    read_to_sv_map[read_name] = sv_id;
-                    read_to_bp_map[read_name] = bp;
+                    read_to_hpid_map[read_name] = sv_hpid_map[sv_id];
                 } else {
                     read_to_multiple_svs[read_name].push_back({sv_id, bp});
                 }
-            } else {
+            } else if (best_hpid != sv_hpid_map[sv_id]) {
                 read_to_non_chosen_svs_map[read_name].push_back({sv_id, bp});
             }
         }
@@ -198,7 +209,17 @@ struct evidence_map_t {
             }
             std::sort(sv_S_vec.begin(), sv_S_vec.end(), std::greater<std::pair<int, sv_with_bp_t>>());
             sv_with_bp_t sv1 = sv_S_vec[0].second;
-            sv_with_bp_t sv2 = sv_S_vec[1].second;
+            
+            // pick best SV that has a different HPID than sv1 (if any)
+            size_t sv2_idx = 1;
+            while (sv2_idx < sv_S_vec.size() && sv_hpid_map[sv_S_vec[sv2_idx].second.first] == sv_hpid_map[sv1.first]) {
+                sv2_idx++;
+            }
+            if (sv2_idx == sv_S_vec.size()) {
+                read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
+                continue;
+            }
+            sv_with_bp_t sv2 = sv_S_vec[sv2_idx].second;
 
             int U1 = sv_to_U_map[sv1.first];
             int U2 = sv_to_U_map[sv2.first];
@@ -210,37 +231,32 @@ struct evidence_map_t {
                 float epr1 = sv_epr_map[sv1.first];
                 float epr2 = sv_epr_map[sv2.first];
                 if (epr1 >= epr2) {
-                    read_to_sv_map[read_name] = sv1.first;
-                    read_to_bp_map[read_name] = sv1.second;
+                    read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
                 } else {
-                    read_to_sv_map[read_name] = sv2.first;
-                    read_to_bp_map[read_name] = sv2.second;
+                    read_to_hpid_map[read_name] = sv_hpid_map[sv2.first];
                 }
             } else {
                 std::uniform_int_distribution<> dis(1, total_U);
                 int r = dis(gen);
                 if (r <= U1) {
-                    read_to_sv_map[read_name] = sv1.first;
-                    read_to_bp_map[read_name] = sv1.second;
+                    read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
                 } else {
-                    read_to_sv_map[read_name] = sv2.first;
-                    read_to_bp_map[read_name] = sv2.second;
+                    read_to_hpid_map[read_name] = sv_hpid_map[sv2.first];
                 }
             }
 
             for (const auto& sv_w_bp : sv_w_bps) {
-                if (sv_w_bp.first != read_to_sv_map[read_name]) {
+                if (sv_hpid_map[sv_w_bp.first] != read_to_hpid_map[read_name]) {
                     read_to_non_chosen_svs_map[read_name].push_back(sv_w_bp);
                 }
             }
         }
     }
 
-    bool is_read_assigned_to_different_sv(bam1_t* read, std::string sv_id) {
+    bool is_read_assigned_to_different_sv(bam1_t* read, sv_t* sv) {
         std::string read_name = read_name_with_suffix(read);
-        if (!read_to_sv_map.count(read_name)) return false;
-        sv_id = remove_svid_dup_suffix(sv_id);
-        return read_to_sv_map[read_name] != sv_id;
+        if (!read_to_hpid_map.count(read_name)) return false;
+        return read_to_hpid_map[read_name] != sv->hpid;
     }
 
     std::vector<std::pair<std::string, int>> get_non_chosen_svs_for_read(bam1_t* read) {
