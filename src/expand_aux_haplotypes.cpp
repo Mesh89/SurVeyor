@@ -10,24 +10,12 @@
 #include "sam_utils.h"
 #include "vcf_utils.h"
 
-void ensure_hpid_header(bcf_hdr_t* hdr) {
-    int len = 0;
-    bcf_hdr_remove(hdr, BCF_HL_INFO, "HPID");
-    const char* hpid_tag = "##INFO=<ID=HPID,Number=1,Type=Integer,Description=\"Identifier of the local haplotype represented by this call.\">";
-    bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hpid_tag, &len));
-    if (bcf_hdr_sync(hdr) < 0) {
-        throw std::runtime_error("Failed to sync VCF header after adding HPID.");
-    }
-}
-
 std::shared_ptr<sv_t> copy_indel_atom(std::shared_ptr<sv_t> sv) {
     std::shared_ptr<sv_t> copy;
     if (sv->svtype() == "DEL") {
         copy = std::make_shared<deletion_t>(sv->chr, sv->start, sv->end, sv->ins_seq, nullptr, nullptr, nullptr, nullptr);
     } else if (sv->svtype() == "INS") {
         copy = std::make_shared<insertion_t>(sv->chr, sv->start, sv->end, sv->ins_seq, nullptr, nullptr, nullptr, nullptr);
-    } else if (sv->svtype() == "DUP") {
-        copy = std::make_shared<duplication_t>(sv->chr, sv->start, sv->end, sv->ins_seq, nullptr, nullptr, nullptr, nullptr);
     } else {
         throw std::runtime_error("Unsupported AUX_INDEL type in haplotype expansion: " + sv->svtype());
     }
@@ -37,6 +25,25 @@ std::shared_ptr<sv_t> copy_indel_atom(std::shared_ptr<sv_t> sv) {
     return copy;
 }
 
+void append_indel_atoms(std::vector<std::shared_ptr<sv_t>>& dest, std::shared_ptr<sv_t> sv) {
+    if (sv->start != sv->end && !sv->ins_seq.empty()) {
+        std::shared_ptr<sv_t> del = std::make_shared<deletion_t>(sv->chr, sv->start, sv->end, "", nullptr, nullptr, nullptr, nullptr);
+        del->id = sv->id;
+        del->source = sv->source;
+        del->hpid = sv->hpid;
+        dest.push_back(del);
+
+        std::shared_ptr<sv_t> ins = std::make_shared<insertion_t>(sv->chr, sv->start, sv->start, sv->ins_seq, nullptr, nullptr, nullptr, nullptr);
+        ins->id = sv->id;
+        ins->source = sv->source;
+        ins->hpid = sv->hpid;
+        dest.push_back(ins);
+        return;
+    }
+
+    dest.push_back(copy_indel_atom(sv));
+}
+
 std::shared_ptr<sv_t> make_aux_indel_record(std::shared_ptr<sv_t> parent, size_t aux_idx) {
     std::shared_ptr<sv_t> aux_record = copy_indel_atom(parent->aux_indels[aux_idx]);
     aux_record->id = parent->id + ".AUX_INDEL." + std::to_string(aux_idx);
@@ -44,7 +51,7 @@ std::shared_ptr<sv_t> make_aux_indel_record(std::shared_ptr<sv_t> parent, size_t
     aux_record->sample_info = parent->sample_info;
     aux_record->hpid = parent->hpid;
     aux_record->aux_snps = parent->aux_snps;
-    aux_record->aux_indels.push_back(copy_indel_atom(parent));
+    append_indel_atoms(aux_record->aux_indels, parent);
     for (size_t i = 0; i < parent->aux_indels.size(); i++) {
         if (i != aux_idx) {
             aux_record->aux_indels.push_back(copy_indel_atom(parent->aux_indels[i]));
@@ -73,7 +80,6 @@ int main(int argc, char* argv[]) {
     if (hdr == NULL) {
         throw std::runtime_error("Unable to read VCF header from " + in_vcf_fname + ".");
     }
-    ensure_hpid_header(hdr);
 
     std::vector<bcf1_t*> out_records;
     bcf1_t* b = bcf_init();
@@ -87,7 +93,7 @@ int main(int argc, char* argv[]) {
         copy_all_fmt(hdr, b, main_record);
         out_records.push_back(main_record);
 
-        if (sv->svtype() == "DUP") continue;
+        if (sv->svtype() == "DUP" || sv->incomplete_ins_seq()) continue;
 
         for (size_t aux_idx = 0; aux_idx < sv->aux_indels.size(); aux_idx++) {
             std::shared_ptr<sv_t> aux_record_sv = make_aux_indel_record(sv, aux_idx);
