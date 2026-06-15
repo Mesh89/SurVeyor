@@ -20,11 +20,37 @@ void ensure_hpid_header(bcf_hdr_t* hdr) {
     }
 }
 
-std::shared_ptr<sv_t> make_aux_indel_record(std::shared_ptr<sv_t> parent, std::shared_ptr<sv_t> aux_indel, int idx) {
-    aux_indel->id = parent->id + ".AUX_INDEL." + std::to_string(idx);
-    aux_indel->source = parent->source;
-    aux_indel->sample_info = parent->sample_info;
-    return aux_indel;
+std::shared_ptr<sv_t> copy_indel_atom(std::shared_ptr<sv_t> sv) {
+    std::shared_ptr<sv_t> copy;
+    if (sv->svtype() == "DEL") {
+        copy = std::make_shared<deletion_t>(sv->chr, sv->start, sv->end, sv->ins_seq, nullptr, nullptr, nullptr, nullptr);
+    } else if (sv->svtype() == "INS") {
+        copy = std::make_shared<insertion_t>(sv->chr, sv->start, sv->end, sv->ins_seq, nullptr, nullptr, nullptr, nullptr);
+    } else if (sv->svtype() == "DUP") {
+        copy = std::make_shared<duplication_t>(sv->chr, sv->start, sv->end, sv->ins_seq, nullptr, nullptr, nullptr, nullptr);
+    } else {
+        throw std::runtime_error("Unsupported AUX_INDEL type in haplotype expansion: " + sv->svtype());
+    }
+    copy->id = sv->id;
+    copy->source = sv->source;
+    copy->hpid = sv->hpid;
+    return copy;
+}
+
+std::shared_ptr<sv_t> make_aux_indel_record(std::shared_ptr<sv_t> parent, size_t aux_idx) {
+    std::shared_ptr<sv_t> aux_record = copy_indel_atom(parent->aux_indels[aux_idx]);
+    aux_record->id = parent->id + ".AUX_INDEL." + std::to_string(aux_idx);
+    aux_record->source = parent->source;
+    aux_record->sample_info = parent->sample_info;
+    aux_record->hpid = parent->hpid;
+    aux_record->aux_snps = parent->aux_snps;
+    aux_record->aux_indels.push_back(copy_indel_atom(parent));
+    for (size_t i = 0; i < parent->aux_indels.size(); i++) {
+        if (i != aux_idx) {
+            aux_record->aux_indels.push_back(copy_indel_atom(parent->aux_indels[i]));
+        }
+    }
+    return aux_record;
 }
 
 int main(int argc, char* argv[]) {
@@ -61,9 +87,10 @@ int main(int argc, char* argv[]) {
         copy_all_fmt(hdr, b, main_record);
         out_records.push_back(main_record);
 
-        int aux_idx = 0;
-        for (const auto& aux_indel : sv->aux_indels) {
-            std::shared_ptr<sv_t> aux_record_sv = make_aux_indel_record(sv, aux_indel, aux_idx++);
+        if (sv->svtype() == "DUP") continue;
+
+        for (size_t aux_idx = 0; aux_idx < sv->aux_indels.size(); aux_idx++) {
+            std::shared_ptr<sv_t> aux_record_sv = make_aux_indel_record(sv, aux_idx);
             bcf1_t* aux_record = bcf_init();
             sv2bcf(hdr, aux_record, aux_record_sv.get(), chr_seqs.get_seq(aux_record_sv->chr));
             copy_all_fmt(hdr, b, aux_record);
