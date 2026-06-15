@@ -36,6 +36,7 @@ add_executable(normalise libs/ssw.c libs/ssw_cpp.cpp utils/normalise.cpp)
 add_executable(cluster libs/ssw.c libs/ssw_cpp.cpp utils/cluster.cpp)
 add_executable(insertions_to_duplications libs/ssw.c libs/ssw_cpp.cpp utils/insertions_to_duplications.cpp)
 add_executable(check_duplicate_ids utils/check_duplicate_ids.cpp)
+add_executable(expand_aux_haplotypes src/expand_aux_haplotypes.cpp)
 
 find_library(HTS_LIB hts PATHS htslib-1.21/lib NO_DEFAULT_PATH)
 
@@ -56,3 +57,4 @@ target_link_libraries(normalise "${HTS_LIB}")
 target_link_libraries(cluster "${HTS_LIB}")
 target_link_libraries(insertions_to_duplications "${HTS_LIB}")
 target_link_libraries(check_duplicate_ids "${HTS_LIB}")
+target_link_libraries(expand_aux_haplotypes "${HTS_LIB}")
