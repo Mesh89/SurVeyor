@@ -3,6 +3,7 @@ import features
 import xgboost as xgb
 import os
 import numpy as np
+import timeit
 
 class Classifier:
     def load_features_files(model_stage_dir):
@@ -54,16 +55,26 @@ class Classifier:
         vcf_writer.close()
 
     def run_classifier(in_vcf, out_vcf, stats_fname, model_dir, threads=1):
+        cmd = "Classifier.run_classifier %s %s %s %s --threads %d" % (in_vcf, out_vcf, stats_fname, model_dir, threads)
+        start_time = timeit.default_timer()
+        print("Executing:", cmd)
+
+        parse_start_time = timeit.default_timer()
         feature_names_by_model = Classifier.load_features_files(os.path.join(model_dir, "yes_or_no"))
         test_data, _, test_variant_ids, _, _ = \
             features.parse_vcf(in_vcf, stats_fname, "XXX", ignore_gts = True, feature_names_by_model = feature_names_by_model)
+        parse_elapsed = timeit.default_timer() - parse_start_time
+        print("Feature parsing was run in %.2f seconds" % parse_elapsed)
 
         svid_to_gt = dict()
         svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr = dict(), dict(), dict(), dict()
         for model_name in test_data:
+            model_start_time = timeit.default_timer()
             model_file = os.path.join(model_dir, "yes_or_no", model_name + '.ubj')
 
             if model_name.startswith("INV"):
+                model_elapsed = timeit.default_timer() - model_start_time
+                print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
                 continue
 
             classifier = xgb.XGBClassifier(n_jobs=threads)
@@ -75,6 +86,8 @@ class Classifier:
                 svid_to_epr[test_variant_ids[model_name][i]] = eprs[i][1]
 
             if len(test_data[model_name]) == 0:
+                model_elapsed = timeit.default_timer() - model_start_time
+                print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
                 continue
 
             positive_mask = (predictions == 1)
@@ -82,6 +95,8 @@ class Classifier:
             positive_variant_ids = test_variant_ids[model_name][positive_mask]
 
             if len(positive_data) == 0:
+                model_elapsed = timeit.default_timer() - model_start_time
+                print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
                 continue
 
             model_file = os.path.join(model_dir, "gts", model_name + '.ubj')
@@ -105,8 +120,11 @@ class Classifier:
                 pprs = classifier.predict_proba(positive_data)
                 for i in range(len(positive_variant_ids)):
                     svid_to_ppr[positive_variant_ids[i]] = pprs[i][1]
+            model_elapsed = timeit.default_timer() - model_start_time
+            print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
 
         # write the predictions to a VCF file
+        write_start_time = timeit.default_timer()
         vcf_reader = pysam.VariantFile(in_vcf)
         header = vcf_reader.header
         if 'EPR' not in header.formats:
@@ -118,6 +136,11 @@ class Classifier:
         if 'PPR' not in header.formats:
             header.add_line('##FORMAT=<ID=PPR,Number=1,Type=Float,Description="Probability of the SV to be the primary call, according to the ML model.">')
         Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, out_vcf, stats_fname)
+        write_elapsed = timeit.default_timer() - write_start_time
+        print("VCF writing was run in %.2f seconds" % write_elapsed)
+
+        elapsed = timeit.default_timer() - start_time
+        print(cmd, "was run in %.2f seconds" % elapsed)
 
 if __name__ == "__main__":
     cmd_parser = argparse.ArgumentParser(description='Classify SVs using a built ML model.')
