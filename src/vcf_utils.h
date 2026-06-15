@@ -225,6 +225,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* svinslen_tag = "##INFO=<ID=SVINSLEN,Number=1,Type=Integer,Description=\"Length of the inserted sequence.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, svinslen_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "HPID");
+	const char* hpid_tag = "##INFO=<ID=HPID,Number=1,Type=Integer,Description=\"Identifier of the local haplotype represented by this call.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hpid_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_INFO, "DUP_CN_UNRESOLVED");
 	const char* dup_cn_unresolved_tag = "##INFO=<ID=DUP_CN_UNRESOLVED,Number=0,Type=Flag,Description=\"For this DUP record, the number of additional tandem copies is unresolved; END and SVLEN describe the duplicated reference interval, not necessarily the total inserted allele length.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, dup_cn_unresolved_tag, &len));
@@ -575,6 +579,9 @@ bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name,
 	const char* svinslen_tag = "##INFO=<ID=SVINSLEN,Number=1,Type=Integer,Description=\"Length of the inserted sequence.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, svinslen_tag, &len));
 
+	const char* hpid_tag = "##INFO=<ID=HPID,Number=1,Type=Integer,Description=\"Identifier of the local haplotype represented by this call.\">";
+	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, hpid_tag, &len));
+
 	const char* svinsseq_tag = "##INFO=<ID=SVINSSEQ,Number=1,Type=String,Description=\"Inserted sequence.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, svinsseq_tag, &len));
 
@@ -762,6 +769,8 @@ void sv2bcf(bcf_hdr_t* hdr, bcf1_t* bcf_entry, sv_t* sv, char* chr_seq, bool for
 	if (!sv->source.empty()) {
 		bcf_update_info_string(hdr, bcf_entry, "SOURCE", sv->source.c_str());
 	}
+	if (sv->hpid == 0) sv->hpid = make_hpid(*sv);
+	bcf_update_info_int32(hdr, bcf_entry, "HPID", &sv->hpid, 1);
 	if (!sv->inferred_ins_seq.empty()) {
 		bcf_update_info_string(hdr, bcf_entry, "SVINSSEQ_INFERRED", sv->inferred_ins_seq.c_str());
 	}
@@ -1190,6 +1199,16 @@ std::shared_ptr<sv_t> bcf_to_sv(bcf_hdr_t* hdr, bcf1_t* b) {
 
 	sv->id = b->d.id;
 	sv->source = get_sv_info_str(hdr, b, "SOURCE");
+	data = NULL;
+	len = 0;
+	if (bcf_get_info_int32(hdr, b, "HPID", &data, &len) > 0 && len > 0) {
+		sv->hpid = data[0];
+	}
+	free(data);
+	if (sv->hpid == 0) sv->hpid = make_hpid(*sv);
+	for (auto& aux_indel : sv->aux_indels) {
+		aux_indel->hpid = sv->hpid;
+	}
 
 	char** ss_data = NULL;
 	len = 0;

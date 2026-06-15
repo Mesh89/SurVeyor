@@ -3,7 +3,9 @@
 
 #include "htslib/hts.h"
 #include "utils.h"
+#include <algorithm>
 #include <cstdint>
+#include <climits>
 #include <vector>
 #include <string>
 #include <sstream>
@@ -143,6 +145,10 @@ struct snp_t {
         pos = std::stoll(snp_str.substr(0, colon_pos)) - 1;
         alt_base = snp_str[colon_pos+1];
     }
+
+    std::string unique_key() const {
+        return "SNP:" + std::to_string(pos) + ":" + alt_base;
+    }
 };
 
 struct sv_t {
@@ -176,6 +182,7 @@ struct sv_t {
     std::vector<snp_t> aux_snps;
 
     std::string source;
+    int hpid = 0;
     bool imprecise = false;
     bool hp_genotyped = false;
     hts_pos_t hp_ref_beg = HTS_POS_MIN, hp_ref_end = HTS_POS_MIN;
@@ -378,6 +385,37 @@ struct sv_t {
         bcf_destroy1(vcf_entry);
     }
 };
+
+inline uint64_t stable_hash64(const std::string& key) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char c : key) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+inline std::string hpid_key(sv_t& sv) {
+    std::vector<std::string> atoms;
+    atoms.push_back(sv.unique_key(false));
+    for (const auto& aux_snp : sv.aux_snps) {
+        atoms.push_back(aux_snp.unique_key());
+    }
+    for (const auto& aux_indel : sv.aux_indels) {
+        atoms.push_back(aux_indel->unique_key(false));
+    }
+    std::sort(atoms.begin(), atoms.end());
+
+    std::stringstream ss;
+    for (const auto& atom : atoms) {
+        ss << atom << ";";
+    }
+    return ss.str();
+}
+
+inline int make_hpid(sv_t& sv) {
+    return 1 + (stable_hash64(hpid_key(sv)) % (uint64_t(INT32_MAX) - 1));
+}
 
 struct deletion_t : sv_t {
 
