@@ -87,6 +87,7 @@ class Features:
             return "HP"
 
         svtype_str = Features.get_svtype(record)
+        sample = record.samples[0]
 
         if svtype_str == "DUP" and "INS_TO_DUP" in record.info:
             svtype_str = "INS_TO_DUP"
@@ -96,11 +97,11 @@ class Features:
         if svtype_str == "DEL":
             if abs(Features.get_svlen(record)) >= max_is:
                 svtype_str += "_LARGE"
-            if 'EXL' not in record.samples[0]:
+            if 'EXL' not in sample:
                 svtype_str += "_NOEXL"
         elif svtype_str == "DUP" and Features.get_svlen(record) > read_len-30:
             svtype_str += "_LARGE"
-            if 'EXL' not in record.samples[0]:
+            if 'EXL' not in sample:
                 svtype_str += "_NOEXL"
 
         return svtype_str
@@ -240,12 +241,16 @@ class Features:
 
         features = dict()
         info = record.info
+        sample = record.samples[0]
         svtype_str = Features.get_svtype(record)
         source_str = Features.get_string_value(info, 'SOURCE', "")
         features['START_STOP_DIST'] = record.stop - record.pos
 
         svlen = abs(Features.get_svlen(record))
         features['SVLEN'] = math.log1p(svlen)
+
+        if feature_names is None:
+            feature_names = Features.get_feature_names(model_name)
 
         svinsseq = Features.get_svinsseq(record)
         svinslen = Features.get_number_value(info, 'SVINSLEN', 0)
@@ -263,7 +268,7 @@ class Features:
             features['INS_SEQ_COV_PREFIX_LEN'] = i/len(svinsseq)
             features['INS_SEQ_COV_SUFFIX_LEN'] = (len(svinsseq)-i)/len(svinsseq)
 
-        exp_alt_reads_freq1, exp_alt_reads_freq2 = Features.get_number_value(info, 'EXP_ALT_READS_FREQ', [Features.NAN, Features.NAN], 1.0)
+        exp_alt_reads_freq1, exp_alt_reads_freq2 = Features.get_number_value(info, 'EXP_ALT_READS_FREQ', [Features.NAN, Features.NAN])
         features['EXP_ALT_READS_FREQ1'], features['EXP_ALT_READS_FREQ2'] = exp_alt_reads_freq1, exp_alt_reads_freq2
 
         hp_ref_start, hp_ref_end = Features.get_number_value(info, 'HP_REF_RANGE', [Features.NAN, Features.NAN])
@@ -330,95 +335,95 @@ class Features:
         features['MAX_INS_SUFFIX_BASE_COUNT_RATIO'] = max(ins_suffix_base_count_ratio)
         features['INS_SUFFIX_A_RATIO'], features['INS_SUFFIX_C_RATIO'], features['INS_SUFFIX_G_RATIO'], features['INS_SUFFIX_T_RATIO'] = ins_suffix_base_count_ratio
 
-        features['TD'] = Features.get_number_value(record.samples[0], 'TD', 0)
+        features['TD'] = Features.get_number_value(sample, 'TD', 0)
 
-        ar1 = Features.get_number_value(record.samples[0], 'AR1', 0)
-        ar1c = Features.get_number_value(record.samples[0], 'AR1C', 0)
-        arc1hq = Features.get_number_value(record.samples[0], 'AR1CHQ', 0)
-        ar1e = Features.get_number_value(record.samples[0], 'AR1E', 0)
+        ar1 = Features.get_number_value(sample, 'AR1', 0)
+        ar1c = Features.get_number_value(sample, 'AR1C', 0)
+        arc1hq = Features.get_number_value(sample, 'AR1CHQ', 0)
+        ar1e = Features.get_number_value(sample, 'AR1E', 0)
         ar1_adj = ar1
         ar1c_adj = ar1c
         if exp_alt_reads_freq1 > 0:
             ar1_adj = ar1/exp_alt_reads_freq1
             ar1c_adj = ar1c/exp_alt_reads_freq1
-        ar1cas = Features.get_number_value(record.samples[0], 'AR1CAS', Features.NAN)
-        ar1css = Features.get_number_value(record.samples[0], 'AR1CSS', Features.NAN)
+        ar1cas = Features.get_number_value(sample, 'AR1CAS', Features.NAN)
+        ar1css = Features.get_number_value(sample, 'AR1CSS', Features.NAN)
         features['AR1'] = Features.piecewise_normalise(ar1, min_depth, max_depth)
         features['AR1C'] = Features.piecewise_normalise(ar1c, min_depth, max_depth)
         features['AR1_ADJ'] = Features.piecewise_normalise(ar1_adj, min_depth, max_depth)
         features['AR1C_ADJ'] = Features.piecewise_normalise(ar1c_adj, min_depth, max_depth)
-        features['AR1CmQ'] = Features.get_number_value(record.samples[0], 'AR1CmQ', Features.NAN)
-        features['AR1CMQ'] = Features.get_number_value(record.samples[0], 'AR1CMQ', Features.NAN)
+        features['AR1CmQ'] = Features.get_number_value(sample, 'AR1CmQ', Features.NAN)
+        features['AR1CMQ'] = Features.get_number_value(sample, 'AR1CMQ', Features.NAN)
         features['AR1CHQ'] = Features.piecewise_normalise(arc1hq, min_depth, max_depth)
         features['AR1C_HQ_RATIO'] = arc1hq/max(1, ar1c)
         features['AR1E'] = Features.piecewise_normalise(ar1e, min_depth, max_depth)
         features['AR1E_RATIO'] = ar1e/max(1, ar1c)
-        features['AR1CMSPAN_1'], features['AR1CMSPAN_2'] = Features.get_number_value(record.samples[0], 'AR1CMSPAN', [0, 0], max_is)
-        features['AR1CMHQSPAN_1'], features['AR1CMHQSPAN_2'] = Features.get_number_value(record.samples[0], 'AR1CMHQSPAN', [0, 0], max_is)
-        features['AR1C_OCCR'] = Features.get_number_value(record.samples[0], 'AR1C_OCCR', Features.NAN)
+        features['AR1CMSPAN_1'], features['AR1CMSPAN_2'] = Features.get_number_value(sample, 'AR1CMSPAN', [0, 0], max_is)
+        features['AR1CMHQSPAN_1'], features['AR1CMHQSPAN_2'] = Features.get_number_value(sample, 'AR1CMHQSPAN', [0, 0], max_is)
+        features['AR1C_OCCR'] = Features.get_number_value(sample, 'AR1C_OCCR', Features.NAN)
 
-        features['AR1HPMODE'] = Features.get_number_value(record.samples[0], 'AR1HPMODE', Features.NAN)
-        features['AR1CHPMODE'] = Features.get_number_value(record.samples[0], 'AR1CHPMODE', Features.NAN)
+        features['AR1HPMODE'] = Features.get_number_value(sample, 'AR1HPMODE', Features.NAN)
+        features['AR1CHPMODE'] = Features.get_number_value(sample, 'AR1CHPMODE', Features.NAN)
         features['AR1HPMODE_AR1CHPMODE_DIFF'] = features['AR1HPMODE'] - features['AR1CHPMODE']
         features['AR1HPMODE_ALTLEN_DIFF'] = features['AR1HPMODE'] - features['HP_ALT_LEN']
         features['AR1CHPMODE_ALTLEN_DIFF'] = features['AR1CHPMODE'] - features['HP_ALT_LEN']
-        features['AR1CHPIQR'] = Features.get_number_value(record.samples[0], 'AR1CHPIQR', Features.NAN)
-        features['AR1CHPmQ'] = Features.get_number_value(record.samples[0], 'AR1CHPmQ', Features.NAN)
-        features['AR1CHPMQ'] = Features.get_number_value(record.samples[0], 'AR1CHPMQ', Features.NAN)
-        features['AR1CHPAQ'] = Features.get_number_value(record.samples[0], 'AR1CHPAQ', Features.NAN)
-        features['AR1CHPSQ'] = Features.get_number_value(record.samples[0], 'AR1CHPSQ', Features.NAN)
-        features['AR1HP5PMR'] = Features.get_number_value(record.samples[0], 'AR1HP5PMR', Features.NAN)
-        features['AR1HP3PMR'] = Features.get_number_value(record.samples[0], 'AR1HP3PMR', Features.NAN)
+        features['AR1CHPIQR'] = Features.get_number_value(sample, 'AR1CHPIQR', Features.NAN)
+        features['AR1CHPmQ'] = Features.get_number_value(sample, 'AR1CHPmQ', Features.NAN)
+        features['AR1CHPMQ'] = Features.get_number_value(sample, 'AR1CHPMQ', Features.NAN)
+        features['AR1CHPAQ'] = Features.get_number_value(sample, 'AR1CHPAQ', Features.NAN)
+        features['AR1CHPSQ'] = Features.get_number_value(sample, 'AR1CHPSQ', Features.NAN)
+        features['AR1HP5PMR'] = Features.get_number_value(sample, 'AR1HP5PMR', Features.NAN)
+        features['AR1HP3PMR'] = Features.get_number_value(sample, 'AR1HP3PMR', Features.NAN)
 
-        ar2 = Features.get_number_value(record.samples[0], 'AR2', 0)
-        ar2c = Features.get_number_value(record.samples[0], 'AR2C', 0)
+        ar2 = Features.get_number_value(sample, 'AR2', 0)
+        ar2c = Features.get_number_value(sample, 'AR2C', 0)
         ar2_adj = ar2
         ar2c_adj = ar2c
         if exp_alt_reads_freq2 > 0:
             ar2_adj = ar2/exp_alt_reads_freq2
             ar2c_adj = ar2c/exp_alt_reads_freq2
-        ar2cas = Features.get_number_value(record.samples[0], 'AR2CAS', Features.NAN)
-        ar2css = Features.get_number_value(record.samples[0], 'AR2CSS', Features.NAN)
+        ar2cas = Features.get_number_value(sample, 'AR2CAS', Features.NAN)
+        ar2css = Features.get_number_value(sample, 'AR2CSS', Features.NAN)
         features['AR2'] = Features.piecewise_normalise(ar2, min_depth, max_depth)
         features['AR2C'] = Features.piecewise_normalise(ar2c, min_depth, max_depth)
         features['AR2_ADJ'] = Features.piecewise_normalise(ar2_adj, min_depth, max_depth)
         features['AR2C_ADJ'] = Features.piecewise_normalise(ar2c_adj, min_depth, max_depth)
-        features['AR2CmQ'] = Features.get_number_value(record.samples[0], 'AR2CmQ', Features.NAN)
-        features['AR2CMQ'] = Features.get_number_value(record.samples[0], 'AR2CMQ', Features.NAN)
-        arc2hq = Features.get_number_value(record.samples[0], 'AR2CHQ', 0)
+        features['AR2CmQ'] = Features.get_number_value(sample, 'AR2CmQ', Features.NAN)
+        features['AR2CMQ'] = Features.get_number_value(sample, 'AR2CMQ', Features.NAN)
+        arc2hq = Features.get_number_value(sample, 'AR2CHQ', 0)
         features['AR2CHQ'] = Features.piecewise_normalise(arc2hq, min_depth, max_depth)
         features['AR2C_HQ_RATIO'] = arc2hq/max(1, ar2c)
-        ar2e = Features.get_number_value(record.samples[0], 'AR2E', 0)
+        ar2e = Features.get_number_value(sample, 'AR2E', 0)
         features['AR2E'] = Features.piecewise_normalise(ar2e, min_depth, max_depth)
         features['AR2E_RATIO'] = ar2e/max(1, ar2c)
-        features['AR2CMSPAN_1'], features['AR2CMSPAN_2'] = Features.get_number_value(record.samples[0], 'AR2CMSPAN', [0, 0], max_is)
-        features['AR2CMHQSPAN_1'], features['AR2CMHQSPAN_2'] = Features.get_number_value(record.samples[0], 'AR2CMHQSPAN', [0, 0], max_is)
-        features['AR2C_OCCR'] = Features.get_number_value(record.samples[0], 'AR2C_OCCR', Features.NAN)
+        features['AR2CMSPAN_1'], features['AR2CMSPAN_2'] = Features.get_number_value(sample, 'AR2CMSPAN', [0, 0], max_is)
+        features['AR2CMHQSPAN_1'], features['AR2CMHQSPAN_2'] = Features.get_number_value(sample, 'AR2CMHQSPAN', [0, 0], max_is)
+        features['AR2C_OCCR'] = Features.get_number_value(sample, 'AR2C_OCCR', Features.NAN)
 
-        ar1cf = Features.get_number_value(record.samples[0], 'AR1CF', 0, max(1, ar1c))
-        ar1cr = Features.get_number_value(record.samples[0], 'AR1CR', 0, max(1, ar1c))
-        ar2cf = Features.get_number_value(record.samples[0], 'AR2CF', 0, max(1, ar2c))
-        ar2cr = Features.get_number_value(record.samples[0], 'AR2CR', 0, max(1, ar2c))
+        ar1cf = Features.get_number_value(sample, 'AR1CF', 0, max(1, ar1c))
+        ar1cr = Features.get_number_value(sample, 'AR1CR', 0, max(1, ar1c))
+        ar2cf = Features.get_number_value(sample, 'AR2CF', 0, max(1, ar2c))
+        ar2cr = Features.get_number_value(sample, 'AR2CR', 0, max(1, ar2c))
         features['ARCF'] = ar1cf + ar2cf
         features['ARCR'] = ar1cr + ar2cr
         features['MAXARCD'] = max(features['ARCF'], features['ARCR'])
 
-        ar1ef = Features.get_number_value(record.samples[0], 'AR1EF', 0, max(1, ar1e))
-        ar1er = Features.get_number_value(record.samples[0], 'AR1ER', 0, max(1, ar1e))
-        ar2ef = Features.get_number_value(record.samples[0], 'AR2EF', 0, max(1, ar2e))
-        ar2er = Features.get_number_value(record.samples[0], 'AR2ER', 0, max(1, ar2e))
+        ar1ef = Features.get_number_value(sample, 'AR1EF', 0, max(1, ar1e))
+        ar1er = Features.get_number_value(sample, 'AR1ER', 0, max(1, ar1e))
+        ar2ef = Features.get_number_value(sample, 'AR2EF', 0, max(1, ar2e))
+        ar2er = Features.get_number_value(sample, 'AR2ER', 0, max(1, ar2e))
         features['AREF'] = ar1ef + ar2ef
         features['ARER'] = ar1er + ar2er
         features['MAXARED'] = max(features['AREF'], features['ARER'])
 
-        or1 = Features.get_number_value(record.samples[0], 'OR1', 0)
-        or1c = Features.get_number_value(record.samples[0], 'OR1C', 0)
-        or1chq = Features.get_number_value(record.samples[0], 'OR1CHQ', 0)
-        or1e = Features.get_number_value(record.samples[0], 'OR1E', 0)
-        or2 = Features.get_number_value(record.samples[0], 'OR2', 0)
-        or2c = Features.get_number_value(record.samples[0], 'OR2C', 0)
-        or2chq = Features.get_number_value(record.samples[0], 'OR2CHQ', 0)
-        or2e = Features.get_number_value(record.samples[0], 'OR2E', 0)
+        or1 = Features.get_number_value(sample, 'OR1', 0)
+        or1c = Features.get_number_value(sample, 'OR1C', 0)
+        or1chq = Features.get_number_value(sample, 'OR1CHQ', 0)
+        or1e = Features.get_number_value(sample, 'OR1E', 0)
+        or2 = Features.get_number_value(sample, 'OR2', 0)
+        or2c = Features.get_number_value(sample, 'OR2C', 0)
+        or2chq = Features.get_number_value(sample, 'OR2CHQ', 0)
+        or2e = Features.get_number_value(sample, 'OR2E', 0)
         features['OR1'] = Features.piecewise_normalise(or1, min_depth, max_depth)
         features['OR1C'] = Features.piecewise_normalise(or1c, min_depth, max_depth)
         features['OR1CHQ'] = Features.piecewise_normalise(or1chq, min_depth, max_depth)
@@ -430,43 +435,43 @@ class Features:
         features['OR2C_HQ_RATIO'] = or2chq/max(1, or2c)
         features['OR2E'] = Features.piecewise_normalise(or2e, min_depth, max_depth)
         
-        rr1 = Features.get_number_value(record.samples[0], 'RR1', 0)
-        rr1c = Features.get_number_value(record.samples[0], 'RR1C', 0)
-        rr1chq = Features.get_number_value(record.samples[0], 'RR1CHQ', 0)
-        rr1e = Features.get_number_value(record.samples[0], 'RR1E', 0)
-        rr2 = Features.get_number_value(record.samples[0], 'RR2', 0)
-        rr2c = Features.get_number_value(record.samples[0], 'RR2C', 0)
-        rr2chq = Features.get_number_value(record.samples[0], 'RR2CHQ', 0)
-        rr2e = Features.get_number_value(record.samples[0], 'RR2E', 0)
+        rr1 = Features.get_number_value(sample, 'RR1', 0)
+        rr1c = Features.get_number_value(sample, 'RR1C', 0)
+        rr1chq = Features.get_number_value(sample, 'RR1CHQ', 0)
+        rr1e = Features.get_number_value(sample, 'RR1E', 0)
+        rr2 = Features.get_number_value(sample, 'RR2', 0)
+        rr2c = Features.get_number_value(sample, 'RR2C', 0)
+        rr2chq = Features.get_number_value(sample, 'RR2CHQ', 0)
+        rr2e = Features.get_number_value(sample, 'RR2E', 0)
 
-        rr1cas = Features.get_number_value(record.samples[0], 'RR1CAS', Features.NAN)
-        rr1css = Features.get_number_value(record.samples[0], 'RR1CSS', Features.NAN)
+        rr1cas = Features.get_number_value(sample, 'RR1CAS', Features.NAN)
+        rr1css = Features.get_number_value(sample, 'RR1CSS', Features.NAN)
         features['RR1'] = Features.piecewise_normalise(rr1, min_depth, max_depth)
         features['RR1C'] = Features.piecewise_normalise(rr1c, min_depth, max_depth)
-        features['RR1CmQ'] = Features.get_number_value(record.samples[0], 'RR1CmQ', Features.NAN)
-        features['RR1CMQ'] = Features.get_number_value(record.samples[0], 'RR1CMQ', Features.NAN)
+        features['RR1CmQ'] = Features.get_number_value(sample, 'RR1CmQ', Features.NAN)
+        features['RR1CMQ'] = Features.get_number_value(sample, 'RR1CMQ', Features.NAN)
         features['RR1C_HQ_RATIO'] = rr1chq/max(1, rr1c)
         features['RR1E'] = Features.piecewise_normalise(rr1e, min_depth, max_depth)
         features['RR1E_RATIO'] = rr1e/max(1, rr1c)
-        features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.get_number_value(record.samples[0], 'RR1CMSPAN', [0, 0], max_is)
-        features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2'] = Features.get_number_value(record.samples[0], 'RR1CMHQSPAN', [0, 0], max_is)
+        features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.get_number_value(sample, 'RR1CMSPAN', [0, 0], max_is)
+        features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2'] = Features.get_number_value(sample, 'RR1CMHQSPAN', [0, 0], max_is)
 
-        rr2cas = Features.get_number_value(record.samples[0], 'RR2CAS', Features.NAN)
-        rr2css = Features.get_number_value(record.samples[0], 'RR2CSS', Features.NAN)
+        rr2cas = Features.get_number_value(sample, 'RR2CAS', Features.NAN)
+        rr2css = Features.get_number_value(sample, 'RR2CSS', Features.NAN)
         features['RR2'] = Features.piecewise_normalise(rr2, min_depth, max_depth)
         features['RR2C'] = Features.piecewise_normalise(rr2c, min_depth, max_depth)
-        features['RR2CmQ'] = Features.get_number_value(record.samples[0], 'RR2CmQ', Features.NAN)
-        features['RR2CMQ'] = Features.get_number_value(record.samples[0], 'RR2CMQ', Features.NAN)
+        features['RR2CmQ'] = Features.get_number_value(sample, 'RR2CmQ', Features.NAN)
+        features['RR2CMQ'] = Features.get_number_value(sample, 'RR2CMQ', Features.NAN)
         features['RR2C_HQ_RATIO'] = rr2chq/max(1, rr2c)
         features['RR2E'] = Features.piecewise_normalise(rr2e, min_depth, max_depth)
         features['RR2E_RATIO'] = rr2e/max(1, rr2c)
-        features['RR2CMSPAN_1'], features['RR2CMSPAN_2'] = Features.get_number_value(record.samples[0], 'RR2CMSPAN', [0, 0], max_is)
-        features['RR2CMHQSPAN_1'], features['RR2CMHQSPAN_2'] = Features.get_number_value(record.samples[0], 'RR2CMHQSPAN', [0, 0], max_is)
+        features['RR2CMSPAN_1'], features['RR2CMSPAN_2'] = Features.get_number_value(sample, 'RR2CMSPAN', [0, 0], max_is)
+        features['RR2CMHQSPAN_1'], features['RR2CMHQSPAN_2'] = Features.get_number_value(sample, 'RR2CMHQSPAN', [0, 0], max_is)
 
-        rr1cf = Features.get_number_value(record.samples[0], 'RR1CF', 0)
-        rr1cr = Features.get_number_value(record.samples[0], 'RR1CR', 0)
-        rr2cf = Features.get_number_value(record.samples[0], 'RR2CF', 0)
-        rr2cr = Features.get_number_value(record.samples[0], 'RR2CR', 0)
+        rr1cf = Features.get_number_value(sample, 'RR1CF', 0)
+        rr1cr = Features.get_number_value(sample, 'RR1CR', 0)
+        rr2cf = Features.get_number_value(sample, 'RR2CF', 0)
+        rr2cr = Features.get_number_value(sample, 'RR2CR', 0)
         rr1cf_ratio = rr1cf/max(1, rr1cf + rr1cr)
         rr1cr_ratio = rr1cr/max(1, rr1cf + rr1cr)
         rr2cf_ratio = rr2cf/max(1, rr2cf + rr2cr)
@@ -475,10 +480,10 @@ class Features:
         features['RRCR'] = rr1cr_ratio + rr2cr_ratio
         features['MAXRRCD'] = max(features['RRCF'], features['RRCR'])
 
-        rr1ef = Features.get_number_value(record.samples[0], 'RR1EF', 0, max(1, rr1e))
-        rr1er = Features.get_number_value(record.samples[0], 'RR1ER', 0, max(1, rr1e))
-        rr2ef = Features.get_number_value(record.samples[0], 'RR2EF', 0, max(1, rr2e))
-        rr2er = Features.get_number_value(record.samples[0], 'RR2ER', 0, max(1, rr2e))
+        rr1ef = Features.get_number_value(sample, 'RR1EF', 0, max(1, rr1e))
+        rr1er = Features.get_number_value(sample, 'RR1ER', 0, max(1, rr1e))
+        rr2ef = Features.get_number_value(sample, 'RR2EF', 0, max(1, rr2e))
+        rr2er = Features.get_number_value(sample, 'RR2ER', 0, max(1, rr2e))
         features['RREF'] = rr1ef + rr2ef
         features['RRER'] = rr1er + rr2er
         features['MAXRRED'] = max(features['RREF'], features['RRER'])
@@ -502,18 +507,18 @@ class Features:
         features['NAR2C_HQ_RATIO'] = nar2chq/max(1, nar2c)
         features['NAR2E'] = Features.piecewise_normalise(nar2e, min_depth, max_depth)
 
-        er = Features.get_number_value(record.samples[0], 'ER', 0)
+        er = Features.get_number_value(sample, 'ER', 0)
         features['ER'] = Features.piecewise_normalise(er, min_depth, max_depth)
 
         features['AR1_RR1_CAS_Z_SCORE'] = Features.calculate_z_score(ar1cas, ar1css, ar1c, rr1cas, rr1css, rr1c)
 
-        if 'AR2' not in record.samples[0]:
+        if 'AR2' not in sample:
             ar2 = ar1
             ar2c = ar1c
             ar2cas = ar1cas
             ar2css = ar1css
             ar2e = ar1e
-        if 'RR2' not in record.samples[0]:
+        if 'RR2' not in sample:
             rr2 = rr1
             rr2c = rr1c
             rr2cas = rr1cas
@@ -541,7 +546,7 @@ class Features:
         features['AR1E_OVER_NAR1E'] = ar1e/max(1, ar1e+nar1e)
         features['AR2E_OVER_NAR2E'] = ar2e/max(1, ar2e+nar2e)
 
-        md = Features.get_number_value(record.samples[0], 'MD', [0, 0, 0, 0])
+        md = Features.get_number_value(sample, 'MD', [0, 0, 0, 0])
         features['MDLF'] = Features.piecewise_normalise(md[0], min_depth, max_depth)
         features['MDSP'] = Features.piecewise_normalise(md[1], min_depth, max_depth)
         features['MDSF'] = Features.piecewise_normalise(md[2], min_depth, max_depth)
@@ -549,7 +554,7 @@ class Features:
         features['MDSP_OVER_MDLF'] = md[1]/max(1, md[0])
         features['MDSF_OVER_MDRF'] = md[2]/max(1, md[3])
 
-        mdhq = Features.get_number_value(record.samples[0], 'MDHQ', [0, 0, 0, 0])
+        mdhq = Features.get_number_value(sample, 'MDHQ', [0, 0, 0, 0])
         features['MDLFHQ'] = Features.piecewise_normalise(mdhq[0], min_depth, max_depth)
         features['MDSPHQ'] = Features.piecewise_normalise(mdhq[1], min_depth, max_depth)
         features['MDSFHQ'] = Features.piecewise_normalise(mdhq[2], min_depth, max_depth)
@@ -557,19 +562,19 @@ class Features:
         features['MDSP_OVER_MDLF_HQ'] = Features.piecewise_normalise(mdhq[1]-mdhq[0], min_depth, max_depth)
         features['MDSF_OVER_MDRF_HQ'] = Features.piecewise_normalise(mdhq[2]-mdhq[3], min_depth, max_depth)
 
-        clmd = Features.get_number_value(record.samples[0], 'CLMD', [0, 0])
+        clmd = Features.get_number_value(sample, 'CLMD', [0, 0])
         features['MDLC'] = Features.piecewise_normalise(clmd[0], min_depth, max_depth)
         features['MDRC'] = Features.piecewise_normalise(clmd[1], min_depth, max_depth)
 
-        clmdhq = Features.get_number_value(record.samples[0], 'CLMDHQ', [0, 0])
+        clmdhq = Features.get_number_value(sample, 'CLMDHQ', [0, 0])
         features['MDLCHQ'] = Features.piecewise_normalise(clmdhq[0], min_depth, max_depth)
         features['MDRCHQ'] = Features.piecewise_normalise(clmdhq[1], min_depth, max_depth)
 
-        features['KS_PVAL'] = Features.get_number_value(record.samples[0], 'KSPVAL', Features.NAN)
+        features['KS_PVAL'] = Features.get_number_value(sample, 'KSPVAL', Features.NAN)
         features['SIZE_NORM'] = Features.NAN
-        if 'MAXSIZE' in record.samples[0]:
-            min_size = float(record.samples[0]['MINSIZE'])
-            max_size = float(record.samples[0]['MAXSIZE'])
+        if 'MAXSIZE' in sample:
+            min_size = float(sample['MINSIZE'])
+            max_size = float(sample['MAXSIZE'])
             features['SIZE_NORM'] = Features.normalise(svlen/2, min_size, max_size)
 
         if svtype_str == "DEL":
@@ -584,32 +589,32 @@ class Features:
             min_disc_pairs = min_pairs_crossing_point
             max_disc_pairs = max_pairs_crossing_point
 
-        asp1 = Features.get_number_value(record.samples[0], 'ASP1', 0)
-        asp1hq_1, asp1hq_2 = Features.get_number_value(record.samples[0], 'ASP1HQ', [0, 0])
-        asp1nma_1, asp1nma_2 = Features.get_number_value(record.samples[0], 'ASP1NMA', [Features.NAN, Features.NAN])
-        asp1nms_1, asp1nms_2 = Features.get_number_value(record.samples[0], 'ASP1NMS', [Features.NAN, Features.NAN])
+        asp1 = Features.get_number_value(sample, 'ASP1', 0)
+        asp1hq_1, asp1hq_2 = Features.get_number_value(sample, 'ASP1HQ', [0, 0])
+        asp1nma_1, asp1nma_2 = Features.get_number_value(sample, 'ASP1NMA', [Features.NAN, Features.NAN])
+        asp1nms_1, asp1nms_2 = Features.get_number_value(sample, 'ASP1NMS', [Features.NAN, Features.NAN])
         features['ASP1'] = Features.piecewise_normalise(asp1, min_disc_pairs, max_disc_pairs)
         features['ASP1HQ_1'] = Features.piecewise_normalise(asp1hq_1, min_disc_pairs, max_disc_pairs)
         features['ASP1HQ_2'] = Features.piecewise_normalise(asp1hq_2, min_disc_pairs, max_disc_pairs)
         features['ASP1HQ_1_RATIO'], features['ASP1HQ_2_RATIO'] = asp1hq_1/max(1, asp1), asp1hq_2/max(1, asp1)
-        features['ASP1mQ_1'], features['ASP1mQ_2'] = Features.get_number_value(record.samples[0], 'ASP1mQ', [Features.NAN, Features.NAN])
-        features['ASP1MQ_1'], features['ASP1MQ_2'] = Features.get_number_value(record.samples[0], 'ASP1MQ', [Features.NAN, Features.NAN])
+        features['ASP1mQ_1'], features['ASP1mQ_2'] = Features.get_number_value(sample, 'ASP1mQ', [Features.NAN, Features.NAN])
+        features['ASP1MQ_1'], features['ASP1MQ_2'] = Features.get_number_value(sample, 'ASP1MQ', [Features.NAN, Features.NAN])
 
-        asp2 = Features.get_number_value(record.samples[0], 'ASP2', 0)
-        asp2hq_1, asp2hq_2 = Features.get_number_value(record.samples[0], 'ASP2HQ', [0, 0])
-        asp2nma_1, asp2nma_2 = Features.get_number_value(record.samples[0], 'ASP2NMA', [Features.NAN, Features.NAN])
-        asp2nms_1, asp2nms_2 = Features.get_number_value(record.samples[0], 'ASP2NMS', [Features.NAN, Features.NAN])
+        asp2 = Features.get_number_value(sample, 'ASP2', 0)
+        asp2hq_1, asp2hq_2 = Features.get_number_value(sample, 'ASP2HQ', [0, 0])
+        asp2nma_1, asp2nma_2 = Features.get_number_value(sample, 'ASP2NMA', [Features.NAN, Features.NAN])
+        asp2nms_1, asp2nms_2 = Features.get_number_value(sample, 'ASP2NMS', [Features.NAN, Features.NAN])
         features['ASP2'] = Features.piecewise_normalise(asp2, min_disc_pairs, max_disc_pairs)
         features['ASP2HQ_1'] = Features.piecewise_normalise(asp2hq_1, min_disc_pairs, max_disc_pairs)
         features['ASP2HQ_2'] = Features.piecewise_normalise(asp2hq_2, min_disc_pairs, max_disc_pairs)
         features['ASP2HQ_1_RATIO'], features['ASP2HQ_2_RATIO'] = asp2hq_1/max(1, asp2), asp2hq_2/max(1, asp2)
-        features['ASP2mQ_1'], features['ASP2mQ_2'] = Features.get_number_value(record.samples[0], 'ASP2mQ', [Features.NAN, Features.NAN])
-        features['ASP2MQ_1'], features['ASP2MQ_2'] = Features.get_number_value(record.samples[0], 'ASP2MQ', [Features.NAN, Features.NAN])
+        features['ASP2mQ_1'], features['ASP2mQ_2'] = Features.get_number_value(sample, 'ASP2mQ', [Features.NAN, Features.NAN])
+        features['ASP2MQ_1'], features['ASP2MQ_2'] = Features.get_number_value(sample, 'ASP2MQ', [Features.NAN, Features.NAN])
 
         features['ASP1_ASP2_RATIO'] = max(asp1, asp2)/max(1, asp1+asp2)
 
-        asp1span_1, asp1span_2 = Features.get_number_value(record.samples[0], 'ASP1SPAN', [0, 0])
-        asp2span_1, asp2span_2 = Features.get_number_value(record.samples[0], 'ASP2SPAN', [0, 0])
+        asp1span_1, asp1span_2 = Features.get_number_value(sample, 'ASP1SPAN', [0, 0])
+        asp2span_1, asp2span_2 = Features.get_number_value(sample, 'ASP2SPAN', [0, 0])
         features['ASP1SPAN_1'], features['ASP2SPAN_2'] = asp1span_1/max_is, asp2span_2/max_is
         if svtype_str == "INS":
             features['ASP1SPAN_2'] = asp1span_2/max(1, max_is, svinslen)
@@ -618,63 +623,63 @@ class Features:
             features['ASP1SPAN_2'] = asp1span_2/max_is
             features['ASP2SPAN_1'] = asp2span_1/max_is
 
-        rsp1 = Features.get_number_value(record.samples[0], 'RSP1', 0)
-        rsp1hq_1, rsp1hq_2 = Features.get_number_value(record.samples[0], 'RSP1HQ', [0, 0])
-        rsp1nma_1, rsp1nma_2 = Features.get_number_value(record.samples[0], 'RSP1NMA', [Features.NAN, Features.NAN])
-        rsp1nms_1, rsp1nms_2 = Features.get_number_value(record.samples[0], 'RSP1NMS', [Features.NAN, Features.NAN])
+        rsp1 = Features.get_number_value(sample, 'RSP1', 0)
+        rsp1hq_1, rsp1hq_2 = Features.get_number_value(sample, 'RSP1HQ', [0, 0])
+        rsp1nma_1, rsp1nma_2 = Features.get_number_value(sample, 'RSP1NMA', [Features.NAN, Features.NAN])
+        rsp1nms_1, rsp1nms_2 = Features.get_number_value(sample, 'RSP1NMS', [Features.NAN, Features.NAN])
         features['RSP1'] = Features.piecewise_normalise(rsp1, min_disc_pairs, max_disc_pairs)
         features['RSP1HQ_1']= Features.piecewise_normalise(rsp1hq_1, min_disc_pairs, max_disc_pairs)
         features['RSP1HQ_2'] = Features.piecewise_normalise(rsp1hq_2, min_disc_pairs, max_disc_pairs)
         features['RSP1HQ_1_RATIO'], features['RSP1HQ_2_RATIO'] = rsp1hq_1/max(1, rsp1), rsp1hq_2/max(1, rsp1)
-        features['RSP1mQ_1'], features['RSP1mQ_2'] = Features.get_number_value(record.samples[0], 'RSP1mQ', [Features.NAN, Features.NAN])
-        features['RSP1MQ_1'], features['RSP1MQ_2'] = Features.get_number_value(record.samples[0], 'RSP1MQ', [Features.NAN, Features.NAN])
+        features['RSP1mQ_1'], features['RSP1mQ_2'] = Features.get_number_value(sample, 'RSP1mQ', [Features.NAN, Features.NAN])
+        features['RSP1MQ_1'], features['RSP1MQ_2'] = Features.get_number_value(sample, 'RSP1MQ', [Features.NAN, Features.NAN])
 
-        rsp2 = Features.get_number_value(record.samples[0], 'RSP2', 0)
-        rsp2hq_1, rsp2hq_2 = Features.get_number_value(record.samples[0], 'RSP2HQ', [0, 0])
-        rsp2nma_1, rsp2nma_2 = Features.get_number_value(record.samples[0], 'RSP2NMA', [Features.NAN, Features.NAN])
-        rsp2nms_1, rsp2nms_2 = Features.get_number_value(record.samples[0], 'RSP2NMS', [Features.NAN, Features.NAN])
+        rsp2 = Features.get_number_value(sample, 'RSP2', 0)
+        rsp2hq_1, rsp2hq_2 = Features.get_number_value(sample, 'RSP2HQ', [0, 0])
+        rsp2nma_1, rsp2nma_2 = Features.get_number_value(sample, 'RSP2NMA', [Features.NAN, Features.NAN])
+        rsp2nms_1, rsp2nms_2 = Features.get_number_value(sample, 'RSP2NMS', [Features.NAN, Features.NAN])
         features['RSP2'] = Features.piecewise_normalise(rsp2, min_disc_pairs, max_disc_pairs)
         features['RSP2HQ_1'] = Features.piecewise_normalise(rsp2hq_1, min_disc_pairs, max_disc_pairs)
         features['RSP2HQ_2'] = Features.piecewise_normalise(rsp2hq_2, min_disc_pairs, max_disc_pairs)
         features['RSP2HQ_1_RATIO'], features['RSP2HQ_2_RATIO'] = rsp2hq_1/max(1, rsp2), rsp2hq_2/max(1, rsp2)
-        features['RSP2mQ_1'], features['RSP2mQ_2'] = Features.get_number_value(record.samples[0], 'RSP2mQ', [Features.NAN, Features.NAN])
-        features['RSP2MQ_1'], features['RSP2MQ_2'] = Features.get_number_value(record.samples[0], 'RSP2MQ', [Features.NAN, Features.NAN])
+        features['RSP2mQ_1'], features['RSP2mQ_2'] = Features.get_number_value(sample, 'RSP2mQ', [Features.NAN, Features.NAN])
+        features['RSP2MQ_1'], features['RSP2MQ_2'] = Features.get_number_value(sample, 'RSP2MQ', [Features.NAN, Features.NAN])
 
-        nsp1 = Features.get_number_value(record.samples[0], 'NSP1', 0)
-        nsp1hq_1, nsp1hq_2 = Features.get_number_value(record.samples[0], 'NSP1HQ', [0, 0])
-        nsp1nma_1, nsp1nma_2 = Features.get_number_value(record.samples[0], 'NSP1NMA', [Features.NAN, Features.NAN])
-        nsp1nms_1, nsp1nms_2 = Features.get_number_value(record.samples[0], 'NSP1NMS', [Features.NAN, Features.NAN])
+        nsp1 = Features.get_number_value(sample, 'NSP1', 0)
+        nsp1hq_1, nsp1hq_2 = Features.get_number_value(sample, 'NSP1HQ', [0, 0])
+        nsp1nma_1, nsp1nma_2 = Features.get_number_value(sample, 'NSP1NMA', [Features.NAN, Features.NAN])
+        nsp1nms_1, nsp1nms_2 = Features.get_number_value(sample, 'NSP1NMS', [Features.NAN, Features.NAN])
         features['NSP1'] = Features.piecewise_normalise(nsp1, min_disc_pairs, max_disc_pairs)
         features['NSP1HQ_1'] = Features.piecewise_normalise(nsp1hq_1, min_disc_pairs, max_disc_pairs)
         features['NSP1HQ_2'] = Features.piecewise_normalise(nsp1hq_2, min_disc_pairs, max_disc_pairs)
         features['NSP1HQ_1_RATIO'], features['NSP1HQ_2_RATIO'] = nsp1hq_1/max(1, nsp1), nsp1hq_2/max(1, nsp1)
-        features['NSP1mQ_1'], features['NSP1mQ_2'] = Features.get_number_value(record.samples[0], 'NSP1mQ', [Features.NAN, Features.NAN])
-        features['NSP1MQ_1'], features['NSP1MQ_2'] = Features.get_number_value(record.samples[0], 'NSP1MQ', [Features.NAN, Features.NAN])
+        features['NSP1mQ_1'], features['NSP1mQ_2'] = Features.get_number_value(sample, 'NSP1mQ', [Features.NAN, Features.NAN])
+        features['NSP1MQ_1'], features['NSP1MQ_2'] = Features.get_number_value(sample, 'NSP1MQ', [Features.NAN, Features.NAN])
 
-        nsp2 = Features.get_number_value(record.samples[0], 'NSP2', 0)
-        nsp2hq_1, nsp2hq_2 = Features.get_number_value(record.samples[0], 'NSP2HQ', [0, 0])
-        nsp2nma_1, nsp2nma_2 = Features.get_number_value(record.samples[0], 'NSP2NMA', [Features.NAN, Features.NAN])
-        nsp2nms_1, nsp2nms_2 = Features.get_number_value(record.samples[0], 'NSP2NMS', [Features.NAN, Features.NAN])
+        nsp2 = Features.get_number_value(sample, 'NSP2', 0)
+        nsp2hq_1, nsp2hq_2 = Features.get_number_value(sample, 'NSP2HQ', [0, 0])
+        nsp2nma_1, nsp2nma_2 = Features.get_number_value(sample, 'NSP2NMA', [Features.NAN, Features.NAN])
+        nsp2nms_1, nsp2nms_2 = Features.get_number_value(sample, 'NSP2NMS', [Features.NAN, Features.NAN])
         features['NSP2'] = Features.piecewise_normalise(nsp2, min_disc_pairs, max_disc_pairs)
         features['NSP2HQ_1'] = Features.piecewise_normalise(nsp2hq_1, min_disc_pairs, max_disc_pairs)
         features['NSP2HQ_2'] = Features.piecewise_normalise(nsp2hq_2, min_disc_pairs, max_disc_pairs)
         features['NSP2HQ_1_RATIO'], features['NSP2HQ_2_RATIO'] = nsp2hq_1/max(1, nsp2), nsp2hq_2/max(1, nsp2)
-        features['NSP2mQ_1'], features['NSP2mQ_2'] = Features.get_number_value(record.samples[0], 'NSP2mQ', [Features.NAN, Features.NAN])
-        features['NSP2MQ_1'], features['NSP2MQ_2'] = Features.get_number_value(record.samples[0], 'NSP2MQ', [Features.NAN, Features.NAN])
+        features['NSP2mQ_1'], features['NSP2mQ_2'] = Features.get_number_value(sample, 'NSP2mQ', [Features.NAN, Features.NAN])
+        features['NSP2MQ_1'], features['NSP2MQ_2'] = Features.get_number_value(sample, 'NSP2MQ', [Features.NAN, Features.NAN])
 
-        if 'ASP2' not in record.samples[0]:
+        if 'ASP2' not in sample:
             asp2 = asp1
             asp2nma_1 = asp1nma_1
             asp2nms_1 = asp1nms_1
             asp2nma_2 = asp1nma_2
             asp2nms_2 = asp1nms_2
-        if 'RSP2' not in record.samples[0]:
+        if 'RSP2' not in sample:
             rsp2 = rsp1
             rsp2nma_1 = rsp1nma_1
             rsp2nms_1 = rsp1nms_1
             rsp2nma_2 = rsp1nma_2
             rsp2nms_2 = rsp1nms_2
-        if 'NSP2' not in record.samples[0]:
+        if 'NSP2' not in sample:
             nsp2 = nsp1
             nsp2hq_1 = nsp1hq_1
             nsp2hq_2 = nsp1hq_2
@@ -695,27 +700,27 @@ class Features:
         features['ASP2_NSP2_1_NM_Z_SCORE'] = Features.calculate_z_score(asp2nma_1, asp2nms_1, asp2, nsp2nma_1, nsp2nms_1, nsp2)
         features['ASP2_NSP2_2_NM_Z_SCORE'] = Features.calculate_z_score(asp2nma_2, asp2nms_2, asp2, nsp2nma_2, nsp2nms_2, nsp2)
 
-        ssp1 = Features.get_number_value(record.samples[0], 'SSP1', 0)
-        ssp1hq_1, ssp1hq_2 = Features.get_number_value(record.samples[0], 'SSP1HQ', [0, 0])
-        ssp1nma_1, ssp1nma_2 = Features.get_number_value(record.samples[0], 'SSP1NMA', [Features.NAN, Features.NAN])
-        ssp1nms_1, ssp1nms_2 = Features.get_number_value(record.samples[0], 'SSP1NMS', [Features.NAN, Features.NAN])
+        ssp1 = Features.get_number_value(sample, 'SSP1', 0)
+        ssp1hq_1, ssp1hq_2 = Features.get_number_value(sample, 'SSP1HQ', [0, 0])
+        ssp1nma_1, ssp1nma_2 = Features.get_number_value(sample, 'SSP1NMA', [Features.NAN, Features.NAN])
+        ssp1nms_1, ssp1nms_2 = Features.get_number_value(sample, 'SSP1NMS', [Features.NAN, Features.NAN])
         features['SSP1'] = Features.piecewise_normalise(ssp1, min_disc_pairs, max_disc_pairs)
         features['SSP1HQ_1'] = Features.piecewise_normalise(ssp1hq_1, min_disc_pairs, max_disc_pairs)
         features['SSP1HQ_2'] = Features.piecewise_normalise(ssp1hq_2, min_disc_pairs, max_disc_pairs)
         features['SSP1HQ_1_RATIO'], features['SSP1HQ_2_RATIO'] = ssp1hq_1/max(1, ssp1), ssp1hq_2/max(1, ssp1)
-        features['SSP1mQ_1'], features['SSP1mQ_2'] = Features.get_number_value(record.samples[0], 'SSP1mQ', [Features.NAN, Features.NAN])
-        features['SSP1MQ_1'], features['SSP1MQ_2'] = Features.get_number_value(record.samples[0], 'SSP1MQ', [Features.NAN, Features.NAN])
+        features['SSP1mQ_1'], features['SSP1mQ_2'] = Features.get_number_value(sample, 'SSP1mQ', [Features.NAN, Features.NAN])
+        features['SSP1MQ_1'], features['SSP1MQ_2'] = Features.get_number_value(sample, 'SSP1MQ', [Features.NAN, Features.NAN])
 
-        ssp2 = Features.get_number_value(record.samples[0], 'SSP2', 0)
-        ssp2hq_1, ssp2hq_2 = Features.get_number_value(record.samples[0], 'SSP2HQ', [0, 0])
-        ssp2nma_1, ssp2nma_2 = Features.get_number_value(record.samples[0], 'SSP2NMA', [Features.NAN, Features.NAN])
-        ssp2nms_1, ssp2nms_2 = Features.get_number_value(record.samples[0], 'SSP2NMS', [Features.NAN, Features.NAN])
+        ssp2 = Features.get_number_value(sample, 'SSP2', 0)
+        ssp2hq_1, ssp2hq_2 = Features.get_number_value(sample, 'SSP2HQ', [0, 0])
+        ssp2nma_1, ssp2nma_2 = Features.get_number_value(sample, 'SSP2NMA', [Features.NAN, Features.NAN])
+        ssp2nms_1, ssp2nms_2 = Features.get_number_value(sample, 'SSP2NMS', [Features.NAN, Features.NAN])
         features['SSP2'] = Features.piecewise_normalise(ssp2, min_disc_pairs, max_disc_pairs)
         features['SSP2HQ_1'] = Features.piecewise_normalise(ssp2hq_1, min_disc_pairs, max_disc_pairs)
         features['SSP2HQ_2'] = Features.piecewise_normalise(ssp2hq_2, min_disc_pairs, max_disc_pairs)
         features['SSP2HQ_1_RATIO'], features['SSP2HQ_2_RATIO'] = ssp2hq_1/max(1, ssp2), ssp2hq_2/max(1, ssp2)
-        features['SSP2mQ_1'], features['SSP2mQ_2'] = Features.get_number_value(record.samples[0], 'SSP2mQ', [Features.NAN, Features.NAN])
-        features['SSP2MQ_1'], features['SSP2MQ_2'] = Features.get_number_value(record.samples[0], 'SSP2MQ', [Features.NAN, Features.NAN])
+        features['SSP2mQ_1'], features['SSP2mQ_2'] = Features.get_number_value(sample, 'SSP2mQ', [Features.NAN, Features.NAN])
+        features['SSP2MQ_1'], features['SSP2MQ_2'] = Features.get_number_value(sample, 'SSP2MQ', [Features.NAN, Features.NAN])
 
         if svtype_str in ["DEL", "INS"]:
             ssp1nma_2 = Features.NAN
@@ -729,47 +734,44 @@ class Features:
         features['SSP2_RSP2_1_NM_Z_SCORE'] = Features.calculate_z_score(ssp2nma_1, ssp2nms_1, ssp2, rsp2nma_1, rsp2nms_1, rsp2)
         features['SSP2_RSP2_2_NM_Z_SCORE'] = Features.calculate_z_score(ssp2nma_2, ssp2nms_2, ssp2, rsp2nma_2, rsp2nms_2, rsp2)
 
-        axr1, axr2 = Features.get_number_value(record.samples[0], 'AXR', [0, 0], median_depth*max_is)
-        axr1hq, axr2hq = Features.get_number_value(record.samples[0], 'AXRHQ', [0, 0], median_depth*max_is)
+        axr1, axr2 = Features.get_number_value(sample, 'AXR', [0, 0], median_depth*max_is)
+        axr1hq, axr2hq = Features.get_number_value(sample, 'AXRHQ', [0, 0], median_depth*max_is)
         features['AXR1'], features['AXR2'] = axr1, axr2
         features['AXR1HQ'], features['AXR2HQ'] = axr1hq, axr2hq
 
-        exl1 = Features.get_number_value(record.samples[0], 'EXL', Features.NAN)
-        exl2 = Features.get_number_value(record.samples[0], 'EXL2', Features.NAN)
+        exl1 = Features.get_number_value(sample, 'EXL', Features.NAN)
+        exl2 = Features.get_number_value(sample, 'EXL2', Features.NAN)
         features['MEXL'] = max(exl1/(max_is+read_len), exl2/(max_is+read_len))
         features['mEXL'] = min(exl1/(max_is+read_len), exl2/(max_is+read_len))
         features['EXL'] = features['MEXL'] + features['mEXL']
 
-        exas1 = Features.get_number_value(record.samples[0], 'EXAS', 0)
-        exas2 = Features.get_number_value(record.samples[0], 'EXAS2', 0)
-        exrs1 = Features.get_number_value(record.samples[0], 'EXRS', 0)
-        exrs2 = Features.get_number_value(record.samples[0], 'EXRS2', 0)
+        exas1 = Features.get_number_value(sample, 'EXAS', 0)
+        exas2 = Features.get_number_value(sample, 'EXAS2', 0)
+        exrs1 = Features.get_number_value(sample, 'EXRS', 0)
+        exrs2 = Features.get_number_value(sample, 'EXRS2', 0)
 
         features['EXAS_EXRS_DIFF_TO_LEN'] = (exas1-exrs1+exas2-exrs2)/max(1, edit_distance)
 
-        exss1_1, exss1_2 = Features.get_number_value(record.samples[0], 'EXSS', [0, 0])
+        exss1_1, exss1_2 = Features.get_number_value(sample, 'EXSS', [0, 0])
         features['EXSS1_1'] = exss1_1/(max_is+read_len)
         features['EXSS1_2'] = exss1_2/(max_is+read_len)
         features['EXSS1_RATIO1'] = exss1_1/max(1, exl1)
         features['EXSS1_RATIO2'] = exss1_2/max(1, exl1)
 
-        exss2_1, exss2_2 = Features.get_number_value(record.samples[0], 'EXSS2', [0, 0])
+        exss2_1, exss2_2 = Features.get_number_value(sample, 'EXSS2', [0, 0])
         features['EXSS2_1'] = exss2_1/(max_is+read_len)
         features['EXSS2_2'] = exss2_2/(max_is+read_len)
         features['EXSS2_RATIO1'] = exss2_1/max(1, exl2)
         features['EXSS2_RATIO2'] = exss2_2/max(1, exl2)
 
-        exssc1_1, exssc1_2 = Features.get_number_value(record.samples[0], 'EXSSC', [Features.NAN, Features.NAN])
-        exssc2_1, exssc2_2 = Features.get_number_value(record.samples[0], 'EXSSC2', [Features.NAN, Features.NAN])
-        exsscia1_1, exsscia1_2 = Features.get_number_value(record.samples[0], 'EXSSCIA', [Features.NAN, Features.NAN])
-        exsscia2_1, exsscia2_2 = Features.get_number_value(record.samples[0], 'EXSSC2IA', [Features.NAN, Features.NAN])
+        exssc1_1, exssc1_2 = Features.get_number_value(sample, 'EXSSC', [Features.NAN, Features.NAN])
+        exssc2_1, exssc2_2 = Features.get_number_value(sample, 'EXSSC2', [Features.NAN, Features.NAN])
+        exsscia1_1, exsscia1_2 = Features.get_number_value(sample, 'EXSSCIA', [Features.NAN, Features.NAN])
+        exsscia2_1, exsscia2_2 = Features.get_number_value(sample, 'EXSSC2IA', [Features.NAN, Features.NAN])
         features['EXSSC1_IA_RATIO'] = (exssc1_1+exssc1_2)/max(1, exsscia1_1+exsscia1_2)
         features['EXSSC2_IA_RATIO'] = (exssc2_1+exssc2_2)/max(1, exsscia2_1+exsscia2_2)
         features['EXSSC1_IA_DIFF'] = (exsscia1_1+exsscia1_2-exssc1_1-exssc1_2)/max(1, exss1_1+exss1_2)
         features['EXSSC2_IA_DIFF'] = (exsscia2_1+exsscia2_2-exssc2_1-exssc2_2)/max(1, exss2_1+exss2_2)
-
-        if feature_names is None:
-            feature_names = Features.get_feature_names(model_name)
 
         feature_values = []
         for feature_name in feature_names:
