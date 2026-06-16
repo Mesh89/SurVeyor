@@ -273,7 +273,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         strncpy(alt_bp1_seq+alt_lf_len, ins->ins_seq.c_str(), ins_seq_portion_len);
         int extra_len = alt_bp1_consensus_seq.length() - ins->ins_seq.length();
         if (extra_len > 0) {
-            if (ins_end+extra_len > contig_len) extra_len = contig_len-ins_end;
+            if (extra_len > alt_rf_len) extra_len = alt_rf_len; // there may not be enough bp if near the end of contig
             strncpy(alt_bp1_seq+alt_lf_len+ins_seq_portion_len, rf_seq, extra_len);
         } else {
             extra_len = 0;
@@ -338,7 +338,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         alt_bp2_seq = new char[2*alt_bp2_consensus_seq.length()+1];
         int extra_len = alt_bp2_consensus_seq.length() - ins->ins_seq.length();
         if (extra_len > 0) {
-            if (ins_start-extra_len < 0) extra_len = ins_start;
+            if (extra_len > alt_lf_len) extra_len = alt_lf_len; // there may not be enough bp if near the start of contig
             strncpy(alt_bp2_seq, lf_seq+(alt_lf_len - extra_len), extra_len);
         } else {
             extra_len = 0;
