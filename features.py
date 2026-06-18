@@ -136,7 +136,7 @@ class Features:
         svinsseq = Features.get_svinsseq(record)
         aux_snps = Features.get_string_value(record.info, 'AUX_SNPS', "")
         aux_indels = Features.get_string_value(record.info, 'AUX_INDELS', "")
-        return f"{record.chrom}:{record.pos}-{record.stop}:{Features.get_svtype(record)}:{Features.get_svlen(record)}:{hash(svinsseq)}:{aux_snps}:{aux_indels}"
+        return f"{record.chrom}:{record.pos}-{record.stop}:{Features.get_svtype(record)}:{Features.get_svlen(record)}:{hash(svinsseq)}:{hash(aux_snps)}:{hash(aux_indels)}"
 
     def get_svinsseq(record):
         if "<" not in record.alts[0]:
@@ -262,7 +262,7 @@ class Features:
             features['INS_SEQ_COV_PREFIX_LEN'] = i/len(svinsseq)
             features['INS_SEQ_COV_SUFFIX_LEN'] = (len(svinsseq)-i)/len(svinsseq)
 
-        exp_alt_reads_freq1, exp_alt_reads_freq2 = Features.get_number_value(info, 'EXP_ALT_READS_FREQ', [Features.NAN, Features.NAN])
+        exp_alt_reads_freq1, exp_alt_reads_freq2 = info['EXP_ALT_READS_FREQ']
         features['EXP_ALT_READS_FREQ1'], features['EXP_ALT_READS_FREQ2'] = exp_alt_reads_freq1, exp_alt_reads_freq2
 
         if model_name == "HP":
