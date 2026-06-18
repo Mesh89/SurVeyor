@@ -23,8 +23,8 @@ class Features:
                             'INS_SUFFIX_A_RATIO', 'INS_SUFFIX_C_RATIO', 'INS_SUFFIX_G_RATIO', 'INS_SUFFIX_T_RATIO', 'MAX_INS_SUFFIX_BASE_COUNT_RATIO',
                             'INS_SEQ_COV_PREFIX_LEN', 'INS_SEQ_COV_SUFFIX_LEN', 'EXP_ALT_READS_FREQ1', 'EXP_ALT_READS_FREQ2', 'HP_REF_LEN', 'HP_ALT_LEN' ]
 
-    reads_features_names = ['AR1', 'AR1_ADJ', 'AR1C', 'AR1C_ADJ', 'AR1CmQ', 'AR1CMQ', 'AR1CHQ', 'AR1C_HQ_RATIO', 'AR1E', 'AR1E_RATIO', #'AR1C_OCCR',
-                            'AR2', 'AR2_ADJ', 'AR2C', 'AR2C_ADJ', 'AR2CmQ', 'AR2CMQ', 'AR2CHQ', 'AR2C_HQ_RATIO', 'AR2E', 'AR2E_RATIO', #'AR2C_OCCR',
+    reads_features_names = ['AR1', 'AR1_ADJ', 'AR1C', 'AR1C_ADJ', 'AR1CmQ', 'AR1CMQ', 'AR1CHQ', 'AR1C_HQ_RATIO', 'AR1E', 'AR1E_RATIO',
+                            'AR2', 'AR2_ADJ', 'AR2C', 'AR2C_ADJ', 'AR2CmQ', 'AR2CMQ', 'AR2CHQ', 'AR2C_HQ_RATIO', 'AR2E', 'AR2E_RATIO',
                             'AR1HPMODE', 'AR1CHPMODE', 'AR1CHPIQR', 'AR1HPMODE_AR1CHPMODE_DIFF', 'AR1HPMODE_ALTLEN_DIFF', 'AR1CHPMODE_ALTLEN_DIFF',
                             'AR1CHPmQ', 'AR1CHPMQ', 'AR1CHPAQ', 'AR1CHPSQ', 'AR1HP5PMR', 'AR1HP3PMR',
                             'MAXARCD', 'MAXARED',
@@ -177,11 +177,7 @@ class Features:
     def gt_as_homopolymer(record):
         return 'HP_GENOTYPED' in record.info
 
-    def get_edit_distance(record):
-        svinsseq = Features.get_svinsseq(record)
-        svinslen = Features.get_number_value(record.info, 'SVINSLEN', 0)
-        if svinslen == 0 and svinsseq:
-            svinslen = len(svinsseq)
+    def get_edit_distance(record, svinslen):
         edit_distance = record.stop - record.pos + svinslen
         if "AUX_SNPS" in record.info:
             aux_snps = Features.get_string_list_value(record.info, 'AUX_SNPS', [])
@@ -253,12 +249,10 @@ class Features:
             feature_names = Features.get_feature_names(model_name)
 
         svinsseq = Features.get_svinsseq(record)
-        svinslen = Features.get_number_value(info, 'SVINSLEN', 0)
-        if svinslen == 0 and svinsseq:
-            svinslen = len(svinsseq)
+        svinslen = len(svinsseq)
         features['SVINSLEN'] = svinslen
 
-        edit_distance = Features.get_edit_distance(record)
+        edit_distance = Features.get_edit_distance(record, svinslen)
         features['EDIT_DISTANCE'] = edit_distance
 
         features['INS_SEQ_COV_PREFIX_LEN'] = 1
@@ -271,66 +265,69 @@ class Features:
         exp_alt_reads_freq1, exp_alt_reads_freq2 = Features.get_number_value(info, 'EXP_ALT_READS_FREQ', [Features.NAN, Features.NAN])
         features['EXP_ALT_READS_FREQ1'], features['EXP_ALT_READS_FREQ2'] = exp_alt_reads_freq1, exp_alt_reads_freq2
 
-        hp_ref_start, hp_ref_end = Features.get_number_value(info, 'HP_REF_RANGE', [Features.NAN, Features.NAN])
-        features['HP_REF_LEN'] = hp_ref_end - hp_ref_start
-        features['HP_ALT_LEN'] = features['HP_REF_LEN'] + Features.get_svlen(record)
+        if model_name == "HP":
+            hp_ref_start, hp_ref_end = info['HP_REF_RANGE']
+            features['HP_REF_LEN'] = hp_ref_end - hp_ref_start
+            features['HP_ALT_LEN'] = features['HP_REF_LEN'] + Features.get_svlen(record)
+        else:
+             features['HP_REF_LEN'], features['HP_ALT_LEN'] = Features.NAN, Features.NAN
 
-        left_anchor_base_count = Features.get_number_value(info, 'LEFT_ANCHOR_BASE_COUNT', [0, 0, 0, 0])
+        left_anchor_base_count = info['LEFT_ANCHOR_BASE_COUNT'] 
         left_anchor_base_count_ratio = [x/max(1, sum(left_anchor_base_count)) for x in left_anchor_base_count]
         features['MAX_LEFT_ANCHOR_BASE_RATIO'] = max(left_anchor_base_count_ratio)
         features['LEFT_ANCHOR_A_RATIO'], features['LEFT_ANCHOR_C_RATIO'], features['LEFT_ANCHOR_G_RATIO'], features['LEFT_ANCHOR_T_RATIO'] = left_anchor_base_count_ratio
 
-        left_flanking_base_count_50 = Features.get_number_value(info, 'LEFT_FLANKING_BASE_COUNT_50', [0, 0, 0, 0])
+        left_flanking_base_count_50 = info['LEFT_FLANKING_BASE_COUNT_50']
         left_flanking_base_count_ratio_50 = [x/max(1, sum(left_flanking_base_count_50)) for x in left_flanking_base_count_50]
         features['MAX_LEFT_FLANKING_BASE_RATIO_50'] = max(left_flanking_base_count_ratio_50)
         features['LEFT_FLANKING_A_RATIO_50'], features['LEFT_FLANKING_C_RATIO_50'], features['LEFT_FLANKING_G_RATIO_50'], features['LEFT_FLANKING_T_RATIO_50'] = left_flanking_base_count_ratio_50
 
-        left_flanking_base_count_100 = Features.get_number_value(info, 'LEFT_FLANKING_BASE_COUNT_100', [0, 0, 0, 0])
+        left_flanking_base_count_100 = info['LEFT_FLANKING_BASE_COUNT_100']
         left_flanking_base_count_ratio_100 = [x/max(1, sum(left_flanking_base_count_100)) for x in left_flanking_base_count_100]
         features['MAX_LEFT_FLANKING_BASE_RATIO_100'] = max(left_flanking_base_count_ratio_100)
         features['LEFT_FLANKING_A_RATIO_100'], features['LEFT_FLANKING_C_RATIO_100'], features['LEFT_FLANKING_G_RATIO_100'], features['LEFT_FLANKING_T_RATIO_100'] = left_flanking_base_count_ratio_100
 
-        left_flanking_base_count_500 = Features.get_number_value(info, 'LEFT_FLANKING_BASE_COUNT_500', [0, 0, 0, 0])
+        left_flanking_base_count_500 = info['LEFT_FLANKING_BASE_COUNT_500']
         left_flanking_base_count_ratio_500 = [x/max(1, sum(left_flanking_base_count_500)) for x in left_flanking_base_count_500]
         features['MAX_LEFT_FLANKING_BASE_RATIO_500'] = max(left_flanking_base_count_ratio_500)
         features['LEFT_FLANKING_A_RATIO_500'], features['LEFT_FLANKING_C_RATIO_500'], features['LEFT_FLANKING_G_RATIO_500'], features['LEFT_FLANKING_T_RATIO_500'] = left_flanking_base_count_ratio_500
 
-        right_anchor_base_count = Features.get_number_value(info, 'RIGHT_ANCHOR_BASE_COUNT', [0, 0, 0, 0])
+        right_anchor_base_count = info['RIGHT_ANCHOR_BASE_COUNT']
         right_anchor_base_count_ratio = [x/max(1, sum(right_anchor_base_count)) for x in right_anchor_base_count]
         features['MAX_RIGHT_ANCHOR_BASE_RATIO'] = max(right_anchor_base_count_ratio)
         features['RIGHT_ANCHOR_A_RATIO'], features['RIGHT_ANCHOR_C_RATIO'], features['RIGHT_ANCHOR_G_RATIO'], features['RIGHT_ANCHOR_T_RATIO'] = right_anchor_base_count_ratio
 
-        right_flanking_base_count_50 = Features.get_number_value(info, 'RIGHT_FLANKING_BASE_COUNT_50', [0, 0, 0, 0])
+        right_flanking_base_count_50 = info['RIGHT_FLANKING_BASE_COUNT_50']
         right_flanking_base_count_ratio_50 = [x/max(1, sum(right_flanking_base_count_50)) for x in right_flanking_base_count_50]
         features['MAX_RIGHT_FLANKING_BASE_RATIO_50'] = max(right_flanking_base_count_ratio_50)
         features['RIGHT_FLANKING_A_RATIO_50'], features['RIGHT_FLANKING_C_RATIO_50'], features['RIGHT_FLANKING_G_RATIO_50'], features['RIGHT_FLANKING_T_RATIO_50'] = right_flanking_base_count_ratio_50
 
-        right_flanking_base_count_100 = Features.get_number_value(info, 'RIGHT_FLANKING_BASE_COUNT_100', [0, 0, 0, 0])
+        right_flanking_base_count_100 = info['RIGHT_FLANKING_BASE_COUNT_100']
         right_flanking_base_count_ratio_100 = [x/max(1, sum(right_flanking_base_count_100)) for x in right_flanking_base_count_100]
         features['MAX_RIGHT_FLANKING_BASE_RATIO_100'] = max(right_flanking_base_count_ratio_100)
         features['RIGHT_FLANKING_A_RATIO_100'], features['RIGHT_FLANKING_C_RATIO_100'], features['RIGHT_FLANKING_G_RATIO_100'], features['RIGHT_FLANKING_T_RATIO_100'] = right_flanking_base_count_ratio_100
 
-        right_flanking_base_count_500 = Features.get_number_value(info, 'RIGHT_FLANKING_BASE_COUNT_500', [0, 0, 0, 0])
+        right_flanking_base_count_500 = info['RIGHT_FLANKING_BASE_COUNT_500']
         right_flanking_base_count_ratio_500 = [x/max(1, sum(right_flanking_base_count_500)) for x in right_flanking_base_count_500]
         features['MAX_RIGHT_FLANKING_BASE_RATIO_500'] = max(right_flanking_base_count_ratio_500)
         features['RIGHT_FLANKING_A_RATIO_500'], features['RIGHT_FLANKING_C_RATIO_500'], features['RIGHT_FLANKING_G_RATIO_500'], features['RIGHT_FLANKING_T_RATIO_500'] = right_flanking_base_count_ratio_500
 
-        sv_ref_prefix_base_count = Features.get_number_value(info, 'SV_REF_PREFIX_BASE_COUNT', [0, 0, 0, 0])
+        sv_ref_prefix_base_count = info['SV_REF_PREFIX_BASE_COUNT']
         sv_ref_prefix_base_count_ratio = [x/max(1, sum(sv_ref_prefix_base_count)) for x in sv_ref_prefix_base_count]
         features['MAX_SV_REF_PREFIX_BASE_RATIO'] = max(sv_ref_prefix_base_count_ratio)
         features['SV_REF_PREFIX_A_RATIO'], features['SV_REF_PREFIX_C_RATIO'], features['SV_REF_PREFIX_G_RATIO'], features['SV_REF_PREFIX_T_RATIO'] = sv_ref_prefix_base_count_ratio
 
-        sv_ref_suffix_base_count = Features.get_number_value(info, 'SV_REF_SUFFIX_BASE_COUNT', [0, 0, 0, 0])
+        sv_ref_suffix_base_count = info['SV_REF_SUFFIX_BASE_COUNT']
         sv_ref_suffix_base_count_ratio = [x/max(1, sum(sv_ref_suffix_base_count)) for x in sv_ref_suffix_base_count]
         features['MAX_SV_REF_SUFFIX_BASE_RATIO'] = max(sv_ref_suffix_base_count_ratio)
         features['SV_REF_SUFFIX_A_RATIO'], features['SV_REF_SUFFIX_C_RATIO'], features['SV_REF_SUFFIX_G_RATIO'], features['SV_REF_SUFFIX_T_RATIO'] = sv_ref_suffix_base_count_ratio
 
-        ins_prefix_base_count = Features.get_number_value(info, 'INS_PREFIX_BASE_COUNT', [0, 0, 0, 0])
+        ins_prefix_base_count = info['INS_PREFIX_BASE_COUNT']
         ins_prefix_base_count_ratio = [x/max(1, sum(ins_prefix_base_count)) for x in ins_prefix_base_count]
         features['MAX_INS_PREFIX_BASE_COUNT_RATIO'] = max(ins_prefix_base_count_ratio)
         features['INS_PREFIX_A_RATIO'], features['INS_PREFIX_C_RATIO'], features['INS_PREFIX_G_RATIO'], features['INS_PREFIX_T_RATIO'] = ins_prefix_base_count_ratio
 
-        ins_suffix_base_count = Features.get_number_value(info, 'INS_SUFFIX_BASE_COUNT', [0, 0, 0, 0])
+        ins_suffix_base_count = info['INS_SUFFIX_BASE_COUNT']
         ins_suffix_base_count_ratio = [x/max(1, sum(ins_suffix_base_count)) for x in ins_suffix_base_count]
         features['MAX_INS_SUFFIX_BASE_COUNT_RATIO'] = max(ins_suffix_base_count_ratio)
         features['INS_SUFFIX_A_RATIO'], features['INS_SUFFIX_C_RATIO'], features['INS_SUFFIX_G_RATIO'], features['INS_SUFFIX_T_RATIO'] = ins_suffix_base_count_ratio
@@ -360,7 +357,6 @@ class Features:
         features['AR1E_RATIO'] = ar1e/max(1, ar1c)
         features['AR1CMSPAN_1'], features['AR1CMSPAN_2'] = Features.get_number_value(sample, 'AR1CMSPAN', [0, 0], max_is)
         features['AR1CMHQSPAN_1'], features['AR1CMHQSPAN_2'] = Features.get_number_value(sample, 'AR1CMHQSPAN', [0, 0], max_is)
-        features['AR1C_OCCR'] = Features.get_number_value(sample, 'AR1C_OCCR', Features.NAN)
 
         features['AR1HPMODE'] = Features.get_number_value(sample, 'AR1HPMODE', Features.NAN)
         features['AR1CHPMODE'] = Features.get_number_value(sample, 'AR1CHPMODE', Features.NAN)
@@ -398,7 +394,6 @@ class Features:
         features['AR2E_RATIO'] = ar2e/max(1, ar2c)
         features['AR2CMSPAN_1'], features['AR2CMSPAN_2'] = Features.get_number_value(sample, 'AR2CMSPAN', [0, 0], max_is)
         features['AR2CMHQSPAN_1'], features['AR2CMHQSPAN_2'] = Features.get_number_value(sample, 'AR2CMHQSPAN', [0, 0], max_is)
-        features['AR2C_OCCR'] = Features.get_number_value(sample, 'AR2C_OCCR', Features.NAN)
 
         ar1cf = Features.get_number_value(sample, 'AR1CF', 0, max(1, ar1c))
         ar1cr = Features.get_number_value(sample, 'AR1CR', 0, max(1, ar1c))
@@ -434,7 +429,7 @@ class Features:
         features['OR2CHQ'] = Features.piecewise_normalise(or2chq, min_depth, max_depth)
         features['OR2C_HQ_RATIO'] = or2chq/max(1, or2c)
         features['OR2E'] = Features.piecewise_normalise(or2e, min_depth, max_depth)
-        
+
         rr1 = Features.get_number_value(sample, 'RR1', 0)
         rr1c = Features.get_number_value(sample, 'RR1C', 0)
         rr1chq = Features.get_number_value(sample, 'RR1CHQ', 0)
