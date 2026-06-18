@@ -121,7 +121,6 @@ class Classifier:
                 for i in range(len(positive_variant_ids)):
                     svid_to_ppr[positive_variant_ids[i]] = pprs[i][1]
             model_elapsed = timeit.default_timer() - model_start_time
-            print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
 
         # write the predictions to a VCF file
         write_start_time = timeit.default_timer()
