@@ -165,6 +165,21 @@ std::string get_record_id(bcf1_t* record) {
     return record->d.id == NULL ? "." : std::string(record->d.id);
 }
 
+int get_required_hpid(bcf_hdr_t* hdr, bcf1_t* record) {
+    int32_t* hpid = NULL;
+    int hpid_len = 0;
+    if (bcf_get_info_int32(hdr, record, "HPID", &hpid, &hpid_len) <= 0 ||
+            hpid_len == 0 ||
+            hpid[0] == bcf_int32_missing ||
+            hpid[0] == bcf_int32_vector_end) {
+        free(hpid);
+        throw std::runtime_error("Missing HPID for " + get_record_id(record) + ".");
+    }
+    int value = hpid[0];
+    free(hpid);
+    return value;
+}
+
 void set_gt(bcf_hdr_t* hdr, bcf1_t* record, int allele1, int allele2) {
     int gt[2] = { bcf_gt_unphased(allele1), bcf_gt_unphased(allele2) };
     bcf_update_genotypes(hdr, record, gt, 2);
@@ -425,6 +440,20 @@ int main(int argc, char* argv[]) {
     chr_seqs_map_t chr_seqs;
     chr_seqs.read_fasta_into_map(reference_fname);
 
+    // count the number of records for each HPID in the input VCF
+    // greater than 1 means that the parent record was already expanded in expand_aux_haplotypes.cpp
+    // so we should not expand it again here, i.e., create aux INDEL records for it
+    std::unordered_map<int, int> hpid_counts;
+    htsFile* count_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
+    bcf_hdr_t* count_vcf_hdr = bcf_hdr_read(count_vcf_file);
+    bcf1_t* count_record = bcf_init();
+    while (bcf_read(count_vcf_file, count_vcf_hdr, count_record) == 0) {
+        hpid_counts[get_required_hpid(count_vcf_hdr, count_record)]++;
+    }
+    bcf_destroy(count_record);
+    bcf_hdr_destroy(count_vcf_hdr);
+    hts_close(count_vcf_file);
+
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
     bcf_hdr_t* in_vcf_hdr = bcf_hdr_read(in_vcf_file);
 
@@ -440,6 +469,7 @@ int main(int argc, char* argv[]) {
         bcf_get_info_string(in_vcf_hdr, b, "AUX_SNPS", (void**) &s_data, &len);
         if (len > 0) {
             bcf_unpack(b, BCF_UN_ALL);
+            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
             std::istringstream ss(s_data);
             std::string snp_str;
             int i = 0;
@@ -451,6 +481,7 @@ int main(int argc, char* argv[]) {
                 std::vector<int> gt = get_bcf_gt(in_vcf_hdr, b);
                 bcf1_t* snp_record = generate_snp(in_vcf_hdr, bcf_seqname(in_vcf_hdr, b), snp.pos,
                     chr_seq[snp.pos], snp.alt_base, id, gt);
+                bcf_update_info_int32(in_vcf_hdr, snp_record, "HPID", &parent_hpid, 1);
                 copy_all_fmt(in_vcf_hdr, b, snp_record);
                 vcf_records.push_back(snp_record);
                 aux_records.insert(snp_record);
@@ -465,10 +496,11 @@ int main(int argc, char* argv[]) {
         bcf_get_info_string(in_vcf_hdr, b, "AUX_INDELS", (void**) &s_data, &len);
         if (len > 0) {
             bcf_unpack(b, BCF_UN_ALL);
+            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
             std::istringstream ss(s_data);;
             std::string indel_str;
             int i = 0;
-            while (std::getline(ss, indel_str, ',')) {
+            while (hpid_counts[parent_hpid] == 1 && std::getline(ss, indel_str, ',')) {
                 std::stringstream indel_ss(indel_str);
                 std::string start_str, end_str, ins_seq;
                 std::getline(indel_ss, start_str, ':');
@@ -486,6 +518,7 @@ int main(int argc, char* argv[]) {
                     indel = std::make_shared<deletion_t>(contig_name, start, end, ins_seq, nullptr, nullptr, nullptr, nullptr);
                 }
                 indel->id = std::string(b->d.id) + ".INDEL." + std::to_string(i++);
+                indel->hpid = parent_hpid;
                 std::vector<int> gt = get_bcf_gt(in_vcf_hdr, b);
                 indel->sample_info.gt = gt;
                 bcf1_t* indel_record = bcf_init();
