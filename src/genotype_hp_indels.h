@@ -833,27 +833,16 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
     for (int i = 0; i < hp_indels.size(); i++) {
         // set OR* reads for other indels
-        int or1hq = 0, or1e = 0;
-        for (int j = 0; j < alt_good_reads[i].size(); j++) {
-            if (alt_good_reads[i][j].mate_mapq >= config.high_confidence_mapq) {
-                or1hq++;
-            }
-            if (alt_is_exact_match[i][j]) {
-                or1e++;
-            }
-        }
         for (int j = 0; j < hp_indels.size(); j++) {
             if (i == j) continue;
             hp_indels[j]->sample_info.assigned_to_other_sv_bp1_reads += alt_reads[i];
-            hp_indels[j]->sample_info.assigned_to_other_sv_bp1_consistent += alt_good_reads[i].size();
-            hp_indels[j]->sample_info.assigned_to_other_sv_bp1_consistent_highmq += or1hq;
-            hp_indels[j]->sample_info.assigned_to_other_sv_bp1_consistent_exact += or1e;
         }
         if (reassign_evidence) {
-            for (const bp_support_read_t& read : alt_good_reads[i]) {
+            for (int j = 0; j < alt_good_reads[i].size(); j++) {
+                const bp_support_read_t& read = alt_good_reads[i][j];
                 for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(read)) {
                     if (hp_indel_ids.count(remove_svid_dup_suffix(ov.first))) continue;
-                    increase_orc(sv_map, ov.first, ov.second, read.mate_mapq >= config.high_confidence_mapq);
+                    increase_orc(sv_map, ov.first, ov.second, read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
                 }
             }
         }

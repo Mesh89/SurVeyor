@@ -205,6 +205,26 @@ int calculate_mh_len(sv_t* sv) {
     return mh_len;
 }
 
+int get_orc_count(const std::unordered_map<std::string, sv_t::orc_read_info_t>& reads) {
+    return static_cast<int>(reads.size());
+}
+
+int get_orc_hq_count(const std::unordered_map<std::string, sv_t::orc_read_info_t>& reads) {
+    int count = 0;
+    for (const auto& kv : reads) {
+        if (kv.second.hq) count++;
+    }
+    return count;
+}
+
+int get_orc_exact_count(const std::unordered_map<std::string, sv_t::orc_read_info_t>& reads) {
+    int count = 0;
+    for (const auto& kv : reads) {
+        if (kv.second.exact) count++;
+    }
+    return count;
+}
+
 void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_seq, hts_pos_t chr_len, int sample_idx) {
     
     bcf_translate(out_hdr, in_hdr, sv->vcf_entry);
@@ -223,7 +243,6 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         int svlen = sv->svlen();
         bcf_update_info_int32(out_hdr, sv->vcf_entry, "SVLEN", &svlen, 1);
     }
-
     hts_pos_t la_aln_start = bring_within_range(sv->left_anchor_aln->start, hts_pos_t(0), chr_len);
     hts_pos_t la_aln_end = bring_within_range(sv->left_anchor_aln->end, hts_pos_t(0), chr_len);
     hts_pos_t ra_aln_start = bring_within_range(sv->right_anchor_aln->start, hts_pos_t(0), chr_len);
@@ -317,23 +336,23 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     int or1 = sv->sample_info.assigned_to_other_sv_bp1_reads;
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1", &or1, 1);
     
-    int or1c = sv->sample_info.assigned_to_other_sv_bp1_consistent;
+    int or1c = get_orc_count(sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1C", &or1c, 1);
     
-	int or1chq = sv->sample_info.assigned_to_other_sv_bp1_consistent_highmq;
+	int or1chq = get_orc_hq_count(sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
 	bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1CHQ", &or1chq, 1);
 
-	int or1e = sv->sample_info.assigned_to_other_sv_bp1_consistent_exact;
+	int or1e = get_orc_exact_count(sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
 	bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1E", &or1e, 1);
 
 	if (sv->sample_info.ref_bp2.reads_info.computed) { // OR2 is only relevant for SVs with RR2
         int or2 = sv->sample_info.assigned_to_other_sv_bp2_reads;
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2", &or2, 1);
     
-        int or2c = sv->sample_info.assigned_to_other_sv_bp2_consistent;
+        int or2c = get_orc_count(sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2C", &or2c, 1);
     
-        int or2chq = sv->sample_info.assigned_to_other_sv_bp2_consistent_highmq;
+        int or2chq = get_orc_hq_count(sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2CHQ", &or2chq, 1);
     } else {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2", NULL, 0);

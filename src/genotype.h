@@ -15,6 +15,13 @@
 
 constexpr double MIN_EPR = 0.05;
 
+std::string remove_svid_dup_suffix(const std::string& sv_id) {
+    if (sv_id.size() > 4 && sv_id.substr(sv_id.size()-4) == "_DUP") {
+        return sv_id.substr(0, sv_id.size()-4);
+    }
+    return sv_id;
+}
+
 struct bp_support_read_t {
     std::string read_name;
     int64_t mapq, mate_mapq;
@@ -39,18 +46,11 @@ struct bp_support_read_t {
 };
 
 
-std::string read_name_with_suffix(bp_support_read_t& read) {
+std::string read_name_with_suffix(const bp_support_read_t& read) {
     return read.read_name + (read.is_first_in_pair ? "/1" : "/2");
 }
 std::string read_name_with_suffix(bam1_t* read) {
     return std::string(bam_get_qname(read)) + ((is_first_read(read)) ? "/1" : "/2");
-}
-
-std::string remove_svid_dup_suffix(const std::string& sv_id) {
-    if (sv_id.size() > 4 && sv_id.substr(sv_id.size()-4) == "_DUP") {
-        return sv_id.substr(0, sv_id.size()-4);
-    }
-    return sv_id;
 }
 
 struct evidence_logger_t {
@@ -270,32 +270,44 @@ struct evidence_map_t {
         if (!read_to_non_chosen_svs_map.count(read_name)) return {};
         return read_to_non_chosen_svs_map[read_name];
     }
+
 };
 
 std::mutex orc_mtx;
 
-void increase_orc_supp(sv_t::sample_info_t& sample_info, int bp_n, bool hq) {
+void increase_orc_supp(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, bool hq, bool exact) {
     std::lock_guard<std::mutex> lock(orc_mtx);
     if (bp_n == 1) {
-        sample_info.assigned_to_other_sv_bp1_consistent++;
-        if (hq) {
-            sample_info.assigned_to_other_sv_bp1_consistent_highmq++;
-        }
+        auto& read_info = sample_info.assigned_to_other_sv_bp1_consistent_reads[read_name];
+        read_info.hq |= hq;
+        read_info.exact |= exact;
     } else if (bp_n == 2) {
-        sample_info.assigned_to_other_sv_bp2_consistent++;
-        if (hq) {
-            sample_info.assigned_to_other_sv_bp2_consistent_highmq++;
-        }
+        auto& read_info = sample_info.assigned_to_other_sv_bp2_consistent_reads[read_name];
+        read_info.hq |= hq;
+        read_info.exact |= exact;
     }
 }
 
-void increase_orc(std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map, std::string sv_id, int bp_n, bool hq) {
+void increase_orc(std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map, std::string sv_id, int bp_n, bam1_t* read, bool hq, bool exact) {
     if (!sv_map.count(sv_id)) return;
-    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, hq);
+
+    std::string read_name = read_name_with_suffix(read);
+    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
 
     sv_id += "_DUP";
     if (!sv_map.count(sv_id)) return;
-    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, hq);
+    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
+}
+
+void increase_orc(std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map, std::string sv_id, int bp_n, const bp_support_read_t& read, bool hq, bool exact) {
+    if (!sv_map.count(sv_id)) return;
+
+    std::string read_name = read_name_with_suffix(read);
+    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
+
+    sv_id += "_DUP";
+    if (!sv_map.count(sv_id)) return;
+    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
 }
 
 std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs);

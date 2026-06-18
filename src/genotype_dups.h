@@ -225,9 +225,10 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     alt_better_reads_consistent = find_seqs_consistent_with_ref_seq(alt_consensus_seq, alt_better_reads_consistent, alt_avg_score, alt_stddev_score, alt_is_exact_read);
 
     if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
-        for (std::shared_ptr<bam1_t>& r : alt_better_reads_consistent) {
+        for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
+            std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
             for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
-                increase_orc(sv_map, ov.first, ov.second, get_mq(r.get()) >= config.high_confidence_mapq);
+                increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             }
         }
     }
@@ -404,9 +405,10 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     dup->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
 
     if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
-        for (std::shared_ptr<bam1_t>& r : alt_better_reads_consistent) {
+        for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
+            std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
             for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
-                increase_orc(sv_map, ov.first, ov.second, get_mq(r.get()) >= config.high_confidence_mapq);
+                increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             }
         }
     }

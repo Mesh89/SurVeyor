@@ -10,6 +10,7 @@
 #include <string>
 #include <sstream>
 #include <memory>
+#include <unordered_map>
 #include "htslib/vcf.h"
 
 struct consensus_t {
@@ -233,6 +234,11 @@ struct sv_t {
 
     };
 
+    struct orc_read_info_t {
+        bool hq = false;
+        bool exact = false;
+    };
+
     struct sample_info_t {
         static const int NOT_COMPUTED = -1;
 
@@ -243,9 +249,12 @@ struct sv_t {
         bp_pairs_info_t neutral_bp1_pairs, neutral_bp2_pairs;
         bp_pairs_info_t bp1_stray_pairs, bp2_stray_pairs; // pairs that are discordant and yet do not support the SV
 
-        int assigned_to_other_sv_bp1_reads = 0, assigned_to_other_sv_bp1_consistent = 0;
-        int assigned_to_other_sv_bp1_consistent_highmq = 0, assigned_to_other_sv_bp1_consistent_exact = 0;
-        int assigned_to_other_sv_bp2_reads = 0, assigned_to_other_sv_bp2_consistent = 0, assigned_to_other_sv_bp2_consistent_highmq = 0;
+        int assigned_to_other_sv_bp1_reads = 0, assigned_to_other_sv_bp2_reads = 0;
+
+        // OR*C source of truth keyed by suffixed read id; values are upgraded across duplicate source records.
+        std::unordered_map<std::string, orc_read_info_t> assigned_to_other_sv_bp1_consistent_reads;
+        std::unordered_map<std::string, orc_read_info_t> assigned_to_other_sv_bp2_consistent_reads;
+
         int alt_ref_equal_reads = 0, alt_ref_equal_reads_highmq = 0;
         int alt_lext_reads = 0, hq_alt_lext_reads = 0, alt_rext_reads = 0, hq_alt_rext_reads = 0;
         int ext_alt_consensus1_length = 0, ext_alt_consensus2_length = 0;

@@ -195,22 +195,29 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
 
     if (reassign_evidence) {  // increment ORC counters for other SVs that lost support from these reads
         std::vector<bam1_t*> alt_better_reads_consistent;
+        std::unordered_map<std::string, bool> alt_better_read_is_exact;
         std::unordered_set<std::string> seen;
-        for (const auto& r : alt_bp1_better_reads_consistent) {
-            if (!seen.count(read_name_with_suffix(r.get()))) {
-                seen.insert(read_name_with_suffix(r.get()));
+        for (int i = 0; i < alt_bp1_better_reads_consistent.size(); i++) {
+            const auto& r = alt_bp1_better_reads_consistent[i];
+            std::string read_name = read_name_with_suffix(r.get());
+            alt_better_read_is_exact[read_name] |= alt_bp1_is_exact_read[i];
+            if (!seen.count(read_name)) {
+                seen.insert(read_name);
                 alt_better_reads_consistent.push_back(r.get());
             }
         }
-        for (const auto& r : alt_bp2_better_reads_consistent) {
-            if (!seen.count(read_name_with_suffix(r.get()))) {
-                seen.insert(read_name_with_suffix(r.get()));
+        for (int i = 0; i < alt_bp2_better_reads_consistent.size(); i++) {
+            const auto& r = alt_bp2_better_reads_consistent[i];
+            std::string read_name = read_name_with_suffix(r.get());
+            alt_better_read_is_exact[read_name] |= alt_bp2_is_exact_read[i];
+            if (!seen.count(read_name)) {
+                seen.insert(read_name);
                 alt_better_reads_consistent.push_back(r.get());
             }
         }
         for (bam1_t* r : alt_better_reads_consistent) {
             for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r)) {
-                increase_orc(sv_map, ov.first, ov.second, get_mq(r) >= config.high_confidence_mapq);
+                increase_orc(sv_map, ov.first, ov.second, r, get_mq(r) >= config.high_confidence_mapq, alt_better_read_is_exact[read_name_with_suffix(r)]);
             }
         }
     }
