@@ -199,75 +199,120 @@ std::vector<std::vector<hp_read_info_t>> cluster_reads_by_two_modes(const std::v
 }
 
 struct hp_allele_cluster_t {
+    int allele_idx;
     int allele_len;
     std::vector<hp_read_info_t> reads;
 
-    hp_allele_cluster_t(int allele_len) : allele_len(allele_len) {}
+    hp_allele_cluster_t(int allele_idx, int allele_len) : allele_idx(allele_idx), allele_len(allele_len) {}
 };
 
-int nearest_hp_allele_idx(int hp_len, const std::vector<int>& allele_lens, const std::vector<int>* allowed_allele_idxs = NULL) {
-    int best_idx = -1;
-    int best_dist = INT32_MAX;
-
+int nearest_hp_allele_idx(int hp_len, const std::string& read_seq, 
+    std::vector<std::unique_ptr<char[]>>& alt_alleles, std::vector<int>& alt_allele_lens,
+    std::vector<int>& hp_run_lens, 
+    StripedSmithWaterman::Aligner& aligner, const std::vector<int>* allowed_allele_idxs = NULL) {
+    
     std::vector<int> all_allele_idxs;
     if (allowed_allele_idxs == NULL) {
-        for (int i = 0; i < allele_lens.size(); i++) all_allele_idxs.push_back(i);
+        for (int i = 0; i < hp_run_lens.size(); i++) all_allele_idxs.push_back(i);
         allowed_allele_idxs = &all_allele_idxs;
     }
 
+    int best_dist = INT32_MAX;
+    std::vector<int> best_idxs;
     for (int idx : *allowed_allele_idxs) {
-        int dist = abs(hp_len - allele_lens[idx]);
-        if (dist < best_dist ||
-            (dist == best_dist && (best_idx == -1 || allele_lens[idx] < allele_lens[best_idx])) ||
-            (dist == best_dist && allele_lens[idx] == allele_lens[best_idx] && idx < best_idx)) {
-            best_idx = idx;
+        int dist = abs(hp_len - hp_run_lens[idx]);
+        if (dist < best_dist) {
             best_dist = dist;
+            best_idxs.clear();
+            best_idxs.push_back(idx);
+        } else if (dist == best_dist) {
+            best_idxs.push_back(idx);
         }
     }
 
+    if (best_idxs.empty()) return -1;
+    if (best_idxs.size() == 1) return best_idxs[0];
+
+    // If there are multiple alleles with the same distance, choose shortest HP run length
+    // This is because empirically, I have observed that sequencing tend to overestimate the HP run length rather than underestimate it
+    bool same_hp_run_len = true;
+    for (int idx : best_idxs) {
+        if (hp_run_lens[idx] != hp_run_lens[best_idxs[0]]) {
+            same_hp_run_len = false;
+            break;
+        }
+    }
+    if (!same_hp_run_len) {
+        int best_idx = best_idxs[0];
+        for (int idx : best_idxs) {
+            if (hp_run_lens[idx] < hp_run_lens[best_idx]) {
+                best_idx = idx;
+            }
+        }
+        return best_idx;
+    }
+
+    // If there optimal HP run len has multiple candidate hp indels, pick the one with the best alignment score
+    if (read_seq.empty()) {
+        throw std::runtime_error("Missing read sequence for HP allele tie-break.");
+    }
+
+    StripedSmithWaterman::Alignment aln;
+    StripedSmithWaterman::Filter filter_score_only(false, false, 0, 32767);
+
+    int best_idx = -1;
+    int best_score = INT32_MIN;
+    for (int idx : best_idxs) {
+        aligner.Align(read_seq.c_str(), alt_alleles[idx].get(), alt_allele_lens[idx], filter_score_only, &aln, 0);
+        if (aln.sw_score > best_score ||
+            (aln.sw_score == best_score && (best_idx == -1 || hp_run_lens[idx] < hp_run_lens[best_idx]))) {
+            best_score = aln.sw_score;
+            best_idx = idx;
+        }
+    }
     return best_idx;
 }
 
 std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::vector<hp_read_info_t>& hp_read_infos,
-    const std::vector<int>& allele_lens) {
+    std::vector<std::unique_ptr<char[]>>& alt_alleles, std::vector<int>& alt_allele_lens, std::vector<int>& hp_run_lens, StripedSmithWaterman::Aligner& aligner) {
 
-    if (hp_read_infos.empty() || allele_lens.empty()) return {};
+    if (hp_read_infos.empty() || hp_run_lens.empty()) return {};
 
     // First, assign each read to its nearest allele length
-    std::vector<int> allele_counts(allele_lens.size(), 0);
-    std::vector<long long> allele_dist_sums(allele_lens.size(), 0);
+    std::vector<int> allele_counts(hp_run_lens.size(), 0);
+    std::vector<long long> allele_dist_sums(hp_run_lens.size(), 0);
     for (const hp_read_info_t& hp_read_info : hp_read_infos) {
-        int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, allele_lens);
+        int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
         allele_counts[allele_idx]++;
-        allele_dist_sums[allele_idx] += abs(hp_read_info.hp_len - allele_lens[allele_idx]);
+        allele_dist_sums[allele_idx] += abs(hp_read_info.hp_len - hp_run_lens[allele_idx]);
     }
 
     // Then pick the (max 2) alleles with the most assigned reads, breaking count ties toward smaller total distance, then smaller length
     std::vector<int> allele_idxs;
-    for (int i = 0; i < allele_lens.size(); i++) {
+    for (int i = 0; i < hp_run_lens.size(); i++) {
         if (allele_counts[i] > 0) allele_idxs.push_back(i);
     }
     std::sort(allele_idxs.begin(), allele_idxs.end(), [&](int a, int b) {
         if (allele_counts[a] != allele_counts[b]) return allele_counts[a] > allele_counts[b];
         if (allele_dist_sums[a] != allele_dist_sums[b]) return allele_dist_sums[a] < allele_dist_sums[b];
-        if (allele_lens[a] != allele_lens[b]) return allele_lens[a] < allele_lens[b];
+        if (hp_run_lens[a] != hp_run_lens[b]) return hp_run_lens[a] < hp_run_lens[b];
         return a < b;
     });
     if (allele_idxs.size() > 2) allele_idxs.resize(2);
     std::sort(allele_idxs.begin(), allele_idxs.end(), [&](int a, int b) {
-        if (allele_lens[a] != allele_lens[b]) return allele_lens[a] < allele_lens[b];
+        if (hp_run_lens[a] != hp_run_lens[b]) return hp_run_lens[a] < hp_run_lens[b];
         return a < b;
     });
 
     // Finally, form max 2 clusters of reads by assigning reads to the max 2 retained alleles
     std::vector<hp_allele_cluster_t> clusters;
     for (int allele_idx : allele_idxs) {
-        clusters.push_back(hp_allele_cluster_t(allele_lens[allele_idx]));
+        clusters.push_back(hp_allele_cluster_t(allele_idx, hp_run_lens[allele_idx]));
     }
     for (const hp_read_info_t& hp_read_info : hp_read_infos) {
-        int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, allele_lens, &allele_idxs);
+        int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens, hp_run_lens, aligner, &allele_idxs);
         for (hp_allele_cluster_t& cluster : clusters) {
-            if (cluster.allele_len == allele_lens[allele_idx]) {
+            if (cluster.allele_idx == allele_idx) {
                 cluster.reads.push_back(hp_read_info);
                 break;
             }
@@ -565,17 +610,17 @@ std::vector<int> calculate_aln_scores(std::vector<hp_read_info_t>& hp_read_infos
 }
 
 int choose_best_allele_idx_for_hp_len(int allele_len, std::vector<hp_read_info_t>& good_hp_read_infos,
-    const std::vector<int>& allele_lens, const std::vector<std::unique_ptr<char[]>>& alt_alleles,
+    const std::vector<int>& hp_run_lens, const std::vector<std::unique_ptr<char[]>>& alt_alleles,
     const std::vector<int>& alt_allele_lens, StripedSmithWaterman::Aligner& aligner) {
 
     std::vector<int> candidate_allele_idxs;
     for (int allele_idx = 0; allele_idx < alt_alleles.size(); allele_idx++) {
-        if (allele_lens[allele_idx] == allele_len) {
+        if (hp_run_lens[allele_idx] == allele_len) {
             candidate_allele_idxs.push_back(allele_idx);
         }
     }
     if (candidate_allele_idxs.size() == 1) return candidate_allele_idxs[0];
-    if (candidate_allele_idxs.empty()) return allele_lens.size() - 1;
+    if (candidate_allele_idxs.empty()) return hp_run_lens.size() - 1;
 
     int best_allele_idx = -1;
     int best_score_sum = INT32_MIN;
@@ -768,14 +813,14 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     bam_destroy1(read);
     hts_itr_destroy(iter);
 
-    std::vector<int> allele_lens;
+    std::vector<int> hp_run_lens;
     for (sv_t* hp_indel : hp_indels) {
-        allele_lens.push_back(ref_hp_range.end - ref_hp_range.beg + hp_indel->svlen());
+        hp_run_lens.push_back(ref_hp_range.end - ref_hp_range.beg + hp_indel->svlen());
     }
-    allele_lens.push_back(ref_hp_range.end - ref_hp_range.beg); // allele_lens[hp_indels.size()] corresponds to the reference allele
+    hp_run_lens.push_back(ref_hp_range.end - ref_hp_range.beg); // hp_run_lens[hp_indels.size()] corresponds to the reference allele
 
     // Cluster reads into up to two clusters around the candidate allele HP lengths
-    std::vector<hp_allele_cluster_t> clusters = cluster_reads_by_nearest_allele_len(hp_read_infos, allele_lens);
+    std::vector<hp_allele_cluster_t> clusters = cluster_reads_by_nearest_allele_len(hp_read_infos, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
 
     int ref_reads = 0;
     std::vector<bp_support_read_t> ref_good_reads;
@@ -806,14 +851,13 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             }
         }
 
-        int best_allele_idx = choose_best_allele_idx_for_hp_len(allele_cluster.allele_len,
-            good_hp_read_infos, allele_lens, alt_alleles, alt_allele_lens, aligner);
+        int best_allele_idx = allele_cluster.allele_idx;
         std::vector<bool> is_exact_match;
         for (const hp_read_info_t& hp_read_info : good_hp_read_infos) {
-            is_exact_match.push_back(hp_read_info.hp_len == allele_lens[best_allele_idx]);
+            is_exact_match.push_back(hp_read_info.hp_len == hp_run_lens[best_allele_idx]);
         }
 
-        if (best_allele_idx == allele_lens.size() - 1) {
+        if (best_allele_idx == hp_run_lens.size() - 1) {
             // Cluster best matches the reference allele
             ref_reads += cluster.size();
             ref_good_reads.insert(ref_good_reads.end(), good_reads.begin(), good_reads.end());
