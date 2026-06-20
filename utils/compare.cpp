@@ -89,11 +89,12 @@ double len_ratio(sv_t* sv1, sv_t* sv2) {
 				return 1.0;
 			}
 		} else {
-			return std::min(double(sv1->svlen()), double(sv2->svlen())) / std::max(double(sv1->svlen()), double(sv2->svlen()));
+			return len_ratio(sv1->svlen(), sv2->svlen());
 		}
-	} else if ((sv1->svtype() == "INS" && sv2->svtype() == "DUP") || (sv1->svtype() == "DUP" && sv2->svtype() == "INS")) return 1.0;
-	else if (sv1->svtype() == "INV" && sv2->svtype() == "INV") {
-		return std::min(double(sv1->svlen()), double(sv2->svlen())) / std::max(double(sv1->svlen()), double(sv2->svlen()));
+	} else if ((sv1->svtype() == "INS" && sv2->svtype() == "DUP") || (sv1->svtype() == "DUP" && sv2->svtype() == "INS")) {
+		return 1.0;
+	} else if (sv1->svtype() == "INV" && sv2->svtype() == "INV") {
+		return len_ratio(sv1->svlen(), sv2->svlen());
 	} else {
 		return 0.0; // not compatible
 	}
@@ -832,8 +833,9 @@ int main(int argc, char* argv[]) {
 	// 3. rep (false first)
 	// 4. score in descending order
 	// 5. consistent ALT reads, in descending order
-	// 6. extended ALT consensus score, in descending order
-	// 7. benchmark id, called id (to make sort stable)
+	// 6. ALT reads, in descending order
+	// 7. extended ALT consensus score, in descending order
+	// 8. benchmark id, called id (to make sort stable)
 	std::vector<sv_match_t> accepted_matches;
 	std::sort(matches.begin(), matches.end(), [&](sv_match_t& a, sv_match_t& b) {
 		if (match_for_called_cmp(a, b)) return true;
@@ -842,6 +844,11 @@ int main(int argc, char* argv[]) {
 		int b_consistent_reads = b.c_sv->sample_info.alt_bp1.reads_info.consistent_reads() + b.c_sv->sample_info.alt_bp2.reads_info.consistent_reads();
 		if (a_consistent_reads != b_consistent_reads) {
 			return a_consistent_reads > b_consistent_reads;
+		}
+		int a_alt_reads = a.c_sv->sample_info.alt_bp1.reads_info.reads + a.c_sv->sample_info.alt_bp2.reads_info.reads;
+		int b_alt_reads = b.c_sv->sample_info.alt_bp1.reads_info.reads + b.c_sv->sample_info.alt_bp2.reads_info.reads;
+		if (a_alt_reads != b_alt_reads) {
+			return a_alt_reads > b_alt_reads;
 		}
 		int a_ext_alt_consensus = a.c_sv->sample_info.ext_alt_consensus1_to_alt_score + a.c_sv->sample_info.ext_alt_consensus2_to_alt_score;
 		int b_ext_alt_consensus = b.c_sv->sample_info.ext_alt_consensus1_to_alt_score + b.c_sv->sample_info.ext_alt_consensus2_to_alt_score;

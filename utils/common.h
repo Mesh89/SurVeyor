@@ -19,7 +19,8 @@ int get_optional_format_int32(bcf_hdr_t* hdr, bcf1_t* line, const char* tag, int
     int32_t* vals = NULL;
     int nvals = 0;
     int value = fallback;
-    if (bcf_get_format_int32(hdr, line, tag, &vals, &nvals) > 0 && nvals > 0 &&
+    int ret = bcf_get_format_int32(hdr, line, tag, &vals, &nvals);
+    if (ret > 0 && nvals > 0 &&
         vals[0] != bcf_int32_missing && vals[0] != bcf_int32_vector_end) {
         value = vals[0];
     }
@@ -28,9 +29,11 @@ int get_optional_format_int32(bcf_hdr_t* hdr, bcf1_t* line, const char* tag, int
 }
 
 void load_compare_tiebreak_fields(bcf_hdr_t* hdr, bcf1_t* line, sv_t* sv) {
+    sv->sample_info.alt_bp1.reads_info.reads = get_optional_format_int32(hdr, line, "AR1");
     sv->sample_info.alt_bp1.reads_info.consistent_fwd = get_optional_format_int32(hdr, line, "AR1CF");
     sv->sample_info.alt_bp1.reads_info.consistent_rev = get_optional_format_int32(hdr, line, "AR1CR");
 
+    sv->sample_info.alt_bp2.reads_info.reads = get_optional_format_int32(hdr, line, "AR2");
     sv->sample_info.alt_bp2.reads_info.consistent_fwd = get_optional_format_int32(hdr, line, "AR2CF");
     sv->sample_info.alt_bp2.reads_info.consistent_rev = get_optional_format_int32(hdr, line, "AR2CR");
 
