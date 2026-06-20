@@ -79,6 +79,7 @@ int main(int argc, char* argv[]) {
                     new_dup = std::make_shared<duplication_t>(contig_name, anchor_aln->start, anchor_aln->end, "", nullptr, nullptr, anchor_aln, anchor_aln);
                     new_dup->id = sv->id + "_DUP";
                     new_dup->source = sv->source;
+                    new_dup->hpid = sv->hpid;
                     new_dup->ins_to_dup_similarity = max_score / double(ins_seq.length() * 1);
                     new_dup_ids.insert(new_dup->id);
                 }
