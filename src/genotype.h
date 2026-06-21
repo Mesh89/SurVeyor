@@ -259,6 +259,12 @@ struct evidence_map_t {
         return read_to_hpid_map[read_name] != sv->hpid;
     }
 
+    bool is_read_assigned_to_this_sv(const bp_support_read_t& read, sv_t* sv) {
+        std::string read_name = read_name_with_suffix(read);
+        if (!read_to_hpid_map.count(read_name)) return false;
+        return read_to_hpid_map[read_name] == sv->hpid;
+    }
+
     std::vector<std::pair<std::string, int>> get_non_chosen_svs_for_read(bam1_t* read) {
         std::string read_name = read_name_with_suffix(read);
         if (!read_to_non_chosen_svs_map.count(read_name)) return {};
