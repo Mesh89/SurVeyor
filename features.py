@@ -822,6 +822,8 @@ def read_gt_labels(file_path):
             if len(fields) != 4:
                 raise RuntimeError(f"Malformed genotype labels line in {file_path}: {' '.join(fields)}")
             id, gt, exact, primary = fields[0], fields[1], int(fields[2]), int(fields[3])
+            if gt == "1/2":
+                gt = "0/1"
             if id not in gt_labels:
                 gt_labels[id] = (gt, exact, primary)
             else:

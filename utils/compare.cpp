@@ -472,7 +472,7 @@ bool is_known_het_alt(sv_t* sv) {
 		sv->allele_count(1) == 1;
 }
 
-bool is_known_het_alt_gt(const std::vector<int>& gt) {
+bool is_known_het_alt(const std::vector<int>& gt) {
 	if (gt.size() != 2) return false;
 	int alt_alleles = 0;
 	for (int allele : gt) {
@@ -499,7 +499,7 @@ std::vector<snp_t> read_het_benchmark_snps(const std::string& filename) {
 	while (bcf_read(file, hdr, record) == 0) {
 		std::string svtype = get_sv_type(hdr, record);
 		if (svtype != "SNP" && svtype != "SNV") continue;
-		if (!is_known_het_alt_gt(get_bcf_gt(hdr, record))) continue;
+		if (!is_known_het_alt(get_bcf_gt(hdr, record))) continue;
 
 		bcf_unpack(record, BCF_UN_STR);
 		snps.push_back(snp_t(bcf_seqname_safe(hdr, record), record->pos, record->d.allele[1][0]));
@@ -509,6 +509,42 @@ std::vector<snp_t> read_het_benchmark_snps(const std::string& filename) {
 	bcf_hdr_destroy(hdr);
 	bcf_close(file);
 	return snps;
+}
+
+std::unordered_set<std::string> find_vars_overlapping_other_nonref(const std::vector<std::shared_ptr<sv_t>>& svs,
+														   const std::vector<snp_t>& benchmark_het_snps) {
+	std::unordered_map<std::string, std::vector<Interval<std::string, hts_pos_t>>> nonref_ivals_by_chr;
+	for (const std::shared_ptr<sv_t>& sv : svs) {
+		if (sv.get()->allele_count(1) == 0) continue;
+
+		nonref_ivals_by_chr[sv->chr].push_back(Interval<std::string, hts_pos_t>(sv->start, sv->end, sv->id));
+	}
+	for (const snp_t& snp : benchmark_het_snps) {
+		nonref_ivals_by_chr[snp.chr].push_back(Interval<std::string, hts_pos_t>(snp.pos, snp.pos, snp.unique_key()));
+	}
+
+	std::unordered_map<std::string, IntervalTree<std::string, hts_pos_t>*> nonref_itrees;
+	for (auto& chr_windows : nonref_ivals_by_chr) {
+		nonref_itrees[chr_windows.first] = new IntervalTree<std::string, hts_pos_t>(chr_windows.second);
+	}
+
+	std::unordered_set<std::string> het_with_other_nonref;
+	for (const std::shared_ptr<sv_t>& sv : svs) {
+		if (!is_known_het_alt(sv.get())) continue;
+
+		auto nonref_it = nonref_itrees.find(sv->chr);
+		if (nonref_it == nonref_itrees.end()) continue;
+
+		for (const Interval<std::string, hts_pos_t>& iv : nonref_it->second->findOverlapping(sv->start, sv->end)) {
+			if (iv.value != sv->id) {
+				het_with_other_nonref.insert(sv->id);
+				break;
+			}
+		}
+	}
+
+	for (auto& chr_tree : nonref_itrees) delete chr_tree.second;
+	return het_with_other_nonref;
 }
 
 std::unordered_map<std::string, int> make_benchmark_match_capacity(const std::vector<std::shared_ptr<sv_t>>& svs, std::vector<snp_t>& benchmark_het_snps, int aux_radius) {
@@ -779,6 +815,7 @@ int main(int argc, char* argv[]) {
 	if (hom_alt_split_radius > 0) {
 		benchmark_het_snps = read_het_benchmark_snps(benchmark_fname);
 	}
+	std::unordered_set<std::string> vars_overlapping_other_nonref = find_vars_overlapping_other_nonref(benchmark_svs, benchmark_het_snps);
 	std::unordered_map<std::string, int> benchmark_match_capacity = make_benchmark_match_capacity(benchmark_svs, benchmark_het_snps, hom_alt_split_radius);
 
 	if (parsed_args.count("reference")) {
@@ -964,9 +1001,13 @@ int main(int argc, char* argv[]) {
 		auto called_to_benchmark_gt = [&](sv_match_t& match) {
 			int b_capacity = benchmark_match_capacity.at(match.b_sv->id);
 			if (b_capacity > 1 && benchmark_match_count[match.b_sv->id] > 1) {
-				return std::string("0/1");
+				return std::string("1/2");
 			}
-			return match.b_sv->print_gt();
+			std::string gt = match.b_sv->print_gt();
+			if (gt == "0/1" && vars_overlapping_other_nonref.count(match.b_sv->id)) {
+				return std::string("1/2");
+			}
+			return gt;
 		};
 
 		// Selected non-missing benchmark matches are primary labels.
