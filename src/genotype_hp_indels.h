@@ -322,6 +322,81 @@ std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::
     return clusters;
 }
 
+std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::vector<hp_read_info_t>& hp_read_infos,
+    std::vector<int>& hp_run_lens, std::vector<sv_t*>& hp_indels, evidence_map_t* evidence_map, int seed) {
+
+    std::vector<hp_allele_cluster_t> clusters;
+    for (int allele_idx = 0; allele_idx < hp_indels.size(); allele_idx++) {
+        clusters.push_back(hp_allele_cluster_t(allele_idx, hp_run_lens[allele_idx]));
+    }
+    int ref_allele_idx = hp_indels.size();
+    clusters.push_back(hp_allele_cluster_t(ref_allele_idx, hp_run_lens[ref_allele_idx]));
+
+    for (const hp_read_info_t& hp_read_info : hp_read_infos) {
+        bool assigned = false;
+        for (int allele_idx = 0; allele_idx < hp_indels.size(); allele_idx++) {
+            if (evidence_map->is_read_assigned_to_this_sv(hp_read_info.read, hp_indels[allele_idx])) {
+                clusters[allele_idx].reads.push_back(hp_read_info);
+                assigned = true;
+                break;
+            }
+        }
+        if (!assigned) {
+            clusters[ref_allele_idx].reads.push_back(hp_read_info);
+        }
+    }
+
+    std::stable_sort(clusters.begin(), clusters.end(), [](const hp_allele_cluster_t& a, const hp_allele_cluster_t& b) {
+        return a.reads.size() > b.reads.size();
+    });
+    clusters.erase(std::remove_if(clusters.begin(), clusters.end(), [](const hp_allele_cluster_t& cluster) {
+        return cluster.reads.empty();
+    }), clusters.end());
+    if (clusters.size() > 2) {
+        std::vector<hp_read_info_t> discarded_reads;
+        for (int i = 2; i < clusters.size(); i++) {
+            discarded_reads.insert(discarded_reads.end(), clusters[i].reads.begin(), clusters[i].reads.end());
+        }
+        clusters.erase(clusters.begin()+2, clusters.end());
+
+        if (clusters[0].allele_len != clusters[1].allele_len) {
+            for (const hp_read_info_t& hp_read_info : discarded_reads) {
+                int dist0 = abs(hp_read_info.hp_len - clusters[0].allele_len);
+                int dist1 = abs(hp_read_info.hp_len - clusters[1].allele_len);
+                int cluster_idx = 0;
+                if (dist1 < dist0 || (dist1 == dist0 && clusters[1].allele_len < clusters[0].allele_len)) {
+                    cluster_idx = 1;
+                }
+                clusters[cluster_idx].reads.push_back(hp_read_info);
+            }
+        } else {
+            // This mimicks the behavior of evidence_map.load
+            // Ambiguous reads are randomly assigned to one of the two clusters, weighted by the number of unique reads in each cluster
+            // Clusters with less than 3 unique reads are treated as having 0 weight, and all ambiguous reads are assigned to the other cluster
+            // However, if both clusters have less than 3 unique reads, all ambiguous reads are assigned to the cluster (i.e., variant) with the higher EPR
+            int n0 = clusters[0].reads.size(), n1 = clusters[1].reads.size();
+            if (n0 < 3) n0 = 0;
+            if (n1 < 3) n1 = 0;
+            int total_n = n0+n1;
+            if (total_n == 0) {
+                int cluster_idx = hp_indels[clusters[0].allele_idx]->sample_info.epr >= hp_indels[clusters[1].allele_idx]->sample_info.epr ? 0 : 1;
+                for (const hp_read_info_t& hp_read_info : discarded_reads) {
+                    clusters[cluster_idx].reads.push_back(hp_read_info);
+                }
+            } else {
+                std::mt19937 gen(seed);
+                std::uniform_int_distribution<> dis(1, total_n);
+                for (const hp_read_info_t& hp_read_info : discarded_reads) {
+                    int cluster_idx = dis(gen) <= n0 ? 0 : 1;
+                    clusters[cluster_idx].reads.push_back(hp_read_info);
+                }
+            }
+        }
+    }
+
+    return clusters;
+}
+
 
 // TODO: replace with the fast SIMD version in sw_utils.h
 // For clipped tails, place the tail at its best ungapped offset in the local reference window.
@@ -589,7 +664,7 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
         get_left_clip_size(aln) > 0, get_right_clip_size(aln) > 0, read);
 }
 
-std::vector<int> calculate_aln_scores(std::vector<hp_read_info_t>& hp_read_infos, char* ref_seq, int ref_len, 
+std::vector<int> calculate_aln_scores(const std::vector<hp_read_info_t>& hp_read_infos, char* ref_seq, int ref_len, 
     StripedSmithWaterman::Aligner& aligner) {
     std::vector<int> scores;
     scores.reserve(hp_read_infos.size());
@@ -820,7 +895,9 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     hp_run_lens.push_back(ref_hp_range.end - ref_hp_range.beg); // hp_run_lens[hp_indels.size()] corresponds to the reference allele
 
     // Cluster reads into up to two clusters around the candidate allele HP lengths
-    std::vector<hp_allele_cluster_t> clusters = cluster_reads_by_nearest_allele_len(hp_read_infos, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
+    std::vector<hp_allele_cluster_t> clusters = reassign_evidence ?
+        cluster_reads_by_nearest_allele_len(hp_read_infos, hp_run_lens, hp_indels, evidence_map, config.seed) :
+        cluster_reads_by_nearest_allele_len(hp_read_infos, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
 
     int ref_reads = 0;
     std::vector<bp_support_read_t> ref_good_reads;
@@ -840,8 +917,9 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         const std::vector<hp_read_info_t>& cluster = allele_cluster.reads;
 
         std::vector<hp_read_info_t> good_hp_read_infos;
-        std::vector<bp_support_read_t> good_reads, good_reads_non_rescued;
+        std::vector<bp_support_read_t> all_reads, good_reads, good_reads_non_rescued;
         for (const hp_read_info_t& hp_read_info : cluster) {
+            all_reads.push_back(hp_read_info.read);
             if (hp_read_info.is_good_read(config.min_clip_len, MAX_TAIL_MISMATCH_RATE)) {
                 good_hp_read_infos.push_back(hp_read_info);
                 good_reads.push_back(hp_read_info.read);
@@ -851,27 +929,38 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             }
         }
 
-        int best_allele_idx = allele_cluster.allele_idx;
-        std::vector<bool> is_exact_match;
-        for (const hp_read_info_t& hp_read_info : good_hp_read_infos) {
-            is_exact_match.push_back(hp_read_info.hp_len == hp_run_lens[best_allele_idx]);
+        std::vector<int> best_allele_idxs = {allele_cluster.allele_idx};
+        if (!reassign_evidence) {
+            best_allele_idxs.clear();
+            for (int allele_idx = 0; allele_idx < hp_run_lens.size(); allele_idx++) {
+                if (hp_run_lens[allele_idx] == allele_cluster.allele_len) {
+                    best_allele_idxs.push_back(allele_idx);
+                }
+            }
         }
 
-        if (best_allele_idx == hp_run_lens.size() - 1) {
-            // Cluster best matches the reference allele
-            ref_reads += cluster.size();
-            ref_good_reads.insert(ref_good_reads.end(), good_reads.begin(), good_reads.end());
-            ref_is_exact_match.insert(ref_is_exact_match.end(), is_exact_match.begin(), is_exact_match.end());
-        } else {
-            // Cluster best matches an indel allele, so assign its reads to that allele
-            alt_reads[best_allele_idx] += cluster.size();
-            alt_assigned_hp_read_infos[best_allele_idx].insert(alt_assigned_hp_read_infos[best_allele_idx].end(), cluster.begin(), cluster.end());
-            alt_good_reads[best_allele_idx].insert(alt_good_reads[best_allele_idx].end(), good_reads.begin(), good_reads.end());
-            alt_good_reads_non_rescued[best_allele_idx].insert(alt_good_reads_non_rescued[best_allele_idx].end(), good_reads_non_rescued.begin(), good_reads_non_rescued.end());
-            alt_is_exact_match[best_allele_idx].insert(alt_is_exact_match[best_allele_idx].end(), is_exact_match.begin(), is_exact_match.end());
+        std::vector<bool> is_exact_match;
+        for (const hp_read_info_t& hp_read_info : good_hp_read_infos) {
+            is_exact_match.push_back(hp_read_info.hp_len == allele_cluster.allele_len);
+        }
 
-            std::vector<int> alt_scores = calculate_aln_scores(good_hp_read_infos, alt_alleles[best_allele_idx].get(), alt_allele_lens[best_allele_idx], aligner);
-            if (evidence_logger) evidence_logger->log_reads_associations(hp_indels[best_allele_idx]->id, 1, good_reads, alt_scores);
+        for (int best_allele_idx : best_allele_idxs) {
+            if (best_allele_idx == hp_run_lens.size() - 1) {
+                // Cluster best matches the reference allele
+                ref_reads += cluster.size();
+                ref_good_reads.insert(ref_good_reads.end(), good_reads.begin(), good_reads.end());
+                ref_is_exact_match.insert(ref_is_exact_match.end(), is_exact_match.begin(), is_exact_match.end());
+            } else {
+                // Cluster best matches an indel allele, so assign its reads to that allele
+                alt_reads[best_allele_idx] += cluster.size();
+                alt_assigned_hp_read_infos[best_allele_idx].insert(alt_assigned_hp_read_infos[best_allele_idx].end(), cluster.begin(), cluster.end());
+                alt_good_reads[best_allele_idx].insert(alt_good_reads[best_allele_idx].end(), good_reads.begin(), good_reads.end());
+                alt_good_reads_non_rescued[best_allele_idx].insert(alt_good_reads_non_rescued[best_allele_idx].end(), good_reads_non_rescued.begin(), good_reads_non_rescued.end());
+                alt_is_exact_match[best_allele_idx].insert(alt_is_exact_match[best_allele_idx].end(), is_exact_match.begin(), is_exact_match.end());
+
+                std::vector<int> alt_scores = calculate_aln_scores(cluster, alt_alleles[best_allele_idx].get(), alt_allele_lens[best_allele_idx], aligner);
+                if (evidence_logger) evidence_logger->log_reads_associations(hp_indels[best_allele_idx]->id, 1, all_reads, alt_scores);
+            }
         }
     }
 
