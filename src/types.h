@@ -137,10 +137,12 @@ struct consensus_t {
 };
 
 struct snp_t {
+    std::string chr;
     hts_pos_t pos;
     char alt_base;
 
     snp_t(hts_pos_t pos, char alt_base) : pos(pos), alt_base(alt_base) {}
+    snp_t(std::string chr, hts_pos_t pos, char alt_base) : chr(chr), pos(pos), alt_base(alt_base) {}
     snp_t(std::string& snp_str) {
         size_t colon_pos = snp_str.find(':');
         pos = std::stoll(snp_str.substr(0, colon_pos)) - 1;
@@ -148,6 +150,7 @@ struct snp_t {
     }
 
     std::string unique_key() const {
+        if (!chr.empty()) return "SNP:" + chr + ":" + std::to_string(pos) + ":" + alt_base;
         return "SNP:" + std::to_string(pos) + ":" + alt_base;
     }
 };

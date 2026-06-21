@@ -472,7 +472,46 @@ bool is_known_het_alt(sv_t* sv) {
 		sv->allele_count(1) == 1;
 }
 
-std::unordered_map<std::string, int> make_benchmark_match_capacity(const std::vector<std::shared_ptr<sv_t>>& svs, int aux_radius) {
+bool is_known_het_alt_gt(const std::vector<int>& gt) {
+	if (gt.size() != 2) return false;
+	int alt_alleles = 0;
+	for (int allele : gt) {
+		if (bcf_gt_is_missing(allele)) return false;
+		alt_alleles += (bcf_gt_allele(allele) == 1);
+	}
+	return alt_alleles == 1;
+}
+
+std::vector<snp_t> read_het_benchmark_snps(const std::string& filename) {
+	std::vector<snp_t> snps;
+	htsFile* file = bcf_open(filename.c_str(), "r");
+	if (file == NULL) {
+		throw std::runtime_error("Error: could not open file " + filename);
+	}
+
+	bcf_hdr_t* hdr = bcf_hdr_read(file);
+	if (hdr == NULL) {
+		bcf_close(file);
+		throw std::runtime_error("Error: could not read header from file " + filename);
+	}
+
+	bcf1_t* record = bcf_init();
+	while (bcf_read(file, hdr, record) == 0) {
+		std::string svtype = get_sv_type(hdr, record);
+		if (svtype != "SNP" && svtype != "SNV") continue;
+		if (!is_known_het_alt_gt(get_bcf_gt(hdr, record))) continue;
+
+		bcf_unpack(record, BCF_UN_STR);
+		snps.push_back(snp_t(bcf_seqname_safe(hdr, record), record->pos, record->d.allele[1][0]));
+	}
+
+	bcf_destroy(record);
+	bcf_hdr_destroy(hdr);
+	bcf_close(file);
+	return snps;
+}
+
+std::unordered_map<std::string, int> make_benchmark_match_capacity(const std::vector<std::shared_ptr<sv_t>>& svs, std::vector<snp_t>& benchmark_het_snps, int aux_radius) {
 
 	std::unordered_map<std::string, int> benchmark_match_capacity;
 	for (const std::shared_ptr<sv_t>& sv : svs) {
@@ -480,33 +519,26 @@ std::unordered_map<std::string, int> make_benchmark_match_capacity(const std::ve
 	}
 	if (aux_radius <= 0) return benchmark_match_capacity;
 
-	std::unordered_map<std::string, std::vector<Interval<std::shared_ptr<sv_t>>>> het_ivals_by_chr;
+	std::unordered_map<std::string, std::vector<Interval<bool, hts_pos_t>>> het_ivals_by_chr;
 	for (const std::shared_ptr<sv_t>& sv : svs) {
 		if (!is_known_het_alt(sv.get())) continue;
 
-		het_ivals_by_chr[sv->chr].push_back(Interval<std::shared_ptr<sv_t>>(sv->start-aux_radius, sv->end+aux_radius, sv));
+		het_ivals_by_chr[sv->chr].push_back(Interval<bool, hts_pos_t>(sv->start-aux_radius, sv->end+aux_radius, true));
+	}
+	for (const snp_t& snp : benchmark_het_snps) {
+		het_ivals_by_chr[snp.chr].push_back(Interval<bool, hts_pos_t>(std::max(hts_pos_t(0), snp.pos-aux_radius), snp.pos+aux_radius, true));
 	}
 
-	std::unordered_map<std::string, IntervalTree<std::shared_ptr<sv_t>>*> het_itrees;
+	std::unordered_map<std::string, IntervalTree<bool, hts_pos_t>*> het_itrees;
 	for (auto& chr_windows : het_ivals_by_chr) {
-		het_itrees[chr_windows.first] = new IntervalTree<std::shared_ptr<sv_t>>(chr_windows.second);
+		het_itrees[chr_windows.first] = new IntervalTree<bool, hts_pos_t>(chr_windows.second);
 	}
 
 	for (const std::shared_ptr<sv_t>& sv : svs) {
 		if (!is_known_hom_alt(sv.get())) continue;
 
-		bool has_nearby_het = false;
 		auto het_it = het_itrees.find(sv->chr);
-		if (het_it != het_itrees.end()) {
-			for (const Interval<std::shared_ptr<sv_t>>& iv : het_it->second->findOverlapping(sv->start, sv->end)) {
-				if (iv.value->id != sv->id) {
-					has_nearby_het = true;
-					break;
-				}
-			}
-		}
-
-		if (has_nearby_het) {
+		if (het_it != het_itrees.end() && !het_it->second->findOverlapping(sv->start, sv->end).empty()) {
 			benchmark_match_capacity[sv->id] = 2;
 		}
 	}
@@ -743,7 +775,11 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	std::unordered_map<std::string, int> benchmark_match_capacity = make_benchmark_match_capacity(benchmark_svs, hom_alt_split_radius);
+	std::vector<snp_t> benchmark_het_snps;
+	if (hom_alt_split_radius > 0) {
+		benchmark_het_snps = read_het_benchmark_snps(benchmark_fname);
+	}
+	std::unordered_map<std::string, int> benchmark_match_capacity = make_benchmark_match_capacity(benchmark_svs, benchmark_het_snps, hom_alt_split_radius);
 
 	if (parsed_args.count("reference")) {
 		std::string ref_fname = parsed_args["reference"].as<std::string>();
