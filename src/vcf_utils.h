@@ -513,6 +513,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "PPR");
 	const char* ppr_tag = "##FORMAT=<ID=PPR,Number=1,Type=Float,Description=\"Probability of the SV to be the primary call, according to the ML model.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ppr_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "EREFA");
+	const char* erefa_tag = "##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description=\"Whether the GT-stage classifier requires the other allele to be reference.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, erefa_tag, &len));
 }
 
 bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name, config_t config, std::string command) {

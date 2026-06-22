@@ -27,7 +27,7 @@ class Classifier:
         with open(classes_fname) as f:
             return np.array([int(x) for x in f.read().split()], dtype=np.int32)
 
-    def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, out_vcf_fname, stats_fname):
+    def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, svid_to_erefa, out_vcf_fname, stats_fname):
         stats = features.load_stats(stats_fname)
 
         vcf_writer = pysam.VariantFile(out_vcf_fname, 'wz', header=vcf_header)
@@ -38,6 +38,7 @@ class Classifier:
                 record.samples[0]['HOPR'] = None
                 record.samples[0]['EXPR'] = None
                 record.samples[0]['PPR'] = None
+                record.samples[0]['EREFA'] = None
                 record_id = features.Features.generate_id(record)
                 if record_id in svid_to_gt:
                     gt = (svid_to_gt[record_id]//2, 1 if svid_to_gt[record_id] >= 1 else 0)
@@ -54,6 +55,8 @@ class Classifier:
                         record.samples[0]['EXPR'] = float(svid_to_expr[record_id])
                     if record_id in svid_to_ppr:
                         record.samples[0]['PPR'] = float(svid_to_ppr[record_id])
+                    if record_id in svid_to_erefa:
+                        record.samples[0]['EREFA'] = int(svid_to_erefa[record_id])
                 else:
                     record.samples[0]['GT'] = (None, None)
                 vcf_writer.write(record)
@@ -74,7 +77,7 @@ class Classifier:
         print("Feature parsing was run in %.2f seconds" % parse_elapsed)
 
         svid_to_gt = dict()
-        svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr = dict(), dict(), dict(), dict()
+        svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, svid_to_erefa = dict(), dict(), dict(), dict(), dict()
         for model_name in test_data:
             model_start_time = timeit.default_timer()
             model_file = os.path.join(model_dir, "yes_or_no", model_name + '.ubj')
@@ -114,6 +117,7 @@ class Classifier:
             for i in range(len(predictions)):
                 predicted_gt_class = gt_stage_classes[predictions[i]] if gt_stage_classes is not None else predictions[i]
                 svid_to_gt[positive_variant_ids[i]] = 2 if predicted_gt_class == 2 else 1
+                svid_to_erefa[positive_variant_ids[i]] = 1 if predicted_gt_class == 0 else 0
                 hom_alt_class_idx = np.where(gt_stage_classes == 2)[0][0] if gt_stage_classes is not None and 2 in gt_stage_classes else hoprs.shape[1]-1
                 svid_to_hopr[positive_variant_ids[i]] = hoprs[i][hom_alt_class_idx]
 
@@ -144,7 +148,9 @@ class Classifier:
             header.add_line('##FORMAT=<ID=EXPR,Number=1,Type=Float,Description="Probability of the SV to be represented exactly, according to the ML model.">')
         if 'PPR' not in header.formats:
             header.add_line('##FORMAT=<ID=PPR,Number=1,Type=Float,Description="Probability of the SV to be the primary call, according to the ML model.">')
-        Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, out_vcf, stats_fname)
+        if 'EREFA' not in header.formats:
+            header.add_line('##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description="Whether the GT-stage classifier requires the other allele to be reference.">')
+        Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, svid_to_erefa, out_vcf, stats_fname)
         write_elapsed = timeit.default_timer() - write_start_time
         print("VCF writing was run in %.2f seconds" % write_elapsed)
 
