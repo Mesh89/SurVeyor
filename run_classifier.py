@@ -20,6 +20,13 @@ class Classifier:
                 feature_names_by_model[model_name] = [line.strip() for line in f if line.strip()]
         return feature_names_by_model
 
+    def load_classes_file(model_fname):
+        classes_fname = os.path.splitext(model_fname)[0] + ".classes"
+        if not os.path.exists(classes_fname):
+            return None
+        with open(classes_fname) as f:
+            return np.array([int(x) for x in f.read().split()], dtype=np.int32)
+
     def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, out_vcf_fname, stats_fname):
         stats = features.load_stats(stats_fname)
 
@@ -101,11 +108,14 @@ class Classifier:
 
             model_file = os.path.join(model_dir, "gts", model_name + '.ubj')
             classifier.load_model(model_file)
+            gt_stage_classes = Classifier.load_classes_file(model_file)
             predictions = classifier.predict(positive_data)
             hoprs = classifier.predict_proba(positive_data)
             for i in range(len(predictions)):
-                svid_to_gt[positive_variant_ids[i]] = predictions[i] + 1
-                svid_to_hopr[positive_variant_ids[i]] = hoprs[i][1]
+                predicted_gt_class = gt_stage_classes[predictions[i]] if gt_stage_classes is not None else predictions[i]
+                svid_to_gt[positive_variant_ids[i]] = 2 if predicted_gt_class == 2 else 1
+                hom_alt_class_idx = np.where(gt_stage_classes == 2)[0][0] if gt_stage_classes is not None and 2 in gt_stage_classes else hoprs.shape[1]-1
+                svid_to_hopr[positive_variant_ids[i]] = hoprs[i][hom_alt_class_idx]
 
             model_file = os.path.join(model_dir, "exact", model_name + ".ubj")
             if os.path.exists(model_file):

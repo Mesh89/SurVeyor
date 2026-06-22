@@ -22,6 +22,16 @@ def write_features_file(model_fname, features_names):
         for feature_name in features_names:
             f.write(feature_name + "\n")
 
+def write_classes_file(model_fname, classes):
+    classes_fname = os.path.splitext(model_fname)[0] + ".classes"
+    with open(classes_fname, "w") as f:
+        f.write(" ".join(str(int(c)) for c in classes) + "\n")
+
+def make_classifier():
+    if cmd_args.cross_species:
+        return xgb.XGBClassifier(n_estimators=50, max_depth=7, min_child_weight=42, learning_rate=0.1, n_jobs=cmd_args.threads, random_state=42, tree_method='hist')
+    return xgb.XGBClassifier(n_estimators=1000, max_depth=8, min_child_weight=16, learning_rate=0.1, n_jobs=cmd_args.threads, random_state=42, tree_method='hist')
+
 def compute_keep_indices(X):
     keep_indices = []
     for i in range(X.shape[1]):
@@ -128,12 +138,8 @@ if __name__ == '__main__':
         if len(unique_labels) == 1:
             raise RuntimeError(f"Only one label ({unique_labels[0]}) present in yes/no training data for model {model_name}. Cannot train the first-stage classifier.")
 
-        if cmd_args.cross_species:
-            classifier = xgb.XGBClassifier(n_estimators=50, max_depth=7, min_child_weight=42, learning_rate=0.1, n_jobs=cmd_args.threads, random_state=42, tree_method='hist')
-        else:
-            classifier = xgb.XGBClassifier(n_estimators=1000, max_depth=8, min_child_weight=16, learning_rate=0.1, n_jobs=cmd_args.threads, random_state=42, tree_method='hist')
-
         start_time = time.time()
+        classifier = make_classifier()
         classifier.fit(training_data[model_name], training_labels)
 
         importances = classifier.feature_importances_
@@ -148,17 +154,21 @@ if __name__ == '__main__':
 
         known_positive_mask = features.gt_is_known_positive_array(training_gts[model_name])
         positive_training_data = training_data[model_name][known_positive_mask]
-        positive_training_labels = features.gt_is_hom_alt_array(training_gts[model_name][known_positive_mask]).astype(int)
+        positive_training_labels = np.array([features.gt_stage_label(gt) for gt in training_gts[model_name][known_positive_mask]], dtype=np.int32)
 
         if len(positive_training_data) == 0:
             raise RuntimeError(f"No known positive training examples found for model {model_name}. Cannot train the GT-stage classifier.")
 
+        gt_stage_classes = np.unique(positive_training_labels)
+        positive_training_labels = np.searchsorted(gt_stage_classes, positive_training_labels).astype(np.int32)
+
         unique_labels = np.unique(positive_training_labels)
         if len(unique_labels) == 1:
-            raise RuntimeError(f"Only one label ({unique_labels[0]}) present in positive training data for model {model_name}. Cannot train the GT-stage classifier.")
+            raise RuntimeError(f"Only one label ({gt_stage_classes[0]}) present in positive training data for model {model_name}. Cannot train the GT-stage classifier.")
 
         unique, counts = np.unique(positive_training_labels, return_counts=True)
 
+        classifier = make_classifier()
         classifier.fit(positive_training_data, positive_training_labels)
 
         importances = classifier.feature_importances_
@@ -170,6 +180,7 @@ if __name__ == '__main__':
         model_fname = os.path.join(gts_outdir, model_name + ".ubj")
         classifier.save_model(model_fname)
         write_features_file(model_fname, features_names)
+        write_classes_file(model_fname, gt_stage_classes)
 
         if model_name == "HP" or model_name.startswith("DEL") or model_name.startswith("INS"):
             exact_start_time = time.time()
@@ -190,6 +201,7 @@ if __name__ == '__main__':
             n_exact = np.sum(exact_training_labels == 1)
             n_inexact = np.sum(exact_training_labels == 0)
 	            
+            classifier = make_classifier()
             classifier.fit(exact_training_data, exact_training_labels)
 
             importances = classifier.feature_importances_
@@ -219,6 +231,7 @@ if __name__ == '__main__':
                     "Cannot train the primary-stage classifier."
                 )
 
+            classifier = make_classifier()
             classifier.fit(primary_training_data, primary_training_labels)
 
             importances = classifier.feature_importances_

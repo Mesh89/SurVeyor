@@ -801,6 +801,15 @@ def gt_is_hom_alt(gt):
     alleles = gt_alleles(gt)
     return len(alleles) > 0 and all(allele == "1" for allele in alleles)
 
+def gt_stage_label(gt):
+    if gt == "0/1":
+        return 0
+    if gt == "1/2":
+        return 1
+    if gt == "1/1":
+        return 2
+    raise RuntimeError(f"Unsupported GT-stage label: {gt}")
+
 def gt_has_alt_array(gts):
     return np.array([gt_has_alt(gt) for gt in gts])
 
@@ -822,8 +831,6 @@ def read_gt_labels(file_path):
             if len(fields) != 4:
                 raise RuntimeError(f"Malformed genotype labels line in {file_path}: {' '.join(fields)}")
             id, gt, exact, primary = fields[0], fields[1], int(fields[2]), int(fields[3])
-            if gt == "1/2":
-                gt = "0/1"
             if id not in gt_labels:
                 gt_labels[id] = (gt, exact, primary)
             else:
