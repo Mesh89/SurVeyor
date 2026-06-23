@@ -133,24 +133,23 @@ struct evidence_map_t {
         std::string sv_id, read_name;
         int bp, score;
 
-        // tuple fields are: score of the first best association found, sv_id of that association, 
-        // whether the association is unique or not, hpid of that association
-        std::unordered_map<std::string, std::tuple<int, std::string, bool, int>> read_to_best_assoc_map;
+        // tuple fields are: score of the best association found, whether the
+        // association is unique or not, hpid of that association
+        // note that unique means that there is a single best association to a HPID
+        std::unordered_map<std::string, std::tuple<int, bool, int>> read_to_best_assoc_map;
 
         // For each read, find the best association. Furthermore, flag reads that have a "best" association to multiple SVs
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score) {
             sv_id = remove_svid_dup_suffix(sv_id);
             if (!read_to_best_assoc_map.count(read_name)) {
-                read_to_best_assoc_map[read_name] = {score, sv_id, true, sv_hpid_map[sv_id]};
+                read_to_best_assoc_map[read_name] = {score, true, sv_hpid_map[sv_id]};
             } else {
                 auto& curr_best_assoc = read_to_best_assoc_map[read_name];
                 int& best_score = std::get<0>(curr_best_assoc);
-                std::string& best_sv_id = std::get<1>(curr_best_assoc);
-                bool& unique = std::get<2>(curr_best_assoc);
-                int& best_hpid = std::get<3>(curr_best_assoc);
+                bool& unique = std::get<1>(curr_best_assoc);
+                int& best_hpid = std::get<2>(curr_best_assoc);
                 if (score > best_score) {
                     best_score = score;
-                    best_sv_id = sv_id;
                     best_hpid = sv_hpid_map[sv_id];
                     unique = true;
                 } else if (score == best_score && sv_hpid_map[sv_id] != best_hpid) {
@@ -163,29 +162,34 @@ struct evidence_map_t {
         alt_reads_association_fin.clear();
         alt_reads_association_fin.seekg(0, std::ios::beg);
 
-        // Now, for each SV, we calculate a score S that is the sum of scores of reads that have a (not necessarily unique) 
-        // best association to that SV
-        // Then, we assign reads as follows: 
-        // - we assign each read with a unique best association to that SV (let us call their number U)
-        // - when a read has multiple equally good best associations, we keep the best two in terms of S. Then,
-        //   we assign the read to one of the two randomly, with probability proportional to the number U of each SV
+        // Now, for each SV, we calculate U, the number of reads with a unique best
+        // association to that SV.
+        // Then, we assign reads as follows:
+        // - we assign each read with a unique best association to that SV
+        // - when a read has multiple equally good best associations, we keep the best two
+        //   in terms of U, breaking U ties by EPR. Then, we assign the read to one of
+        //   the two randomly, with probability proportional to the number U of each SV
         //   (e.g., if SV1 has U=6 and SV2 has U=4, then the read is assigned to SV1 with probability 0.6 and to SV2 with probability 0.4)
 
         using sv_with_bp_t = std::pair<std::string, int>;
-        std::unordered_map<std::string, int> sv_to_S_map;
         std::unordered_map<std::string, int> sv_to_U_map;
+        std::unordered_map<int, int> hpid_to_U_map;
+        for (const auto& kv : read_to_best_assoc_map) {
+            const auto& best_assoc = kv.second;
+            bool unique = std::get<1>(best_assoc);
+            if (unique) {
+                int best_hpid = std::get<2>(best_assoc);
+                hpid_to_U_map[best_hpid] += 1;
+            }
+        }
         std::unordered_map<std::string, std::vector<sv_with_bp_t>> read_to_multiple_svs; // only for reads with multiple best associations
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score) {
             sv_id = remove_svid_dup_suffix(sv_id);
             auto& best_assoc = read_to_best_assoc_map[read_name];
             int best_score = std::get<0>(best_assoc);
-            int best_hpid = std::get<3>(best_assoc);
+            int best_hpid = std::get<2>(best_assoc);
             if (score == best_score) {
-                sv_to_S_map[sv_id] += score;
-            }
-
-            if (score == best_score) {
-                bool unique = std::get<2>(best_assoc);
+                bool unique = std::get<1>(best_assoc);
                 if (unique) {
                     sv_to_U_map[sv_id] += 1;
                     read_to_hpid_map[read_name] = sv_hpid_map[sv_id];
@@ -202,39 +206,35 @@ struct evidence_map_t {
         for (auto& kv : read_to_multiple_svs) {
             std::string read_name = kv.first;
             std::vector<sv_with_bp_t>& sv_w_bps = kv.second;
-            // find top two svs in terms of S
-            std::vector<std::pair<int, sv_with_bp_t>> sv_S_vec;
+            // Find top two SVs in terms of U, breaking U ties by EPR.
+            std::vector<std::pair<std::pair<int, float>, sv_with_bp_t>> sv_U_vec;
             for (const auto& sv_w_bp : sv_w_bps) {
-                sv_S_vec.push_back({sv_to_S_map[sv_w_bp.first], sv_w_bp});
+                int U = sv_to_U_map[sv_w_bp.first];
+                U = hpid_to_U_map[sv_hpid_map[sv_w_bp.first]];
+                sv_U_vec.push_back({{U, sv_epr_map[sv_w_bp.first]}, sv_w_bp});
             }
-            std::sort(sv_S_vec.begin(), sv_S_vec.end(), std::greater<std::pair<int, sv_with_bp_t>>());
-            sv_with_bp_t sv1 = sv_S_vec[0].second;
-            
+            std::sort(sv_U_vec.begin(), sv_U_vec.end(), std::greater<std::pair<std::pair<int, float>, sv_with_bp_t>>());
+            sv_with_bp_t sv1 = sv_U_vec[0].second;
+
             // pick best SV that has a different HPID than sv1 (if any)
             size_t sv2_idx = 1;
-            while (sv2_idx < sv_S_vec.size() && sv_hpid_map[sv_S_vec[sv2_idx].second.first] == sv_hpid_map[sv1.first]) {
+            while (sv2_idx < sv_U_vec.size() && sv_hpid_map[sv_U_vec[sv2_idx].second.first] == sv_hpid_map[sv1.first]) {
                 sv2_idx++;
             }
-            if (sv2_idx == sv_S_vec.size()) {
+            if (sv2_idx == sv_U_vec.size()) {
                 read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
                 continue;
             }
-            sv_with_bp_t sv2 = sv_S_vec[sv2_idx].second;
+            sv_with_bp_t sv2 = sv_U_vec[sv2_idx].second;
 
-            int U1 = sv_to_U_map[sv1.first];
-            int U2 = sv_to_U_map[sv2.first];
+            int U1 = sv_U_vec[0].first.first;
+            int U2 = sv_U_vec[sv2_idx].first.first;
             if (U1 < 3) U1 = 0; // we require a minimum number of 3 uniquely assigned reads
-            if (U2 < 3) U2 = 0;
+            if (U2 < 3) U2 = 0; // we require a minimum number of 3 uniquely assigned reads
             int total_U = U1 + U2;
             if (total_U == 0) {
-                // assign to the highest EPR SV
-                float epr1 = sv_epr_map[sv1.first];
-                float epr2 = sv_epr_map[sv2.first];
-                if (epr1 >= epr2) {
-                    read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
-                } else {
-                    read_to_hpid_map[read_name] = sv_hpid_map[sv2.first];
-                }
+                // assign to the highest EPR SV that is tied by U
+                read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
             } else {
                 std::uniform_int_distribution<> dis(1, total_U);
                 int r = dis(gen);
