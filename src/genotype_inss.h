@@ -106,6 +106,8 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     std::vector<std::shared_ptr<bam1_t>> alt_bp1_better_reads, alt_bp2_better_reads, ref_bp1_better_reads, ref_bp2_better_reads;
     std::vector<int> alt_bp1_better_read_positions, alt_bp2_better_read_positions;
     std::vector<int> alt_bp1_better_scores, alt_bp2_better_scores;
+    hts_pos_t alt_bp1_pos = alt_lf_len;
+    hts_pos_t alt_bp2_pos = alt_bp2_len - alt_rf_len;
 
     StripedSmithWaterman::Filter filter_with_pos(true, false, 0, 32767);
     StripedSmithWaterman::Filter filter_with_pos_and_cigar(true, true, 0, 32767);
@@ -121,12 +123,14 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         // align to ALT
         aligner.Align(seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, &alt1_aln, 0);
         aligner.Align(seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_pos, &alt2_aln, 0);
+        bool alt1_covers_bp1 = alt1_aln.ref_begin <= alt_bp1_pos && alt1_aln.ref_end >= alt_bp1_pos;
+        bool alt2_covers_bp2 = alt2_aln.ref_begin <= alt_bp2_pos && alt2_aln.ref_end >= alt_bp2_pos;
         
         if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) {
-            if (alt1_aln.sw_score >= alt2_aln.sw_score) {
+            if (alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
                 ins->sample_info.assigned_to_other_sv_bp1_reads++;
             }
-            if (alt1_aln.sw_score <= alt2_aln.sw_score) {
+            if (alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
                 ins->sample_info.assigned_to_other_sv_bp2_reads++;
             }
             continue;
@@ -139,17 +143,17 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         StripedSmithWaterman::Alignment& alt_aln = alt1_aln.sw_score >= alt2_aln.sw_score ? alt1_aln : alt2_aln;
         StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
         if (alt_aln.sw_score > ref_aln.sw_score) {
-            if (alt1_aln.sw_score >= alt2_aln.sw_score) {
+            if (alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
                 alt_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
                 alt_bp1_better_scores.push_back(alt1_aln.sw_score);
                 alt_bp1_better_read_positions.push_back(alt1_aln.ref_begin);
             }
-            if (alt1_aln.sw_score <= alt2_aln.sw_score) {
+            if (alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
                 alt_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
                 alt_bp2_better_scores.push_back(alt2_aln.sw_score);
                 alt_bp2_better_read_positions.push_back(alt2_aln.ref_begin);
             }
-        } else if (alt_aln.sw_score < ref_aln.sw_score) {
+        } else if (alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln)) {
             if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= ref_bp1_pos && ref1_aln.ref_end >= ref_bp1_pos) {
                 ref_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }
