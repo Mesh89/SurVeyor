@@ -423,7 +423,7 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
 
     normalise_cmd = SURVEYOR_PATH + "/bin/normalise %s/intermediate_results/out.vcf.gz %s/intermediate_results/out.norm.vcf.gz %s %d %d %d" % (workdir, workdir, reference_fname, cmd_args.threads, cmd_args.min_sv_size, max_is)
     run_cmd(normalise_cmd)
-
+    
     expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/out.norm.hap.vcf.gz %s" % (workdir, workdir, reference_fname)
     run_cmd(expand_aux_haplotypes_cmd)
 
@@ -646,10 +646,10 @@ elif cmd_args.command == 'generate-training-data':
          open(final_gts_path, 'w') as final_gts_file:
         for line in tmp_gts_file:
             fields = line.strip().split()
-            id, gt, perfect, primary = fields[0], fields[1], fields[2], fields[3]
+            id, gt, perfect = fields[0], fields[1], fields[2]
             if id in unreliable_cids and "1" in gt:
                 gt = "./."
                 perfect = "0"
-            final_gts_file.write("%s %s %s %s\n" % (id, gt, perfect, primary))
+            final_gts_file.write("%s %s %s\n" % (id, gt, perfect))
 
     os.remove(os.path.join(cmd_args.outdir, cmd_args.samplename + ".gts.tmp"))

@@ -828,29 +828,18 @@ def read_gt_labels(file_path):
             fields = line.split()
             if not fields:
                 continue
-            if len(fields) != 4:
+            if len(fields) != 3:
                 raise RuntimeError(f"Malformed genotype labels line in {file_path}: {' '.join(fields)}")
-            id, gt, exact, primary = fields[0], fields[1], int(fields[2]), int(fields[3])
+            id, gt, exact = fields[0], fields[1], int(fields[2])
             if id not in gt_labels:
-                gt_labels[id] = (gt, exact, primary)
+                gt_labels[id] = (gt, exact)
             else:
-                prev_gt, prev_exact, prev_primary = gt_labels[id]
+                prev_gt, prev_exact = gt_labels[id]
                 gt_labels[id] = (
                     select_gt(prev_gt, gt),
                     max(prev_exact, exact),
-                    max(prev_primary, primary),
                 )
     return gt_labels
-
-def keep_primary(data_by_source, primary_by_source, *label_by_source):
-    for source in list(data_by_source):
-        mask = primary_by_source[source].astype(int) == 1
-        if label_by_source:
-            mask &= label_by_source[0][source] != "./."
-        data_by_source[source] = data_by_source[source][mask]
-        for labels in label_by_source:
-            labels[source] = labels[source][mask]
-    return (data_by_source, *label_by_source)
 
 def load_stats(stats_fname):
     stats = defaultdict(dict)
@@ -872,7 +861,7 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, ignore_gts = False, feature_name
     vcf_reader = pysam.VariantFile(vcf_fname)
     stats = load_stats(stats_fname)
 
-    features_by_source, gts_by_source, variant_ids_by_source, exacts_by_source, primaries_by_source = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
+    features_by_source, gts_by_source, variant_ids_by_source, exacts_by_source = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
     for record in vcf_reader.fetch():
         if Features.skips_ml_genotyping(record):
             continue
@@ -883,25 +872,22 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, ignore_gts = False, feature_name
         if ignore_gts:
             gt = "NA"
             exact = "NA"
-            primary = "NA"
         else:
             label = gt_labels.get(record.id)
             if label is None:
                 raise RuntimeError(f"Missing GT label for record {record.id} in {fp_fname}")
-            gt, exact, primary = label
+            gt, exact = label
         model_feature_names = None if feature_names_by_model is None else feature_names_by_model.get(model_name)
         feature_values = Features.record_to_features(record, stats, model_feature_names)
         features_by_source[model_name].append(feature_values)
         gts_by_source[model_name].append(gt)
         variant_ids_by_source[model_name].append(Features.generate_id(record))
         exacts_by_source[model_name].append(exact)
-        primaries_by_source[model_name].append(primary)
 
     for model_name in features_by_source:
         features_by_source[model_name] = np.array(features_by_source[model_name])
         gts_by_source[model_name] = np.array(gts_by_source[model_name])
         variant_ids_by_source[model_name] = np.array(variant_ids_by_source[model_name])
         exacts_by_source[model_name] = np.array(exacts_by_source[model_name])
-        primaries_by_source[model_name] = np.array(primaries_by_source[model_name])
     
-    return features_by_source, gts_by_source, variant_ids_by_source, exacts_by_source, primaries_by_source
+    return features_by_source, gts_by_source, variant_ids_by_source, exacts_by_source

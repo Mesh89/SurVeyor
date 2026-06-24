@@ -27,7 +27,7 @@ class Classifier:
         with open(classes_fname) as f:
             return np.array([int(x) for x in f.read().split()], dtype=np.int32)
 
-    def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, svid_to_erefa, out_vcf_fname, stats_fname):
+    def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, out_vcf_fname, stats_fname):
         stats = features.load_stats(stats_fname)
 
         vcf_writer = pysam.VariantFile(out_vcf_fname, 'wz', header=vcf_header)
@@ -37,7 +37,6 @@ class Classifier:
                 record.samples[0]['EPR'] = None
                 record.samples[0]['HOPR'] = None
                 record.samples[0]['EXPR'] = None
-                record.samples[0]['PPR'] = None
                 record.samples[0]['EREFA'] = None
                 record_id = features.Features.generate_id(record)
                 if record_id in svid_to_gt:
@@ -53,8 +52,6 @@ class Classifier:
                         record.samples[0]['HOPR'] = float(svid_to_hopr[record_id])
                     if record_id in svid_to_expr:
                         record.samples[0]['EXPR'] = float(svid_to_expr[record_id])
-                    if record_id in svid_to_ppr:
-                        record.samples[0]['PPR'] = float(svid_to_ppr[record_id])
                     if record_id in svid_to_erefa:
                         record.samples[0]['EREFA'] = int(svid_to_erefa[record_id])
                 else:
@@ -71,20 +68,18 @@ class Classifier:
 
         parse_start_time = timeit.default_timer()
         feature_names_by_model = Classifier.load_features_files(os.path.join(model_dir, "yes_or_no"))
-        test_data, _, test_variant_ids, _, _ = \
+        test_data, _, test_variant_ids, _ = \
             features.parse_vcf(in_vcf, stats_fname, "XXX", ignore_gts = True, feature_names_by_model = feature_names_by_model)
         parse_elapsed = timeit.default_timer() - parse_start_time
         print("Feature parsing was run in %.2f seconds" % parse_elapsed)
 
         svid_to_gt = dict()
-        svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, svid_to_erefa = dict(), dict(), dict(), dict(), dict()
+        svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa = dict(), dict(), dict(), dict()
         for model_name in test_data:
             model_start_time = timeit.default_timer()
             model_file = os.path.join(model_dir, "yes_or_no", model_name + '.ubj')
 
             if model_name.startswith("INV"):
-                model_elapsed = timeit.default_timer() - model_start_time
-                print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
                 continue
 
             classifier = xgb.XGBClassifier(n_jobs=threads)
@@ -96,8 +91,6 @@ class Classifier:
                 svid_to_epr[test_variant_ids[model_name][i]] = eprs[i][1]
 
             if len(test_data[model_name]) == 0:
-                model_elapsed = timeit.default_timer() - model_start_time
-                print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
                 continue
 
             positive_mask = (predictions == 1)
@@ -105,8 +98,6 @@ class Classifier:
             positive_variant_ids = test_variant_ids[model_name][positive_mask]
 
             if len(positive_data) == 0:
-                model_elapsed = timeit.default_timer() - model_start_time
-                print("Model %s was run in %.2f seconds" % (model_name, model_elapsed))
                 continue
 
             model_file = os.path.join(model_dir, "gts", model_name + '.ubj')
@@ -128,14 +119,6 @@ class Classifier:
                 for i in range(len(positive_variant_ids)):
                     svid_to_expr[positive_variant_ids[i]] = exprs[i][1]
 
-            model_file = os.path.join(model_dir, "primary", model_name + ".ubj")
-            if os.path.exists(model_file):
-                classifier.load_model(model_file)
-                pprs = classifier.predict_proba(positive_data)
-                for i in range(len(positive_variant_ids)):
-                    svid_to_ppr[positive_variant_ids[i]] = pprs[i][1]
-            model_elapsed = timeit.default_timer() - model_start_time
-
         # write the predictions to a VCF file
         write_start_time = timeit.default_timer()
         vcf_reader = pysam.VariantFile(in_vcf)
@@ -146,16 +129,11 @@ class Classifier:
             header.add_line('##FORMAT=<ID=HOPR,Number=1,Type=Float,Description="Probability of an existing SV to be homozygous, according to the ML model.">')
         if 'EXPR' not in header.formats:
             header.add_line('##FORMAT=<ID=EXPR,Number=1,Type=Float,Description="Probability of the SV to be represented exactly, according to the ML model.">')
-        if 'PPR' not in header.formats:
-            header.add_line('##FORMAT=<ID=PPR,Number=1,Type=Float,Description="Probability of the SV to be the primary call, according to the ML model.">')
         if 'EREFA' not in header.formats:
             header.add_line('##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description="Whether the GT-stage classifier requires the other allele to be reference.">')
-        Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_ppr, svid_to_erefa, out_vcf, stats_fname)
+        Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, out_vcf, stats_fname)
         write_elapsed = timeit.default_timer() - write_start_time
         print("VCF writing was run in %.2f seconds" % write_elapsed)
-
-        elapsed = timeit.default_timer() - start_time
-        print(cmd, "was run in %.2f seconds" % elapsed)
 
 if __name__ == "__main__":
     cmd_parser = argparse.ArgumentParser(description='Classify SVs using a built ML model.')

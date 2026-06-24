@@ -621,7 +621,7 @@ int main(int argc, char* argv[]) {
 		("wrong-gts", "Print pairs of matching SVs that have discordant genotypes.", cxxopts::value<std::string>())
 		("keep-all-benchmark", "Keep all variants in the benchmark file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
 		("keep-all-called", "Keep all variants in the called file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
-		("c,called-to-benchmark-gts", "For each called SV, report benchmark GT, exact-match status, and whether this is the primary assignment.", cxxopts::value<std::string>())
+		("c,called-to-benchmark-gts", "For each called SV, report benchmark GT and exact-match status.", cxxopts::value<std::string>())
 		("e,exclusive", "SV cannot be used in multiple matches.", cxxopts::value<bool>()->default_value("false"))
 		("ignore-ft", "Ignore the FT field, if present. Without this option, only SVs with FT=PASS or absent are considered.", cxxopts::value<bool>()->default_value("false"))
 		("t,threads", "Number of threads to use.", cxxopts::value<int>()->default_value("1"))
@@ -1016,10 +1016,10 @@ int main(int argc, char* argv[]) {
 			return gt;
 		};
 
-		// Selected non-missing benchmark matches are primary labels.
+		// Selected non-missing benchmark matches.
 		for (sv_match_t& match : accepted_matches) {
 			if (match.c_sv != NULL) {
-				called_to_benchmark_gts_fout << match.c_sv->id << " " << called_to_benchmark_gt(match) << " " << match.exact << " 1" << std::endl;
+				called_to_benchmark_gts_fout << match.c_sv->id << " " << called_to_benchmark_gt(match) << " " << match.exact << std::endl;
 				written_ids.insert(match.c_sv->id);
 			}
 		}
@@ -1036,20 +1036,20 @@ int main(int argc, char* argv[]) {
 		}
 
 		// these SVs matched to a benchmark SV, but another match for the benchmark SV was chosen instead
-		// report non-exact matches with the benchmark GT, but keep exact non-primary matches ignored
+		// report non-exact matches with the benchmark GT, but keep exact unselected matches ignored
 		for (std::string id : c_unchoosen_ids) {
 			sv_match_t* match = unchoosen_match_by_called[id];
-			called_to_benchmark_gts_fout << id << " " << "0/0 " << match->exact << " 0" << std::endl;
+			called_to_benchmark_gts_fout << id << " " << "./. " << match->exact << std::endl;
 			written_ids.insert(id);
 		}
 
-		// Not yet written SVs are either selected missing-GT matches or primary negatives.
+		// Not yet written SVs are either selected missing-GT matches or negatives.
 		for (const std::shared_ptr<sv_t>& csv : called_svs) {
 			if (written_ids.count(csv->id)) continue;
 			if (c_unknown.count(csv->id)) {
-				called_to_benchmark_gts_fout << csv->id << " " << "./. " << unknown_match_by_called[csv->id]->exact << " 1" << std::endl;
+				called_to_benchmark_gts_fout << csv->id << " " << "./. " << unknown_match_by_called[csv->id]->exact << std::endl;
 			} else {
-				called_to_benchmark_gts_fout << csv->id << " " << "0/0 0 1" << std::endl;
+				called_to_benchmark_gts_fout << csv->id << " " << "0/0 0" << std::endl;
 			}
 		}
 	}
