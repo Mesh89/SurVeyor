@@ -41,8 +41,6 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
     strncpy(alt_seq+alt_lh_len, del->ins_seq.c_str(), del->ins_seq.length());
     strncpy(alt_seq+alt_lh_len+del->ins_seq.length(), rh_seq, alt_rh_len);
     alt_seq[alt_len] = 0;
-    delete[] lh_seq;
-    delete[] rh_seq;
 
     // extract ref alleles - will be useful for consensus generation
     hts_pos_t ref_bp1_start = alt_start, ref_bp1_end = std::min(del_start+extend, contig_len);
@@ -52,12 +50,31 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
     strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
     ref_bp1_seq[ref_bp1_len] = 0;
 
+    hts_pos_t del_len = del_end - del_start;
+    hts_pos_t ref_bp1_w_aux_del_len = std::min(extend, del_len);
+    hts_pos_t ref_bp1_w_aux_rh_len = std::min(alt_rh_len, extend - ref_bp1_w_aux_del_len);
+    hts_pos_t ref_bp1_w_aux_len = alt_lh_len + ref_bp1_w_aux_del_len + ref_bp1_w_aux_rh_len;
+    char* ref_bp1_w_aux_seq = new char[ref_bp1_w_aux_len + 1];
+    strncpy(ref_bp1_w_aux_seq, lh_seq, alt_lh_len);
+    strncpy(ref_bp1_w_aux_seq + alt_lh_len, contig_seq + del_start, ref_bp1_w_aux_del_len);
+    strncpy(ref_bp1_w_aux_seq + alt_lh_len + ref_bp1_w_aux_del_len, rh_seq, ref_bp1_w_aux_rh_len);
+    ref_bp1_w_aux_seq[ref_bp1_w_aux_len] = 0;
+
     hts_pos_t ref_bp2_start = std::max(hts_pos_t(0), del_end-extend), ref_bp2_end = alt_end;
     hts_pos_t ref_bp2_pos = del_end - ref_bp2_start;
     hts_pos_t ref_bp2_len = ref_bp2_end - ref_bp2_start;
     char* ref_bp2_seq = new char[ref_bp2_len + 1];
     strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
     ref_bp2_seq[ref_bp2_len] = 0;
+
+    hts_pos_t ref_bp2_w_aux_del_len = std::min(extend, del_len);
+    hts_pos_t ref_bp2_w_aux_lh_len = std::min(alt_lh_len, extend - ref_bp2_w_aux_del_len);
+    hts_pos_t ref_bp2_w_aux_len = ref_bp2_w_aux_lh_len + ref_bp2_w_aux_del_len + alt_rh_len;
+    char* ref_bp2_w_aux_seq = new char[ref_bp2_w_aux_len + 1];
+    strncpy(ref_bp2_w_aux_seq, lh_seq + alt_lh_len - ref_bp2_w_aux_lh_len, ref_bp2_w_aux_lh_len);
+    strncpy(ref_bp2_w_aux_seq + ref_bp2_w_aux_lh_len, contig_seq + del_end - ref_bp2_w_aux_del_len, ref_bp2_w_aux_del_len);
+    strncpy(ref_bp2_w_aux_seq + ref_bp2_w_aux_lh_len + ref_bp2_w_aux_del_len, rh_seq, alt_rh_len);
+    ref_bp2_w_aux_seq[ref_bp2_w_aux_len] = 0;
 
     std::vector<char*> ref_seqs = {ref_bp1_seq, ref_bp2_seq};
     std::vector<hts_pos_t> ref_lens = {ref_bp1_len, ref_bp2_len};
@@ -89,13 +106,6 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
         if (get_unclipped_end(read) < del_start || del_end < get_unclipped_start(read)) continue;
         if (del_start < get_unclipped_start(read) && get_unclipped_end(read) < del_end) continue;
 
-        // if the read is assigned to a different SV, no need to align it, just count and continue
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, del)) {
-            del->sample_info.assigned_to_other_sv_bp1_reads++;
-            del->sample_info.assigned_to_other_sv_bp2_reads++;
-            continue;
-        }
-
         std::string seq;
         if (!is_samechr(read) || is_samestr(read)) continue;
         if (!bam_is_mrev(read)) {
@@ -124,8 +134,8 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
                 increase_ref_bp2_better = true;
             }
         } else {
-            aligner.Align(seq.c_str(), ref_bp1_seq, ref_bp1_len, filter_with_pos, &ref1_aln, 0);
-            aligner.Align(seq.c_str(), ref_bp2_seq, ref_bp2_len, filter_with_pos, &ref2_aln, 0);
+            aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_len, filter_with_pos, &ref1_aln, 0);
+            aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_len, filter_with_pos, &ref2_aln, 0);
             ref_aln_score = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln.sw_score : ref2_aln.sw_score;
             if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin < ref_bp1_pos && ref1_aln.ref_end >= ref_bp1_pos) {
                 increase_ref_bp1_better = true;
@@ -141,23 +151,47 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
         bool alt_spans_left_bp = alt_aln.ref_begin < alt_lh_len && alt_aln.ref_end >= alt_lh_len;
         bool alt_spans_right_bp = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;
         bool alt_spans_sv = alt_spans_left_bp || alt_spans_right_bp;
+        bool alt_or_ref_read = false;
+        bool add_alt_better_read = false;
+        bool add_ref_bp1_better_seq = false;
+        bool add_ref_bp2_better_seq = false;
         if (alt_aln.sw_score > ref_aln_score && alt_spans_sv) {
             if (is_clipped(alt_aln, config.min_clip_len)) continue;
-            alt_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-            alt_better_read_scores.push_back(alt_aln.sw_score);
-            alt_better_read_positions.push_back(alt_aln.ref_begin);
+            add_alt_better_read = true;
+            alt_or_ref_read = true;
         } else if (ref_aln_score > alt_aln.sw_score) {
             if (increase_ref_bp1_better) {
-                ref_bp1_better_seqs.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+                add_ref_bp1_better_seq = true;
+                alt_or_ref_read = true;
             }
             if (increase_ref_bp2_better) {
-                ref_bp2_better_seqs.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+                add_ref_bp2_better_seq = true;
+                alt_or_ref_read = true;
             }
         } else {
             del->sample_info.alt_ref_equal_reads++;
             if (read->core.qual >= config.high_confidence_mapq) {
                 del->sample_info.alt_ref_equal_reads_highmq++;
             }
+        }
+
+        // if the read is assigned to a different SV, no need to align it, just count and continue
+        if (alt_or_ref_read && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, del)) {
+            del->sample_info.assigned_to_other_sv_bp1_reads++;
+            del->sample_info.assigned_to_other_sv_bp2_reads++;
+            continue;
+        }
+
+        if (add_alt_better_read) {
+            alt_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+            alt_better_read_scores.push_back(alt_aln.sw_score);
+            alt_better_read_positions.push_back(alt_aln.ref_begin);
+        }
+        if (add_ref_bp1_better_seq) {
+            ref_bp1_better_seqs.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+        }
+        if (add_ref_bp2_better_seq) {
+            ref_bp2_better_seqs.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
         }
 
         if (alt_better_reads.size() + ref_bp1_better_seqs.size() + ref_bp2_better_seqs.size() + del->sample_info.alt_ref_equal_reads > 4 * stats.get_max_depth(del->chr)) {
@@ -285,7 +319,11 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
 
     delete[] alt_seq;
     delete[] ref_bp1_seq;
+    delete[] ref_bp1_w_aux_seq;
     delete[] ref_bp2_seq;
+    delete[] ref_bp2_w_aux_seq;
+    delete[] lh_seq;
+    delete[] rh_seq;
 
     free(regions[0]);
     free(regions[1]);
