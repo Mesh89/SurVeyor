@@ -345,7 +345,7 @@ bool is_exact_match(sv_t* sv1, sv_t* sv2) {
 struct sv_match_t {
 	std::shared_ptr<sv_t> b_sv, c_sv;
 	double score = 0;
-	bool rep, exact;
+	bool rep, exact, valid = true;
 
 	sv_match_t(std::shared_ptr<sv_t> b_sv, std::shared_ptr<sv_t> c_sv, bool rep, StripedSmithWaterman::Aligner& aligner) : b_sv(b_sv), c_sv(c_sv) {
 		if (b_sv == NULL || c_sv == NULL) {
@@ -959,6 +959,12 @@ int main(int argc, char* argv[]) {
 		int b_capacity = benchmark_match_capacity.at(match.b_sv->id);
 		if (exclusive && (benchmark_match_count[match.b_sv->id] >= b_capacity || used_c_sv_ids.count(match.c_sv->id))) continue;
 
+		if (b_capacity > 1 && benchmark_match_count[match.b_sv->id] > 0 &&
+			match.c_sv->sample_info.alt_bp1.reads_info.reads + match.c_sv->sample_info.alt_bp2.reads_info.reads == 0) {
+			match.valid = false;
+			continue;
+		}
+
 		if (match.b_sv->allele_count(1) == 0 && match.b_sv->missing_alleles() > 0) {
 			c_unknown.insert(match.c_sv->id);
 			unknown_match_by_called[match.c_sv->id] = &match;
@@ -1020,7 +1026,7 @@ int main(int argc, char* argv[]) {
 		std::set<std::string> c_unchoosen_ids;
 		std::unordered_map<std::string, sv_match_t*> unchoosen_match_by_called;
 		for (sv_match_t& match : matches) {
-			if (match.c_sv != NULL && !used_c_sv_ids.count(match.c_sv->id)) {
+			if (match.valid && match.c_sv != NULL && !used_c_sv_ids.count(match.c_sv->id)) {
 				std::string c_id = match.c_sv->id;
 				if (!c_unchoosen_ids.count(c_id)) {
 					c_unchoosen_ids.insert(c_id);
@@ -1033,11 +1039,7 @@ int main(int argc, char* argv[]) {
 		// report non-exact matches with the benchmark GT, but keep exact non-primary matches ignored
 		for (std::string id : c_unchoosen_ids) {
 			sv_match_t* match = unchoosen_match_by_called[id];
-			if (match->exact) {
-				called_to_benchmark_gts_fout << id << " " << "./. 0 0" << std::endl;
-			} else {
-				called_to_benchmark_gts_fout << id << " " << called_to_benchmark_gt(*match) << " " << match->exact << " 0" << std::endl;
-			}
+			called_to_benchmark_gts_fout << id << " " << "0/0 " << match->exact << " 0" << std::endl;
 			written_ids.insert(id);
 		}
 
