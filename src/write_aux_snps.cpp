@@ -5,15 +5,18 @@
 #include <unordered_set>
 #include <vector>
 #include <sstream>
+#include <fstream>
 
 #include <htslib/sam.h>
 #include <htslib/tbx.h>
 #include <htslib/vcf.h>
+#include "DynamicIntervalTree.h"
+#include "SegTree.h"
 #include "types.h"
 #include "vcf_utils.h"
 
 const hts_pos_t MIN_SV_SIZE = 50;
-const float MIN_PRIMARY_PPR = 0.5f;
+std::ofstream merge_identical_log;
 
 void index_vcf(const std::string& vcf_fname) {
     if (tbx_index_build(vcf_fname.c_str(), 0, &tbx_conf_vcf) != 0) {
@@ -91,31 +94,6 @@ void divide_variants_by_svsize(bcf_hdr_t* hdr, const std::vector<bcf1_t*>& vcf_r
     }
 }
 
-void write_and_remove_non_primary(bcf_hdr_t* hdr, std::vector<bcf1_t*>& variants, const std::string& out_vcf_fname) {
-    htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "wz");
-    if (out_vcf_file == NULL) {
-        throw std::runtime_error("Failed to open " + out_vcf_fname + " for writing.");
-    }
-
-    if (bcf_hdr_write(out_vcf_file, hdr) != 0) {
-        throw std::runtime_error("Failed to write the VCF header to " + out_vcf_fname + ".");
-    }
-
-    for (bcf1_t*& variant : variants) {
-        float ppr = get_sv_ppr(hdr, variant);
-        if (ppr >= 0.0f && ppr < MIN_PRIMARY_PPR) {
-            if (bcf_write(out_vcf_file, hdr, variant) != 0) {
-                throw std::runtime_error("Failed to write VCF record to " + out_vcf_fname);
-            }
-            variant = nullptr;
-        }
-    }
-    variants.erase(std::remove(variants.begin(), variants.end(), nullptr), variants.end());
-
-    hts_close(out_vcf_file);
-    index_vcf(out_vcf_fname);
-}
-
 std::string bcf_record_unique_key(bcf_hdr_t* hdr, bcf1_t* record) {
     return std::string(bcf_seqname_safe(hdr, record)) + ":" +
         std::to_string(record->pos) + ":" +
@@ -163,6 +141,48 @@ void remove_lower_priority_duplicates(bcf_hdr_t* hdr, std::vector<bcf1_t*>& vcf_
 std::string get_record_id(bcf1_t* record) {
     bcf_unpack(record, BCF_UN_STR);
     return record->d.id == NULL ? "." : std::string(record->d.id);
+}
+
+bool is_expanded_aux_indel_record(bcf1_t* record) {
+    return get_record_id(record).find(".AUX_INDEL.") != std::string::npos;
+}
+
+std::string get_gt_str(bcf_hdr_t* hdr, bcf1_t* record) {
+    int* gt = nullptr;
+    int ngt = 0;
+    if (bcf_get_genotypes(hdr, record, &gt, &ngt) < 0 || ngt == 0) {
+        free(gt);
+        return ".";
+    }
+
+    std::stringstream ss;
+    for (int i = 0; i < ngt; i++) {
+        if (i > 0) ss << "/";
+        if (bcf_gt_is_missing(gt[i])) {
+            ss << ".";
+        } else {
+            ss << bcf_gt_allele(gt[i]);
+        }
+    }
+    free(gt);
+    return ss.str();
+}
+
+void log_merge_identical_operation(bcf_hdr_t* hdr, const char* operation,
+                                   bcf1_t* first, bcf1_t* second,
+                                   const std::string& detail = "") {
+    if (!merge_identical_log.is_open()) return;
+
+    merge_identical_log
+        << operation
+        << "\tfirst=" << get_record_id(first)
+        << "\tsecond=" << get_record_id(second)
+        << "\tfirst_gt=" << get_gt_str(hdr, first)
+        << "\tsecond_gt=" << get_gt_str(hdr, second);
+    if (!detail.empty()) {
+        merge_identical_log << "\t" << detail;
+    }
+    merge_identical_log << "\n";
 }
 
 int get_required_hpid(bcf_hdr_t* hdr, bcf1_t* record) {
@@ -324,6 +344,63 @@ void add_star_alleles_for_overlapping(bcf_hdr_t* hdr, std::vector<bcf1_t*>& smal
     small_variants.erase(std::remove(small_variants.begin(), small_variants.end(), nullptr), small_variants.end());
 }
 
+// Merge duplicate records for the same allele into the higher-priority record.
+// Two het records are promoted to 1/1, unless the first record's
+// classifier requires the other allele to be reference. In those exceptions,
+// the first genotype is left unchanged
+void merge_variant_records(bcf_hdr_t* hdr, bcf1_t* first, bcf1_t* second) {
+    int first_alt_alleles = count_alt_alleles(hdr, first);
+    int second_alt_alleles = count_alt_alleles(hdr, second);
+    log_merge_identical_operation(hdr, "start", first, second,
+        "first_ac=" + std::to_string(first_alt_alleles) +
+        "\tsecond_ac=" + std::to_string(second_alt_alleles));
+    if (first_alt_alleles == 0 || second_alt_alleles == 0) {
+        log_merge_identical_operation(hdr, "skip_zero_ac", first, second);
+        return;
+    }
+
+    // From here onwards, both records are assumed positive
+
+    // If both records are identical, and EREFA does not force a ref allele to exist, merge them into a 1/1
+    if (same_record_identity(hdr, first, second)) {
+        int first_erefa = get_format_int32_or_default(hdr, first, "EREFA");
+        if (first_erefa == 1) {
+            log_merge_identical_operation(hdr, "skip_erefa", first, second,
+                "EREFA=" + std::to_string(first_erefa));
+                return;
+            }
+
+            if (first_alt_alleles == 1) concat_record_ids(hdr, first, second);
+            log_merge_identical_operation(hdr, "concat_ids", first, second);
+            set_gt(hdr, first, 1, 1);
+            log_merge_identical_operation(hdr, "set_first_1_1", first, second);
+            set_gt(hdr, second, 0, 0);
+            log_merge_identical_operation(hdr, "set_second_0_0", first, second);
+    }
+    // If the first record is a 1/1, but the probability of the second record to exist (EPR) is higher
+    // than the probability of the first record to be homozygous (HOPR), accept both as 0/1
+    else if (first_alt_alleles >= 2 && !same_record_identity(hdr, first, second)) {
+        float second_epr = get_sv_epr(hdr, second);
+        float first_hopr = get_sv_hopr(hdr, first);
+        std::string scores = "second_epr=" + std::to_string(second_epr) +
+            "\tfirst_hopr=" + std::to_string(first_hopr);
+        if (second_epr > first_hopr) {
+            log_merge_identical_operation(hdr, "replace_one_alt", first, second, scores);
+            set_gt(hdr, first, 0, 1);
+            set_gt(hdr, second, 0, 1);
+            log_merge_identical_operation(hdr, "set_for_multiallelic", first, second, scores);
+        } else {
+            set_gt(hdr, second, 0, 0);
+            log_merge_identical_operation(hdr, "keep_first_multiallelic", first, second, scores);
+        }
+    } else {
+        log_merge_identical_operation(hdr, "no_action", first, second);
+    }
+
+    // bool two_hets = first_alt_alleles == 1 && second_alt_alleles == 1;
+    // if (two_hets && ref_support_exceeds_other_alt_support(hdr, second)) return;
+}
+
 // The group is already sorted by decreasing EPR. Keep at most two ALT alleles at
 // each exact position for INS/DEL/SNP groups. The best call is always kept. If the first two
 // calls are identical hets, merge them into a single 1/1 call unless the second
@@ -351,12 +428,7 @@ void apply_multiallelic_logic_to_group(bcf_hdr_t* hdr, std::vector<bcf1_t*>& var
     size_t suppress_from = 2;
 
     if (first_alt_alleles > 0 && second_alt_alleles > 0 && same_record_identity(hdr, first, second)) {
-        bool two_hets = first_alt_alleles == 1 && second_alt_alleles == 1;
-        if (!two_hets || !ref_support_exceeds_other_alt_support(hdr, second)) {
-            if (first_alt_alleles == 1) concat_record_ids(hdr, first, second);
-            set_gt(hdr, first, 1, 1);
-        }
-        set_gt(hdr, second, 0, 0);
+        merge_variant_records(hdr, first, second);
         records_to_remove.push_back(second);
     } else if (first_alt_alleles >= 2) {
         float second_epr = get_sv_epr(hdr, second);
@@ -427,6 +499,56 @@ void make_multiallelic(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants) {
     small_variants.erase(std::remove(small_variants.begin(), small_variants.end(), nullptr), small_variants.end());
 }
 
+void make_multiallelic_new(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants) {
+    std::unordered_map<std::string, std::vector<std::pair<bcf1_t*, float>>> variants_by_chr;
+    std::unordered_map<std::string, hts_pos_t> max_end_by_chr;
+
+    for (bcf1_t* record : small_variants) {
+        if (count_alt_alleles(hdr, record) == 0) continue;
+
+        std::string svtype = get_sv_type(hdr, record);
+        if (svtype != "INS" && svtype != "DEL" && svtype != "SNP") continue;
+
+        std::string chr = bcf_seqname_safe(hdr, record);
+        variants_by_chr[chr].emplace_back(record, get_sv_epr(hdr, record));
+        max_end_by_chr[chr] = std::max(max_end_by_chr[chr], (hts_pos_t) get_sv_end(hdr, record));
+    }
+
+    for (auto& chr_variants : variants_by_chr) {
+        const std::string& chr = chr_variants.first;
+        std::vector<std::pair<bcf1_t*, float>>& variants = chr_variants.second;
+
+        std::stable_sort(variants.begin(), variants.end(),
+            [](const std::pair<bcf1_t*, float>& a, const std::pair<bcf1_t*, float>& b) {
+                return a.second > b.second;
+            });
+
+        SegTree seg_tree(max_end_by_chr[chr] + 1);
+        DynamicIntervalTree<hts_pos_t, bcf1_t*> interval_tree;
+        for (const auto& variant_epr : variants) {
+            bcf1_t* record = variant_epr.first;
+            if (count_alt_alleles(hdr, record) == 0) continue;
+
+            hts_pos_t start = record->pos;
+            hts_pos_t end = get_sv_end(hdr, record);
+
+            if (seg_tree.any_ge(start, end, 2)) {
+                set_gt(hdr, record, 0, 0);
+                continue;
+            }
+
+            std::vector<bcf1_t*> overlapping_variants;
+            overlapping_variants = interval_tree.query(start, end);
+            if (overlapping_variants.size() == 1) {
+                merge_variant_records(hdr, overlapping_variants[0], record);
+            }
+
+            seg_tree.add(start, end, 1);
+            interval_tree.insert(start, end, record);
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     std::string in_vcf_fname = argv[1];
     std::string out_smvars_prefix = argv[2];
@@ -434,8 +556,13 @@ int main(int argc, char* argv[]) {
     std::string reference_fname = argv[4];
     std::string out_smvars_vcf_fname = out_smvars_prefix + ".vcf.gz";
     std::string out_stvars_vcf_fname = out_stvars_prefix + ".vcf.gz";
-    std::string out_smvars_non_primary_vcf_fname = out_smvars_prefix + ".non-primary.vcf.gz";
-    std::string out_stvars_non_primary_vcf_fname = out_stvars_prefix + ".non-primary.vcf.gz";
+    std::string merge_identical_log_fname = out_smvars_prefix + ".merge-identical.log";
+
+    merge_identical_log.open(merge_identical_log_fname);
+    if (!merge_identical_log) {
+        throw std::runtime_error("Failed to open " + merge_identical_log_fname + " for writing.");
+    }
+    merge_identical_log << "operation\tfirst\tsecond\tfirst_gt\tsecond_gt\tdetails\n";
 
     chr_seqs_map_t chr_seqs;
     chr_seqs.read_fasta_into_map(reference_fname);
@@ -467,7 +594,7 @@ int main(int argc, char* argv[]) {
         char* s_data = NULL;
         int len = 0;
         bcf_get_info_string(in_vcf_hdr, b, "AUX_SNPS", (void**) &s_data, &len);
-        if (len > 0) {
+        if (len > 0 && !is_expanded_aux_indel_record(b)) {
             bcf_unpack(b, BCF_UN_ALL);
             int parent_hpid = get_required_hpid(in_vcf_hdr, b);
             std::istringstream ss(s_data);
@@ -494,7 +621,7 @@ int main(int argc, char* argv[]) {
         s_data = NULL;
         len = 0;
         bcf_get_info_string(in_vcf_hdr, b, "AUX_INDELS", (void**) &s_data, &len);
-        if (len > 0) {
+        if (len > 0 && !is_expanded_aux_indel_record(b)) {
             bcf_unpack(b, BCF_UN_ALL);
             int parent_hpid = get_required_hpid(in_vcf_hdr, b);
             std::istringstream ss(s_data);;
@@ -548,11 +675,9 @@ int main(int argc, char* argv[]) {
     std::vector<bcf1_t*> small_variants, svs;
     divide_variants_by_svsize(in_vcf_hdr, vcf_records, small_variants, svs);
 
-    write_and_remove_non_primary(in_vcf_hdr, small_variants, out_smvars_non_primary_vcf_fname);
-    write_and_remove_non_primary(in_vcf_hdr, svs, out_stvars_non_primary_vcf_fname);
-
-    make_multiallelic(in_vcf_hdr, small_variants);
-    add_star_alleles_for_overlapping(in_vcf_hdr, small_variants);
+    // make_multiallelic(in_vcf_hdr, small_variants);
+    // add_star_alleles_for_overlapping(in_vcf_hdr, small_variants);
+    make_multiallelic_new(in_vcf_hdr, small_variants);
 
     htsFile* out_smvars_vcf_file = bcf_open(out_smvars_vcf_fname.c_str(), "wz");
     if (bcf_hdr_write(out_smvars_vcf_file, in_vcf_hdr) != 0) {

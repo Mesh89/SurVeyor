@@ -510,10 +510,6 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* expr_tag = "##FORMAT=<ID=EXPR,Number=1,Type=Float,Description=\"Probability of the SV to be represented exactly, according to the ML model.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, expr_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "PPR");
-	const char* ppr_tag = "##FORMAT=<ID=PPR,Number=1,Type=Float,Description=\"Probability of the SV to be the primary call, according to the ML model.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ppr_tag, &len));
-
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "EREFA");
 	const char* erefa_tag = "##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description=\"Whether the GT-stage classifier requires the other allele to be reference.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, erefa_tag, &len));
@@ -1048,18 +1044,6 @@ float get_sv_hopr(bcf_hdr_t *hdr, bcf1_t *b) {
         return value;
     }
     free(hopr);
-    return -1.0;
-}
-
-float get_sv_ppr(bcf_hdr_t *hdr, bcf1_t *b) {
-    int ngt = 0;
-    float *ppr = NULL;
-    if (bcf_get_format_float(hdr, b, "PPR", &ppr, &ngt) > 0) {
-        float value = ppr[0];
-        free(ppr);
-        return value;
-    }
-    free(ppr);
     return -1.0;
 }
 
