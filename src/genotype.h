@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <sstream>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 
@@ -172,7 +173,6 @@ struct evidence_map_t {
         //   (e.g., if SV1 has U=6 and SV2 has U=4, then the read is assigned to SV1 with probability 0.6 and to SV2 with probability 0.4)
 
         using sv_with_bp_t = std::pair<std::string, int>;
-        std::unordered_map<std::string, int> sv_to_U_map;
         std::unordered_map<int, int> hpid_to_U_map;
         for (const auto& kv : read_to_best_assoc_map) {
             const auto& best_assoc = kv.second;
@@ -191,7 +191,6 @@ struct evidence_map_t {
             if (score == best_score) {
                 bool unique = std::get<1>(best_assoc);
                 if (unique) {
-                    sv_to_U_map[sv_id] += 1;
                     read_to_hpid_map[read_name] = sv_hpid_map[sv_id];
                 } else {
                     read_to_multiple_svs[read_name].push_back({sv_id, bp});
@@ -206,14 +205,15 @@ struct evidence_map_t {
         for (auto& kv : read_to_multiple_svs) {
             std::string read_name = kv.first;
             std::vector<sv_with_bp_t>& sv_w_bps = kv.second;
-            // Find top two SVs in terms of U, breaking U ties by EPR.
-            std::vector<std::pair<std::pair<int, float>, sv_with_bp_t>> sv_U_vec;
+            // Find top two SVs, prioritizing variants above MIN_EPR, then U, then EPR.
+            std::vector<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>> sv_U_vec;
             for (const auto& sv_w_bp : sv_w_bps) {
-                int U = sv_to_U_map[sv_w_bp.first];
-                U = hpid_to_U_map[sv_hpid_map[sv_w_bp.first]];
-                sv_U_vec.push_back({{U, sv_epr_map[sv_w_bp.first]}, sv_w_bp});
+                int U = hpid_to_U_map[sv_hpid_map[sv_w_bp.first]];
+                float epr = sv_epr_map[sv_w_bp.first];
+                bool passes_min_epr = epr >= MIN_EPR;
+                sv_U_vec.push_back({{passes_min_epr, U, epr}, sv_w_bp});
             }
-            std::sort(sv_U_vec.begin(), sv_U_vec.end(), std::greater<std::pair<std::pair<int, float>, sv_with_bp_t>>());
+            std::sort(sv_U_vec.begin(), sv_U_vec.end(), std::greater<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>>());
             sv_with_bp_t sv1 = sv_U_vec[0].second;
 
             // pick best SV that has a different HPID than sv1 (if any)
@@ -227,13 +227,18 @@ struct evidence_map_t {
             }
             sv_with_bp_t sv2 = sv_U_vec[sv2_idx].second;
 
-            int U1 = sv_U_vec[0].first.first;
-            int U2 = sv_U_vec[sv2_idx].first.first;
+            int U1 = std::get<1>(sv_U_vec[0].first);
+            int U2 = std::get<1>(sv_U_vec[sv2_idx].first);
+            bool sv1_passes_min_epr = std::get<0>(sv_U_vec[0].first);
+            bool sv2_passes_min_epr = std::get<0>(sv_U_vec[sv2_idx].first);
+
             if (U1 < 3) U1 = 0; // we require a minimum number of 3 uniquely assigned reads
             if (U2 < 3) U2 = 0; // we require a minimum number of 3 uniquely assigned reads
             int total_U = U1 + U2;
-            if (total_U == 0) {
-                // assign to the highest EPR SV that is tied by U
+            if (sv1_passes_min_epr != sv2_passes_min_epr) {
+                read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
+            } else if (total_U == 0) {
+                // assign to the highest-ranked SV when both candidates have no usable U
                 read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
             } else {
                 std::uniform_int_distribution<> dis(1, total_U);
