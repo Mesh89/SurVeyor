@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
@@ -365,7 +366,7 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 	}
 
 	int bnd_idx = 0;
-	std::sort(bnds_lf.begin(), bnds_lf.end(), [](const std::shared_ptr<breakend_t>& i1, const std::shared_ptr<breakend_t>& i2) { return i1->start < i2->start; });
+	std::sort(bnds_lf.begin(), bnds_lf.end(), [](const std::shared_ptr<breakend_t>& i1, const std::shared_ptr<breakend_t>& i2) { return sv_output_order(i1, i2); });
 	std::sort(lf_ss_clusters.begin(), lf_ss_clusters.end(), [](const std::shared_ptr<cluster_t>& c1, const std::shared_ptr<cluster_t>& c2) { return c1->la_end < c2->la_end; });
 	for (std::shared_ptr<cluster_t> c : lf_ss_clusters) {
 		while (bnd_idx < bnds_lf.size() && bnds_lf[bnd_idx]->start < c->la_end-stats.max_is) bnd_idx++;
@@ -402,7 +403,7 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 		}
 	}
 
-	std::sort(bnds_rf.begin(), bnds_rf.end(), [](const std::shared_ptr<breakend_t>& i1, const std::shared_ptr<breakend_t>& i2) { return i1->start < i2->start; });
+	std::sort(bnds_rf.begin(), bnds_rf.end(), [](const std::shared_ptr<breakend_t>& i1, const std::shared_ptr<breakend_t>& i2) { return sv_output_order(i1, i2); });
 	std::sort(rf_ss_clusters.begin(), rf_ss_clusters.end(), [](const std::shared_ptr<cluster_t>& c1, const std::shared_ptr<cluster_t>& c2) { return c1->la_start < c2->la_start; });
 	bnd_idx = 0;
 	for (std::shared_ptr<cluster_t> c : rf_ss_clusters) {
@@ -456,7 +457,14 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 		}
 	}
 
-	std::sort(bnd_pairs.begin(), bnd_pairs.end());
+	std::stable_sort(bnd_pairs.begin(), bnd_pairs.end(),
+		[](const std::tuple<hts_pos_t, std::shared_ptr<breakend_t>, std::shared_ptr<breakend_t>>& a,
+		   const std::tuple<hts_pos_t, std::shared_ptr<breakend_t>, std::shared_ptr<breakend_t>>& b) {
+			if (std::get<0>(a) != std::get<0>(b)) return std::get<0>(a) < std::get<0>(b);
+			if (sv_output_order(std::get<1>(a), std::get<1>(b))) return true;
+			if (sv_output_order(std::get<1>(b), std::get<1>(a))) return false;
+			return sv_output_order(std::get<2>(a), std::get<2>(b));
+		});
 	for (auto& bnd_pair : bnd_pairs) {
 		std::shared_ptr<breakend_t> bnd_rf = std::get<1>(bnd_pair);
 		std::shared_ptr<breakend_t> bnd_lf = std::get<2>(bnd_pair);
@@ -880,7 +888,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	std::unordered_map<std::string, int> svtype_id;
-    for (const std::string& contig_name : chr_seqs.ordered_contigs) {
+	for (const std::string& contig_name : chr_seqs.ordered_contigs) {
 		std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
 
 		// merge with read_svs
@@ -895,16 +903,10 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
-		std::sort(svs.begin(), svs.end(), [](std::shared_ptr<sv_t> sv1, std::shared_ptr<sv_t> sv2) {
-			return std::tie(sv1->start, sv1->end) < std::tie(sv2->start, sv2->end);
-		});
-
-        for (std::shared_ptr<sv_t> sv : svs) {
-			sv->id = sv->svtype() +  "_SR_" + std::to_string(svtype_id[sv->svtype()]++);
-
+		for (std::shared_ptr<sv_t> sv : svs) {
 			// do some light filtering here - it helps merge_identical_calls not merge good calls with calls that will get filtered
 			if (sv->svtype() == "DEL") {
-				if (sv->start < sv->start_bp_lower_boundary() || sv->start > sv->start_bp_upper_boundary()) {	
+				if (sv->start < sv->start_bp_lower_boundary() || sv->start > sv->start_bp_upper_boundary()) {
 					sv->sample_info.filters.push_back("REMAP_BOUNDARY_FILTER");
 				} else if (sv->end < sv->end_bp_lower_boundary() || sv->end > sv->end_bp_upper_boundary()) {
 					sv->sample_info.filters.push_back("REMAP_BOUNDARY_FILTER");
@@ -920,22 +922,54 @@ int main(int argc, char* argv[]) {
 			sv->mh_len = 0; // current value is just a temporary approximation, reset it. genotype will calculate it correctly
 
 			if (sv->source == "1SR_RC" || sv->source == "1HSR_RC") {
-            	if (sv->rc_consensus->right_ext_reads < 3) sv->sample_info.filters.push_back("FAILED_TO_EXTEND");
-            } else if (sv->source == "1SR_LC" || sv->source == "1HSR_LC") {
-            	if (sv->lc_consensus->left_ext_reads < 3) sv->sample_info.filters.push_back("FAILED_TO_EXTEND");
-            }
+				if (sv->rc_consensus->right_ext_reads < 3) sv->sample_info.filters.push_back("FAILED_TO_EXTEND");
+			} else if (sv->source == "1SR_LC" || sv->source == "1HSR_LC") {
+				if (sv->lc_consensus->left_ext_reads < 3) sv->sample_info.filters.push_back("FAILED_TO_EXTEND");
+			}
+		}
+
+		// remove DUPs with unresolved copy number when an otherwise identical resolved DUP exists
+		std::unordered_set<std::string> resolved_dup_unique_keys;
+		for (std::shared_ptr<sv_t> sv : svs) {
+			if (sv->svtype() == "DUP" && !static_cast<duplication_t*>(sv.get())->cn_unresolved) {
+				resolved_dup_unique_keys.insert(sv->unique_key());
+			}
+		}
+		svs.erase(std::remove_if(svs.begin(), svs.end(),
+			[&resolved_dup_unique_keys](const std::shared_ptr<sv_t>& sv) {
+				return sv->svtype() == "DUP" &&
+					static_cast<duplication_t*>(sv.get())->cn_unresolved &&
+					resolved_dup_unique_keys.count(sv->unique_key()) > 0;
+			}), svs.end());
+
+		// remove non-pass SVs that have an identical pass SV
+		std::unordered_set<std::string> pass_unique_keys;
+		for (std::shared_ptr<sv_t> sv : svs) {
+			if (sv->is_pass()) {
+				pass_unique_keys.insert(sv->unique_key());
+			}
+		}
+		svs.erase(std::remove_if(svs.begin(), svs.end(),
+			[&pass_unique_keys](const std::shared_ptr<sv_t>& sv) {
+				return !sv->is_pass() && pass_unique_keys.count(sv->unique_key()) > 0;
+			}), svs.end());
+
+		std::sort(svs.begin(), svs.end(), sv_output_order);
+
+		for (std::shared_ptr<sv_t> sv : svs) {
+			sv->id = sv->svtype() +  "_SR_" + std::to_string(svtype_id[sv->svtype()]++);
 
 			sv2bcf(out_vcf_header, bcf_entry, sv.get(), chr_seqs.get_seq(contig_name));
-            if (bcf_write(out_vcf_file, out_vcf_header, bcf_entry) != 0) {
+			if (bcf_write(out_vcf_file, out_vcf_header, bcf_entry) != 0) {
 				throw std::runtime_error("Failed to write to " + out_vcf_fname + ".");
 			}
-        }
-    }
+		}
+	}
 
 	for (std::string& contig_name : chr_seqs.ordered_contigs) {
 		auto dp_invs = dp_bnds_by_chr[contig_name];
 		std::sort(dp_invs.begin(), dp_invs.end(), [](std::shared_ptr<breakend_t> inv1, std::shared_ptr<breakend_t> inv2) {
-			return std::tie(inv1->start, inv1->end) < std::tie(inv2->start, inv2->end);
+			return sv_output_order(inv1, inv2);
 		});
 
 		for (std::shared_ptr<breakend_t> bnd : dp_invs) {

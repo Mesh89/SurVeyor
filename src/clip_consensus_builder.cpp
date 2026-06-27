@@ -853,9 +853,7 @@ int main(int argc, char* argv[]) {
     bcf1_t* sv_vcf_record = bcf_init();
     for (const std::string& contig_name : contigs.ordered_contigs) {
         std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
-        std::sort(svs.begin(), svs.end(), [](const std::shared_ptr<sv_t>& sv1, const std::shared_ptr<sv_t>& sv2) {
-            return sv1->start < sv2->start;
-        });
+        std::sort(svs.begin(), svs.end(), sv_output_order);
         for (const auto& sv : svs) {
             sv2bcf(sv_vcf_header, sv_vcf_record, sv.get(), contigs.get_seq(sv->chr));
             if (bcf_write(sv_vcf_fout, sv_vcf_header, sv_vcf_record) != 0) {

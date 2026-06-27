@@ -310,7 +310,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	int del_id = 0, dup_id = 0;
-    for (std::string& contig_name : chr_seqs.ordered_contigs) {
+	for (std::string& contig_name : chr_seqs.ordered_contigs) {
 		auto& deletions = deletions_by_chr[contig_name];
 		for (const auto& del : deletions) del->id = "DEL_DP_" + std::to_string(del_id++);
 		auto& duplications = duplications_by_chr[contig_name];
@@ -318,16 +318,14 @@ int main(int argc, char* argv[]) {
 
 		dp_svs_by_chr[contig_name].insert(dp_svs_by_chr[contig_name].end(), deletions.begin(), deletions.end());
 		dp_svs_by_chr[contig_name].insert(dp_svs_by_chr[contig_name].end(), duplications.begin(), duplications.end());
-		std::sort(dp_svs_by_chr[contig_name].begin(), dp_svs_by_chr[contig_name].end(), [](const std::shared_ptr<sv_t>& sv1, const std::shared_ptr<sv_t>& sv2) {
-			return sv1->start < sv2->start;
-		});
+		std::sort(dp_svs_by_chr[contig_name].begin(), dp_svs_by_chr[contig_name].end(), sv_output_order);
 		for (const auto& dp_sv : dp_svs_by_chr[contig_name]) {
 			sv2bcf(hdr, bcf_entry, dp_sv.get(), chr_seqs.get_seq(contig_name));
 			if (bcf_write(dp_vcf_file, hdr, bcf_entry) != 0) {
 				throw std::runtime_error("Failed to write to " + dp_vcf_fname + ".");
 			}
 		}
-    }
+	}
 
 	bcf_close(dp_vcf_file);
 
@@ -345,9 +343,7 @@ int main(int argc, char* argv[]) {
 		all_entries.insert(all_entries.end(), del_sr_entries_by_chr[contig_name].begin(), del_sr_entries_by_chr[contig_name].end());
 		all_entries.insert(all_entries.end(), dup_sr_entries_by_chr[contig_name].begin(), dup_sr_entries_by_chr[contig_name].end());
 		all_entries.insert(all_entries.end(), other_svs_entries_by_chr[contig_name].begin(), other_svs_entries_by_chr[contig_name].end());
-		std::sort(all_entries.begin(), all_entries.end(), [](const std::shared_ptr<sv_t>& sv1, const std::shared_ptr<sv_t>& sv2) {
-			return sv1->start < sv2->start;
-		});
+		std::sort(all_entries.begin(), all_entries.end(), sv_output_order);
 		for (const auto& sv : all_entries) {
 			sv2bcf(hdr, bcf_entry, sv.get(), chr_seqs.get_seq(contig_name));
 			if (bcf_write(merged_vcf_file, hdr, bcf_entry) != 0) {

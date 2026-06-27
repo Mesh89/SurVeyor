@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <tuple>
 
 bcf_hdr_t* read_bcf(std::string vcf_fname, std::vector<bcf1_t*>& svs) {
     htsFile* vcf = bcf_open(vcf_fname.c_str(), "r");
@@ -30,14 +31,8 @@ int main(int argc, char* argv[]) {
     bcf_hdr_t* hdr = read_bcf(argv[1], svs);
     read_bcf(argv[2], svs);
 
-    std::sort(svs.begin(), svs.end(), [](bcf1_t* a, bcf1_t* b) {
-        if (a->rid < b->rid) {
-            return true;
-        } else if (a->rid > b->rid) {
-            return false;
-        } else {
-            return a->pos < b->pos;
-        }
+    std::stable_sort(svs.begin(), svs.end(), [](bcf1_t* a, bcf1_t* b) {
+        return std::tie(a->rid, a->pos) < std::tie(b->rid, b->pos);
     });
 
     std::string out_fname = argv[3];

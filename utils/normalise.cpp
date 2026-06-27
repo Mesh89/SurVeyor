@@ -595,7 +595,7 @@ int main(int argc, char* argv[]) {
 		normalised_vcf_records.push_back(vcf_record_norm);
 	}
 
-	std::sort(normalised_vcf_records.begin(), normalised_vcf_records.end(),
+	std::stable_sort(normalised_vcf_records.begin(), normalised_vcf_records.end(),
 			[](const bcf1_t* b1, const bcf1_t* b2) { return std::tie(b1->rid, b1->pos) < std::tie(b2->rid, b2->pos); });
 
 	htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "wz");

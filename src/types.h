@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <climits>
+#include <iomanip>
 #include <vector>
 #include <string>
 #include <sstream>
@@ -345,6 +346,7 @@ struct sv_t {
     }
 
     virtual std::string svtype() = 0;
+    virtual std::string svtype_specific_sort_key() { return ""; }
     virtual hts_pos_t svlen() = 0; // this reflects the SVLEN field in VCF (4.3 and below)
     virtual hts_pos_t svsize() = 0; // this is for filtering, and it is the max number of bases affected either on the ref or in the alt
 
@@ -429,6 +431,41 @@ inline int make_hpid(sv_t& sv) {
     return 1 + (stable_hash64(hpid_key(sv)) % (uint64_t(INT32_MAX) - 1));
 }
 
+inline std::pair<int, std::string> sv_ft_order_key(const std::shared_ptr<sv_t>& sv) {
+    if (sv->is_pass()) {
+        return std::make_pair(0, std::string());
+    }
+
+    std::stringstream ss;
+    for (size_t i = 0; i < sv->sample_info.filters.size(); i++) {
+        if (i > 0) ss << ";";
+        ss << sv->sample_info.filters[i];
+    }
+    return std::make_pair(1, ss.str());
+}
+
+inline bool sv_output_order(const std::shared_ptr<sv_t>& a, const std::shared_ptr<sv_t>& b) {
+    if (a->start != b->start) return a->start < b->start;
+    if (a->end != b->end) return a->end < b->end;
+
+    std::string a_svtype = a->svtype();
+    std::string b_svtype = b->svtype();
+    if (a_svtype != b_svtype) return a_svtype < b_svtype;
+
+    std::string a_svtype_specific_sort_key = a->svtype_specific_sort_key();
+    std::string b_svtype_specific_sort_key = b->svtype_specific_sort_key();
+    if (a_svtype_specific_sort_key != b_svtype_specific_sort_key) return a_svtype_specific_sort_key < b_svtype_specific_sort_key;
+
+    if (a->ins_seq != b->ins_seq) return a->ins_seq < b->ins_seq;
+    if (a->source != b->source) return a->source < b->source;
+
+    std::pair<int, std::string> a_ft_key = sv_ft_order_key(a);
+    std::pair<int, std::string> b_ft_key = sv_ft_order_key(b);
+    if (a_ft_key != b_ft_key) return a_ft_key < b_ft_key;
+
+    return hpid_key(*a) < hpid_key(*b);
+}
+
 struct deletion_t : sv_t {
 
     bool remapped = false;
@@ -495,14 +532,24 @@ struct inversion_t : sv_t {
         inv_end = end;
     }
 
-    std::string svtype() { return "INV"; }
-    hts_pos_t svlen() { 
+    std::string unique_key(bool include_aux = true) override {
+        return sv_t::unique_key(include_aux) + ":INVPOS:" + std::to_string(inv_start) + ":" + std::to_string(inv_end);
+    }
+
+    std::string svtype_specific_sort_key() override {
+        std::stringstream ss;
+        ss << std::setw(20) << std::setfill('0') << inv_start << ":" << std::setw(20) << std::setfill('0') << inv_end;
+        return ss.str();
+    }
+
+    std::string svtype() override { return "INV"; }
+    hts_pos_t svlen() override {
         if (!ins_seq.empty()) {
             return ins_seq.length() - (end-start);
         }
         return (inv_end-inv_start) - (end-start);
     }
-    hts_pos_t svsize() { return end - start; }
+    hts_pos_t svsize() override { return end - start; }
 
     bool is_left_facing() {
         return source[source.length()-2] == 'L';

@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
     bcf_destroy(b);
     hts_close(in_vcf_file);
 
-    std::sort(out_records.begin(), out_records.end(), [](const bcf1_t* a, const bcf1_t* b) {
+    std::stable_sort(out_records.begin(), out_records.end(), [](const bcf1_t* a, const bcf1_t* b) {
         return std::tie(a->rid, a->pos) < std::tie(b->rid, b->pos);
     });
 

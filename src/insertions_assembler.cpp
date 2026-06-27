@@ -558,7 +558,8 @@ int main(int argc, char* argv[]) {
     std::sort(insertions.begin(), insertions.end(), [](const std::shared_ptr<sv_t>& sv1, const std::shared_ptr<sv_t>& sv2) {
         int chr1 = contig_map.get_id(sv1->chr);
         int chr2 = contig_map.get_id(sv2->chr);
-        return (chr1 < chr2) || (chr1 == chr2 && sv1->start < sv2->start);
+        if (chr1 != chr2) return chr1 < chr2;
+        return sv_output_order(sv1, sv2);
     });
 
 	int a_id = 0, t_id = 0;

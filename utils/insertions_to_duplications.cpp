@@ -106,7 +106,8 @@ int main(int argc, char* argv[]) {
     std::sort(svs.begin(), svs.end(), [&contig_map](const std::shared_ptr<sv_t>& a, const std::shared_ptr<sv_t>& b) { 
         size_t chr_a = contig_map.get_id(a->chr);
         size_t chr_b = contig_map.get_id(b->chr);
-        return std::tie(chr_a, a->start) < std::tie(chr_b, b->start);
+        if (chr_a != chr_b) return chr_a < chr_b;
+        return sv_output_order(a, b);
     });
     bcf_hdr_t* out_hdr = generate_vcf_header(chr_seqs, "", config, "");
     bcf_hdr_remove(out_hdr, BCF_HL_INFO, "INS_TO_DUP");
@@ -118,7 +119,7 @@ int main(int argc, char* argv[]) {
         throw std::runtime_error("Failed to unset samples in VCF header");
     }
 
-    htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "w");
+    htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "wz");
     if (bcf_hdr_write(out_vcf_file, out_hdr) != 0) {
         throw std::runtime_error("Failed to write VCF header to " +  out_vcf_fname);
     }
