@@ -134,8 +134,8 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
                 increase_ref_bp2_better = true;
             }
         } else {
-            aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_len, filter_with_pos, &ref1_aln, 0);
-            aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_len, filter_with_pos, &ref2_aln, 0);
+            aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_w_aux_len, filter_with_pos, &ref1_aln, 0);
+            aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_w_aux_len, filter_with_pos, &ref2_aln, 0);
             ref_aln_score = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln.sw_score : ref2_aln.sw_score;
             if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin < ref_bp1_pos && ref1_aln.ref_end >= ref_bp1_pos) {
                 increase_ref_bp1_better = true;
