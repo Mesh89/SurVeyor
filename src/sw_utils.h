@@ -592,13 +592,21 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 			main_svs.push_back(main_sv);
 		}
 
-		for (auto& sv : aux_svs) {
-			if (sv == nullptr) continue;
-			if (sv->svtype() == "INS" && sv->incomplete_ins_seq()) continue; // do not assign incomplete insertions as aux indels
-			int dist = std::min(abs((int)sv->start - (int)main_sv->end), abs((int)sv->end - (int)main_sv->start));
-			if (dist < stats.read_len - 2*config.min_clip_len) {
-				main_sv->aux_indels.push_back(sv);
-				sv = nullptr; // mark as assigned
+		hts_pos_t island_start = main_sv->start, island_end = main_sv->end;
+		bool added_to_island = true;
+		while (added_to_island) {
+			added_to_island = false;
+			for (auto& sv : aux_svs) {
+				if (sv == nullptr) continue;
+				if (sv->svtype() == "INS" && sv->incomplete_ins_seq()) continue; // do not assign incomplete insertions as aux indels
+				int dist = std::min(abs((int)sv->start - (int)island_end), abs((int)sv->end - (int)island_start));
+				if (dist < stats.read_len - 2*config.min_clip_len) {
+					island_start = std::min(island_start, sv->start);
+					island_end = std::max(island_end, sv->end);
+					main_sv->aux_indels.push_back(sv);
+					sv = nullptr; // mark as assigned
+					added_to_island = true;
+				}
 			}
 		}
 		aux_svs.erase(std::remove(aux_svs.begin(), aux_svs.end(), nullptr), aux_svs.end());	

@@ -135,10 +135,13 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
             if (indel->svtype() == "DEL") {
                 hap_end = indel->start;
             } else if (indel->svtype() == "INS") {
-                int ins_len = indel->ins_seq.length();
-                if (ins_len > remaining_hap_len) ins_len = remaining_hap_len;
-                strncpy(hap_seq + (remaining_hap_len - ins_len), indel->ins_seq.c_str() + (indel->ins_seq.length() - ins_len), ins_len);
-                remaining_hap_len -= ins_len;
+                hts_pos_t copied = 0;
+                for (auto it = indel->ins_seq.rbegin(); it != indel->ins_seq.rend() && copied < remaining_hap_len; ++it) {
+                    if (*it == '-') continue;
+                    hap_seq[remaining_hap_len - copied - 1] = *it;
+                    copied++;
+                }
+                remaining_hap_len -= copied;
             }
             curr_indel_idx--;
         } else if (next_snp_pos+1 == copy_start && remaining_hap_len > 0) { // we insert the SNP
@@ -188,7 +191,7 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
             (curr_indel_idx < aux_indels.size()) ? aux_indels[curr_indel_idx]->start : chrom_len + 10;
 
         // Copy reference until just before the next event (SNP or indel anchor).
-        // copye_end is exclusive, i.e., the first base we do NOT copy
+        // copy_end is exclusive, i.e., the first base we do NOT copy
         hts_pos_t copy_end = hap_start + remaining_hap_len;
         copy_end = std::min(copy_end, next_snp_pos);
         copy_end = std::min(copy_end, next_indel_start+1); // indel start is the position *BEFORE* the indel
@@ -205,11 +208,14 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
             if (indel->svtype() == "DEL") {
                 hap_start = indel->end + 1;
             } else if (indel->svtype() == "INS") {
-                int ins_len = indel->ins_seq.length();
-                if (ins_len > remaining_hap_len) ins_len = remaining_hap_len;
-                strncpy(hap_seq + out_pos, indel->ins_seq.c_str(), ins_len);
-                out_pos += ins_len;
-                remaining_hap_len -= ins_len;
+                hts_pos_t copied = 0;
+                for (auto it = indel->ins_seq.begin(); it != indel->ins_seq.end() && copied < remaining_hap_len; ++it) {
+                    if (*it == '-') continue;
+                    hap_seq[out_pos + copied] = *it;
+                    copied++;
+                }
+                out_pos += copied;
+                remaining_hap_len -= copied;
             }
             curr_indel_idx++;
         } else if (hap_start == next_snp_pos && remaining_hap_len > 0) {
