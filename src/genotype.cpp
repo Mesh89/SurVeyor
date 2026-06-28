@@ -889,16 +889,16 @@ int main(int argc, char* argv[]) {
     workdir = argv[5];
     std::string sample_name = argv[6];
 
+    contig_map.load(workdir);
+    config.parse(workdir + "/config.txt");
+    stats.parse(workdir + "/stats.txt", config.per_contig_stats);
+
     evidence_map_t* evidence_map = new evidence_map_t();
     bool reassign_evidence = false;
     if (argc > 7 && std::string(argv[7]) == "--reassign-evidence") {
         evidence_map->load(workdir, in_vcf_fname, config);
         reassign_evidence = true;
     }
-
-    contig_map.load(workdir);
-    config.parse(workdir + "/config.txt");
-    stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
     chr_seqs.read_fasta_into_map(reference_fname);
     bam_pool = new bam_pool_t(config.threads, bam_fname, reference_fname);

@@ -1,7 +1,9 @@
 #ifndef GENOTYPE_H
 #define GENOTYPE_H
 
+#include <algorithm>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <tuple>
 #include <unordered_set>
@@ -135,26 +137,31 @@ struct evidence_map_t {
         int bp, score;
 
         // tuple fields are: score of the best association found, whether the
-        // association is unique or not, hpid of that association
+        // association is unique or not, hpid of that association, and all hpids
+        // with that best score
         // note that unique means that there is a single best association to a HPID
-        std::unordered_map<std::string, std::tuple<int, bool, int>> read_to_best_assoc_map;
+        std::unordered_map<std::string, std::tuple<int, bool, int, std::set<int>>> read_to_best_assoc_map;
 
         // For each read, find the best association. Furthermore, flag reads that have a "best" association to multiple SVs
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score) {
             sv_id = remove_svid_dup_suffix(sv_id);
             if (!read_to_best_assoc_map.count(read_name)) {
-                read_to_best_assoc_map[read_name] = {score, true, sv_hpid_map[sv_id]};
+                read_to_best_assoc_map[read_name] = std::make_tuple(score, true, sv_hpid_map[sv_id], std::set<int>{sv_hpid_map[sv_id]});
             } else {
                 auto& curr_best_assoc = read_to_best_assoc_map[read_name];
                 int& best_score = std::get<0>(curr_best_assoc);
                 bool& unique = std::get<1>(curr_best_assoc);
                 int& best_hpid = std::get<2>(curr_best_assoc);
+                std::set<int>& best_hpids = std::get<3>(curr_best_assoc);
                 if (score > best_score) {
                     best_score = score;
                     best_hpid = sv_hpid_map[sv_id];
                     unique = true;
+                    best_hpids.clear();
+                    best_hpids.insert(sv_hpid_map[sv_id]);
                 } else if (score == best_score && sv_hpid_map[sv_id] != best_hpid) {
                     unique = false;
+                    best_hpids.insert(sv_hpid_map[sv_id]);
                 }
             }
         }
@@ -187,7 +194,7 @@ struct evidence_map_t {
             sv_id = remove_svid_dup_suffix(sv_id);
             auto& best_assoc = read_to_best_assoc_map[read_name];
             int best_score = std::get<0>(best_assoc);
-            int best_hpid = std::get<2>(best_assoc);
+            const std::set<int>& best_hpids = std::get<3>(best_assoc);
             if (score == best_score) {
                 bool unique = std::get<1>(best_assoc);
                 if (unique) {
@@ -195,16 +202,22 @@ struct evidence_map_t {
                 } else {
                     read_to_multiple_svs[read_name].push_back({sv_id, bp});
                 }
-            } else if (best_hpid != sv_hpid_map[sv_id]) {
+            } else if (!best_hpids.count(sv_hpid_map[sv_id])) {
                 read_to_non_chosen_svs_map[read_name].push_back({sv_id, bp});
             }
         }
 
         // Now, assign non-uniquely assigned reads
         std::mt19937 gen(config.seed);
-        for (auto& kv : read_to_multiple_svs) {
-            std::string read_name = kv.first;
-            std::vector<sv_with_bp_t>& sv_w_bps = kv.second;
+        std::vector<std::string> read_names_with_multiple_svs;
+        read_names_with_multiple_svs.reserve(read_to_multiple_svs.size());
+        for (const auto& kv : read_to_multiple_svs) {
+            read_names_with_multiple_svs.push_back(kv.first);
+        }
+        std::sort(read_names_with_multiple_svs.begin(), read_names_with_multiple_svs.end());
+        for (const std::string& read_name : read_names_with_multiple_svs) {
+            std::vector<sv_with_bp_t>& sv_w_bps = read_to_multiple_svs[read_name];
+            std::sort(sv_w_bps.begin(), sv_w_bps.end());
             // Find top two SVs, prioritizing variants above MIN_EPR, then U, then EPR.
             std::vector<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>> sv_U_vec;
             for (const auto& sv_w_bp : sv_w_bps) {
@@ -255,6 +268,10 @@ struct evidence_map_t {
                     read_to_non_chosen_svs_map[read_name].push_back(sv_w_bp);
                 }
             }
+        }
+
+        for (auto& kv : read_to_non_chosen_svs_map) {
+            std::sort(kv.second.begin(), kv.second.end());
         }
     }
 
