@@ -713,6 +713,20 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
     std::string middle_part = junction_seq.substr(best_i, best_j-best_i);
     std::string right_part = junction_seq.substr(best_j);
 
+	// if either the left or right part is fully lowq, find variants by realigning the full junction
+	if (left_part.length() <= lowq_junction_prefix || right_part.length() <= lowq_junction_suffix) {
+		if (overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) == 0) {
+			return std::vector<std::shared_ptr<sv_t>>();
+		}
+		hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
+		hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
+		hts_pos_t remap_len = remap_end - remap_start;
+		StripedSmithWaterman::Filter filter;
+		StripedSmithWaterman::Alignment aln;
+		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
+		return detect_svs_from_aln(aln, contig_name, remap_start, junction_seq, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config);
+	}
+
     std::vector<StripedSmithWaterman::Alignment> left_part_alns = get_best_alns(ref_lh_cstr, 0, ref_remap_lh_len, (char*) left_part.c_str(), aligner);
 	std::vector<StripedSmithWaterman::Alignment> right_part_alns = get_best_alns(ref_rh_cstr, 0, ref_remap_rh_len, (char*) right_part.c_str(), aligner);
 
