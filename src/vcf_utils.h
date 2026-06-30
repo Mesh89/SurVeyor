@@ -582,6 +582,9 @@ bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name,
 	const char* hpid_tag = "##INFO=<ID=HPID,Number=1,Type=Integer,Description=\"Identifier of the local haplotype represented by this call.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, hpid_tag, &len));
 
+	const char* junction_remap_ref_range_tag = "##INFO=<ID=JUNCTION_REMAP_REF_RANGE,Number=2,Type=Integer,Description=\"1-based half-open [start,end) coordinates of the reference interval covered when the putative alternate junction allele was remapped to the reference.\">";
+	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, junction_remap_ref_range_tag, &len));
+
 	const char* svinsseq_tag = "##INFO=<ID=SVINSSEQ,Number=1,Type=String,Description=\"Inserted sequence.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, svinsseq_tag, &len));
 
@@ -771,6 +774,10 @@ void sv2bcf(bcf_hdr_t* hdr, bcf1_t* bcf_entry, sv_t* sv, char* chr_seq, bool for
 	}
 	if (sv->hpid == 0) sv->hpid = make_hpid(*sv);
 	bcf_update_info_int32(hdr, bcf_entry, "HPID", &sv->hpid, 1);
+	if (sv->junction_remap_ref_beg != HTS_POS_MIN && sv->junction_remap_ref_end != HTS_POS_MIN) {
+		int junction_remap_ref_range[] = {(int) sv->junction_remap_ref_beg + 1, (int) sv->junction_remap_ref_end + 1};
+		bcf_update_info_int32(hdr, bcf_entry, "JUNCTION_REMAP_REF_RANGE", junction_remap_ref_range, 2);
+	}
 	if (!sv->inferred_ins_seq.empty()) {
 		bcf_update_info_string(hdr, bcf_entry, "SVINSSEQ_INFERRED", sv->inferred_ins_seq.c_str());
 	}
@@ -1191,6 +1198,14 @@ std::shared_ptr<sv_t> bcf_to_sv(bcf_hdr_t* hdr, bcf1_t* b) {
 	len = 0;
 	if (bcf_get_info_int32(hdr, b, "HPID", &data, &len) > 0 && len > 0) {
 		sv->hpid = data[0];
+	}
+	free(data);
+
+	data = NULL;
+	len = 0;
+	if (bcf_get_info_int32(hdr, b, "JUNCTION_REMAP_REF_RANGE", &data, &len) > 0 && len > 1) {
+		sv->junction_remap_ref_beg = data[0] - 1;
+		sv->junction_remap_ref_end = data[1] - 1;
 	}
 	free(data);
 	if (sv->hpid == 0) sv->hpid = make_hpid(*sv);

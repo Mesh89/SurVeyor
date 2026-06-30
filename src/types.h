@@ -189,6 +189,7 @@ struct sv_t {
     std::string source;
     int hpid = 0;
     bool imprecise = false;
+    hts_pos_t junction_remap_ref_beg = HTS_POS_MIN, junction_remap_ref_end = HTS_POS_MIN;
     bool hp_genotyped = false;
     hts_pos_t hp_ref_beg = HTS_POS_MIN, hp_ref_end = HTS_POS_MIN;
 

@@ -520,14 +520,36 @@ std::vector<StripedSmithWaterman::Alignment> get_best_alns(char* contig_seq, hts
 	return best_alns;
 }
 
+void set_junction_remap_ref_range(std::shared_ptr<sv_t> sv, hts_pos_t remap_ref_beg, hts_pos_t remap_ref_end, stats_t& stats, config_t& config) {
+	
+	hts_pos_t island_padding = std::max<hts_pos_t>(0, stats.read_len - 2*config.min_clip_len);
+
+	hts_pos_t island_beg = std::min(sv->start, sv->end);
+	hts_pos_t island_end = std::max(sv->start, sv->end);
+
+	for (const auto& aux_indel : sv->aux_indels) {
+		island_beg = std::min(island_beg, std::min(aux_indel->start, aux_indel->end));
+		island_end = std::max(island_end, std::max(aux_indel->start, aux_indel->end));
+	}
+	for (const auto& aux_snp : sv->aux_snps) {
+		island_beg = std::min(island_beg, aux_snp.pos);
+		island_end = std::max(island_end, aux_snp.pos);
+	}
+
+	sv->junction_remap_ref_beg = std::max(remap_ref_beg, island_beg - island_padding);
+	sv->junction_remap_ref_end = std::min(remap_ref_end, island_end + island_padding);
+}
+
 // sometimes, we call this function after finding a main SV to find additional SVs. 
 // In such case, we use main_sv to assign auxiliary SNPs and indels that would be otherwise lost or assigned to other SVs
 // cigar is in the SSW library format
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& cigar, hts_pos_t ref_begin, hts_pos_t ref_end, int aln_score,
 	std::string contig_name, std::string junction_seq, std::shared_ptr<sv_t> main_sv, 
-	int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config) {
+	int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config,
+	bool record_junction_remap_ref_range = false) {
 	// do not find aux SNPs in low-quality regions of the junction sequence
 
+	std::shared_ptr<sv_t> input_main_sv = main_sv;
 	std::vector<std::shared_ptr<sv_t>> svs;
     hts_pos_t current_pos = ref_begin;
 	hts_pos_t junction_pos = 0;
@@ -624,17 +646,27 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 		}
 	}
 
+	if (record_junction_remap_ref_range) {
+		for (auto& sv : main_svs) {
+			if (sv != input_main_sv) {
+				set_junction_remap_ref_range(sv, ref_begin, ref_end, stats, config);
+			}
+		}
+	}
+
 	return main_svs;
 }
 
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(StripedSmithWaterman::Alignment& aln, std::string contig_name, hts_pos_t ref_start,
-	std::string junction_seq, std::shared_ptr<sv_t> main_sv, int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config) {
+	std::string junction_seq, std::shared_ptr<sv_t> main_sv, int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config,
+	bool record_junction_remap_ref_range = false) {
 	return detect_svs_from_aln(aln.cigar, ref_start + aln.ref_begin, ref_start + aln.ref_end, aln.sw_score, contig_name,
-		junction_seq, main_sv, lowq_junction_prefix, lowq_junction_suffix, stats, config);
+		junction_seq, main_sv, lowq_junction_prefix, lowq_junction_suffix, stats, config, record_junction_remap_ref_range);
 }
 
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string contig_name,
-	std::string junction_seq, std::shared_ptr<sv_t> main_sv, int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config) {
+	std::string junction_seq, std::shared_ptr<sv_t> main_sv, int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config,
+	bool record_junction_remap_ref_range = false) {
 	uint32_t* bam_cigar = bam_get_cigar(read);
 	std::vector<uint32_t> ssw_cigar;
 	for (int i = 0; i < read->core.n_cigar; i++) {
@@ -643,7 +675,8 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string
 		ssw_cigar.push_back(to_cigar_int(len, op));
 	}
 	return detect_svs_from_aln(ssw_cigar, read->core.pos, bam_endpos(read), get_AS_tag(read),
-		contig_name, junction_seq, main_sv, lowq_junction_prefix, lowq_junction_suffix, stats, config);
+		contig_name, junction_seq, main_sv, lowq_junction_prefix, lowq_junction_suffix, stats, config,
+		record_junction_remap_ref_range);
 }
 
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_name, char* contig_seq, std::string junction_seq, 
@@ -724,7 +757,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		StripedSmithWaterman::Filter filter;
 		StripedSmithWaterman::Alignment aln;
 		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
-		return detect_svs_from_aln(aln, contig_name, remap_start, junction_seq, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config);
+		std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start, junction_seq,
+			nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
+		return remapped_svs;
 	}
 
     std::vector<StripedSmithWaterman::Alignment> left_part_alns = get_best_alns(ref_lh_cstr, 0, ref_remap_lh_len, (char*) left_part.c_str(), aligner);
@@ -813,7 +848,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 				StripedSmithWaterman::Alignment aln;
 				aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
 				if (!is_clipped(aln, config.min_clip_len)) {
-					return detect_svs_from_aln(aln, contig_name, remap_start, junction_seq, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config);
+					std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start,
+						junction_seq, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
+					return remapped_svs;
 				}
 			}
 
@@ -832,7 +869,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 				StripedSmithWaterman::Alignment aln;
 				aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
 				if (!is_clipped(aln, config.min_clip_len)) {
-					return detect_svs_from_aln(aln, contig_name, remap_start, junction_seq, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config);
+					std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start,
+						junction_seq, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
+					return remapped_svs;
 				}
 			}
 
@@ -842,9 +881,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		svs[0]->mh_len = prefix_mh_len;
 	}
 
-	std::vector<std::shared_ptr<sv_t>> extra_svs = detect_svs_from_aln(left_part_aln, contig_name, ref_remap_lh_start, left_part, svs[0], lowq_junction_prefix, 0, stats, config);
+	std::vector<std::shared_ptr<sv_t>> extra_svs = detect_svs_from_aln(left_part_aln, contig_name, ref_remap_lh_start,
+		left_part, svs[0], lowq_junction_prefix, 0, stats, config, true);
 	for (const auto& sv : extra_svs) {
-		if (sv->end <= svs[0]->start) {
+		if (sv != svs[0] && sv->end <= svs[0]->start) {
 			svs.push_back(sv);
 		}
 	}
@@ -867,9 +907,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	std::vector<snp_t> backup_aux_snps;
 	backup_aux_snps.swap(svs[0]->aux_snps);
 
-	extra_svs = detect_svs_from_aln(right_part_aln, contig_name, ref_remap_rh_start, right_part, svs[0], 0, lowq_junction_suffix, stats, config);
+	extra_svs = detect_svs_from_aln(right_part_aln, contig_name, ref_remap_rh_start, right_part, svs[0],
+		0, lowq_junction_suffix, stats, config, true);
 	for (const auto& sv : extra_svs) {
-		if (sv->start >= svs[0]->end) {
+		if (sv != svs[0] && sv->start >= svs[0]->end) {
 			svs.push_back(sv);
 		}
 	}
@@ -892,6 +933,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	std::sort(svs[0]->aux_snps.begin(), svs[0]->aux_snps.end(), [](const snp_t& a, const snp_t& b) {
 		return a.pos < b.pos;
 	});
+
+	set_junction_remap_ref_range(svs[0], std::min(left_anchor_start, right_anchor_start),
+		std::max(left_anchor_end, right_anchor_end), stats, config);
 
     return svs;
 }
