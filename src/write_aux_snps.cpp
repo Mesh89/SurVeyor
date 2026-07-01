@@ -362,20 +362,22 @@ void merge_variant_records(bcf_hdr_t* hdr, bcf1_t* first, bcf1_t* second) {
     // From here onwards, both records are assumed positive
 
     // If both records are identical, and EREFA does not force a ref allele to exist, merge them into a 1/1
+    // Regardless of EREFA, the second record is set to 0/0, as we do not want multiple identical positive calls
     if (same_record_identity(hdr, first, second)) {
+        set_gt(hdr, second, 0, 0);
+        log_merge_identical_operation(hdr, "set_second_0_0", first, second);
+        
         int first_erefa = get_format_int32_or_default(hdr, first, "EREFA");
         if (first_erefa == 1) {
             log_merge_identical_operation(hdr, "skip_erefa", first, second,
                 "EREFA=" + std::to_string(first_erefa));
-                return;
-            }
+            return;
+        }
+        if (first_alt_alleles == 1) concat_record_ids(hdr, first, second);
+        log_merge_identical_operation(hdr, "concat_ids", first, second);
+        set_gt(hdr, first, 1, 1);
+        log_merge_identical_operation(hdr, "set_first_1_1", first, second);
 
-            if (first_alt_alleles == 1) concat_record_ids(hdr, first, second);
-            log_merge_identical_operation(hdr, "concat_ids", first, second);
-            set_gt(hdr, first, 1, 1);
-            log_merge_identical_operation(hdr, "set_first_1_1", first, second);
-            set_gt(hdr, second, 0, 0);
-            log_merge_identical_operation(hdr, "set_second_0_0", first, second);
     }
     // If the first record is a 1/1, but the probability of the second record to exist (EPR) is higher
     // than the probability of the first record to be homozygous (HOPR), accept both as 0/1
