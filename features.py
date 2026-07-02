@@ -40,6 +40,7 @@ class Features:
                             'AR1_RR1_CAS_Z_SCORE', 'AR2_RR2_CAS_Z_SCORE', 
                             'AR1_OVER_RR1', 'AR2_OVER_RR2', 'AR1C_OVER_RR1C', 'AR2C_OVER_RR2C', 'AR1E_OVER_RR1E', 'AR2E_OVER_RR2E',
                             'AR1_OVER_OR1', 'AR2_OVER_OR2', 'AR1C_OVER_OR1C', 'AR2C_OVER_OR2C', 'AR1E_OVER_OR1E', 'AR2E_OVER_OR2E',
+                            'OR1_OVER_RR1', 'OR2_OVER_RR2', 'OR1C_OVER_RR1C', 'OR2C_OVER_RR2C', 'OR1E_OVER_RR1E', 'OR2E_OVER_RR2E',
                             'AR1_OVER_NAR1', 'AR2_OVER_NAR2', 'AR1C_OVER_NAR1C', 'AR2C_OVER_NAR2C', 'AR1E_OVER_NAR1E', 'AR2E_OVER_NAR2E']
 
     fmt_features_names = [  'AXR1', 'AXR2', 'AXR1HQ', 'AXR2HQ',
@@ -534,6 +535,12 @@ class Features:
         features['AR2C_OVER_OR2C'] = ar2c/max(1, ar2c+or2c)
         features['AR1E_OVER_OR1E'] = ar1e/max(1, ar1e+or1e)
         features['AR2E_OVER_OR2E'] = ar2e/max(1, ar2e+or2e)
+        features['OR1_OVER_RR1'] = or1/max(1, or1+rr1)
+        features['OR2_OVER_RR2'] = or2/max(1, or2+rr2)
+        features['OR1C_OVER_RR1C'] = or1c/max(1, or1c+rr1c)
+        features['OR2C_OVER_RR2C'] = or2c/max(1, or2c+rr2c)
+        features['OR1E_OVER_RR1E'] = or1e/max(1, or1e+rr1e)
+        features['OR2E_OVER_RR2E'] = or2e/max(1, or2e+rr2e)
         features['AR1_OVER_NAR1'] = ar1/max(1, ar1+nar1)
         features['AR2_OVER_NAR2'] = ar2/max(1, ar2+nar2)
         features['AR1C_OVER_NAR1C'] = ar1c/max(1, ar1c+nar1c)
