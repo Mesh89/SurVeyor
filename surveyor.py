@@ -79,17 +79,17 @@ cmd_args = parser.parse_args()
 
 def run_cmd(cmd, error_msg=None):
     start_time = timeit.default_timer()
-    print("Executing:", cmd)
+    print("Executing:", cmd, flush=True)
     return_code = os.system(cmd)
     if return_code != 0:
         if error_msg:
-            print(error_msg)
+            print(error_msg, flush=True)
         else:
-            print("Error executing:", cmd)
-            print("Return code:", return_code)
+            print("Error executing:", cmd, flush=True)
+            print("Return code:", return_code, flush=True)
         exit(1)
     elapsed = timeit.default_timer() - start_time
-    print(cmd, "was run in %.2f seconds" % elapsed)
+    print(cmd, "was run in %.2f seconds" % elapsed, flush=True)
 
 SURVEYOR_PATH = os.path.dirname(os.path.realpath(__file__))
 
@@ -106,7 +106,7 @@ def mkdir_clean(dirname):
     mkdir(dirname)
 
 def fail(message):
-    print(message)
+    print(message, flush=True)
     exit(1)
 
 def get_max_is_from_stats(stats_fname):
@@ -323,6 +323,7 @@ def reads_categorizer(workdir):
         if cmd_args.sampling_regions:
             config_file.write("sampling_regions %s\n" % cmd_args.sampling_regions)
         config_file.write("per_contig_stats %d\n" % cmd_args.per_contig_stats)
+        config_file.write("training_mode %d\n" % cmd_args.generate_training_data)
         config_file.write("version %s\n" % VERSION)
         config_file.write("min_diff_hsr %s\n" % cmd_args.min_diff_hsr)
         config_file.write("min_stable_mapq %d\n" % cmd_args.min_stable_mapq)
@@ -489,13 +490,13 @@ else:
 if cmd_args.command == 'call':
 
     if not cmd_args.ml_model:
-        print("No model provided. Genotyped variants will not be output.")
+        print("No model provided. Genotyped variants will not be output.", flush=True)
 
         if not cmd_args.generate_training_data:
-            print("At least one of --ml-model or --generate-training-data must be provided.")
+            print("At least one of --ml-model or --generate-training-data must be provided.", flush=True)
             exit(1)
         if cmd_args.two_pass:
-            print("Error: --two-pass requires --ml-model to be provided.")
+            print("Error: --two-pass requires --ml-model to be provided.", flush=True)
             exit(1)
 
     call_candidate_variants(cmd_args.bam_file, cmd_args.workdir, cmd_args.reference, sample_name)
@@ -512,13 +513,13 @@ if cmd_args.command == 'call':
 elif cmd_args.command == 'genotype':
 
     if not cmd_args.ml_model:
-        print("No model provided. Genotyped variants will not be output.")
+        print("No model provided. Genotyped variants will not be output.", flush=True)
 
         if not cmd_args.generate_training_data:
-            print("At least one of --ml-model or --generate-training-data must be provided.")
+            print("At least one of --ml-model or --generate-training-data must be provided.", flush=True)
             exit(1)
         if cmd_args.two_pass:
-            print("Error: --two-pass requires --ml-model to be provided.")
+            print("Error: --two-pass requires --ml-model to be provided.", flush=True)
             exit(1)
 
     check_duplicate_ids_cmd = SURVEYOR_PATH + "/bin/check_duplicate_ids %s" % cmd_args.in_vcf_file
@@ -546,14 +547,14 @@ elif cmd_args.command == 'generate-training-data':
     reassigned_ins_to_dup_training_data_vcf = cmd_args.workdir + "/training-data.reassigned.INS_TO_DUP.vcf.gz"
 
     if not os.path.exists(original_training_data_vcf):
-        print("Error: training-data.vcf.gz not found in the workdir %s. Please make sure to run the call command with --generate-training-data first." % cmd_args.workdir)
+        print("Error: training-data.vcf.gz not found in the workdir %s. Please make sure to run the call command with --generate-training-data first." % cmd_args.workdir, flush=True)
         exit(1)
 
     source_training_data_vcf = original_training_data_vcf
     source_ins_to_dup_training_data_vcf = original_ins_to_dup_training_data_vcf
     if cmd_args.use_reassigned_training_data:
         if not os.path.exists(reassigned_training_data_vcf) or not os.path.exists(reassigned_ins_to_dup_training_data_vcf):
-            print("Error: reassigned training data not found in the workdir %s. Please make sure to run call or genotype with --generate-training-data, --ml-model, and --two-pass first." % cmd_args.workdir)
+            print("Error: reassigned training data not found in the workdir %s. Please make sure to run call or genotype with --generate-training-data, --ml-model, and --two-pass first." % cmd_args.workdir, flush=True)
             exit(1)
         source_training_data_vcf = reassigned_training_data_vcf
         source_ins_to_dup_training_data_vcf = reassigned_ins_to_dup_training_data_vcf
@@ -584,8 +585,8 @@ elif cmd_args.command == 'generate-training-data':
              pysam.VariantFile(reassigned_training_data_vcf) as reassigned_vcf:
             for orig_record, reassigned_record in zip(original_vcf, reassigned_vcf):
                 if orig_record.id != reassigned_record.id:
-                    print("Error: Variant IDs do not match between training-data.vcf.gz and training-data.reassigned.vcf.gz")
-                    print("Found %s and %s" % (orig_record.id, reassigned_record.id))
+                    print("Error: Variant IDs do not match between training-data.vcf.gz and training-data.reassigned.vcf.gz", flush=True)
+                    print("Found %s and %s" % (orig_record.id, reassigned_record.id), flush=True)
                     exit(1)
                 if 'AR1' in orig_record.samples[0]:
                     o_a1 = orig_record.samples[0]['AR1']

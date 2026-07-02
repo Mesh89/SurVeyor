@@ -205,6 +205,10 @@ int calculate_mh_len(sv_t* sv) {
     return mh_len;
 }
 
+bool genotype_when_reassigning_evidence(const sv_t* sv) {
+    return config.training_mode || sv->sample_info.epr >= MIN_EPR;
+}
+
 int get_orc_count(const std::unordered_map<std::string, sv_t::orc_read_info_t>& reads) {
     return static_cast<int>(reads.size());
 }
@@ -1011,7 +1015,7 @@ int main(int argc, char* argv[]) {
         std::vector<std::shared_ptr<deletion_t>>& dels = dels_by_chr[contig_name];
         std::vector<deletion_t*> block_dels;
         for (int i = 0; i < dels.size(); i++) {
-            if (!reassign_evidence || dels[i]->sample_info.epr >= MIN_EPR) {
+            if (!reassign_evidence || genotype_when_reassigning_evidence(dels[i].get())) {
                 block_dels.push_back(dels[i].get());
             }
             if (block_dels.size() == BLOCK_SIZE || (i == dels.size()-1 && !block_dels.empty())) {
@@ -1027,7 +1031,7 @@ int main(int argc, char* argv[]) {
         std::vector<std::shared_ptr<duplication_t>>& dups = dups_by_chr[contig_name];
         std::vector<duplication_t*> block_dups;
         for (int i = 0; i < dups.size(); i++) {
-            if (!reassign_evidence || dups[i]->sample_info.epr >= MIN_EPR) {
+            if (!reassign_evidence || genotype_when_reassigning_evidence(dups[i].get())) {
                 block_dups.push_back(dups[i].get());
             }
             if (block_dups.size() == BLOCK_SIZE || (i == dups.size()-1 && !block_dups.empty())) {
@@ -1043,7 +1047,7 @@ int main(int argc, char* argv[]) {
         std::vector<std::shared_ptr<insertion_t>>& inss = inss_by_chr[contig_name];
         std::vector<insertion_t*> block_inss;
         for (int i = 0; i < inss.size(); i++) {
-            if (!reassign_evidence || inss[i]->sample_info.epr >= MIN_EPR) {
+            if (!reassign_evidence || genotype_when_reassigning_evidence(inss[i].get())) {
                 block_inss.push_back(inss[i].get());
             }
             if (block_inss.size() == BLOCK_SIZE || (i == inss.size()-1 && !block_inss.empty())) {
@@ -1059,7 +1063,7 @@ int main(int argc, char* argv[]) {
         std::vector<std::shared_ptr<inversion_t>>& invs = invs_by_chr[contig_name];
         std::vector<inversion_t*> block_invs;
         for (int i = 0; i < invs.size(); i++) {
-            if (!reassign_evidence || invs[i]->sample_info.epr >= MIN_EPR) {
+            if (!reassign_evidence || genotype_when_reassigning_evidence(invs[i].get())) {
                 block_invs.push_back(invs[i].get());
             }
             if (block_invs.size() == BLOCK_SIZE || (i == invs.size()-1 && !block_invs.empty())) {
@@ -1106,10 +1110,10 @@ int main(int argc, char* argv[]) {
 			bcf_update_info_int32(out_vcf_header, vcf_record, "AN", NULL, 0);
             // 1) If not reassigning evidence, update all records
             // 2) If reassigning evidence, only update records that may have changed: currently, they are
-            // - records with EPR >= MIN_EPR
+            // - records selected by genotype_when_reassigning_evidence
             // - homopolymer indels (note: we currently do not reassign evidence for homopolymer indels, but when multiple indels with identical HP ALT len are present,
             //   the first one in the list is selected. For this reason, the evidence may shift between homopolymer indels with identical HP ALT len)
-            if (!reassign_evidence || sv->sample_info.epr >= MIN_EPR || sv->hp_genotyped) {
+            if (!reassign_evidence || genotype_when_reassigning_evidence(sv.get())) {
                 update_record(in_vcf_header, out_vcf_header, sv.get(), chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), imap[0]);
             }
 			if (bcf_write(out_vcf_file, out_vcf_header, sv->vcf_entry) != 0) {

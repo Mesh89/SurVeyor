@@ -28,6 +28,7 @@ struct config_t {
     int min_sv_size, max_trans_size;
     double max_seq_error;
     bool per_contig_stats;
+    bool training_mode;
     std::string sampling_regions, version;
 
     const int flanking_size = 5000, indel_tested_region_size = 10000;
@@ -52,6 +53,7 @@ struct config_t {
         if (config_params.count("max_trans_size")) max_trans_size = std::stoi(config_params["max_trans_size"]);
         max_seq_error = std::stod(config_params["max_seq_error"]);
         per_contig_stats = std::stoi(config_params["per_contig_stats"]);
+        training_mode = std::stoi(config_params["training_mode"]);
         sampling_regions = config_params["sampling_regions"];
         version = config_params["version"];
     }
