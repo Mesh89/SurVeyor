@@ -20,13 +20,6 @@ class Classifier:
                 feature_names_by_model[model_name] = [line.strip() for line in f if line.strip()]
         return feature_names_by_model
 
-    def load_classes_file(model_fname):
-        classes_fname = os.path.splitext(model_fname)[0] + ".classes"
-        if not os.path.exists(classes_fname):
-            return None
-        with open(classes_fname) as f:
-            return np.array([int(x) for x in f.read().split()], dtype=np.int32)
-
     def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, out_vcf_fname, stats_fname):
         stats = features.load_stats(stats_fname)
 
@@ -102,15 +95,26 @@ class Classifier:
 
             model_file = os.path.join(model_dir, "gts", model_name + '.ubj')
             classifier.load_model(model_file)
-            gt_stage_classes = Classifier.load_classes_file(model_file)
             predictions = classifier.predict(positive_data)
             hoprs = classifier.predict_proba(positive_data)
             for i in range(len(predictions)):
-                predicted_gt_class = gt_stage_classes[predictions[i]] if gt_stage_classes is not None else predictions[i]
-                svid_to_gt[positive_variant_ids[i]] = 2 if predicted_gt_class == 2 else 1
-                svid_to_erefa[positive_variant_ids[i]] = 1 if predicted_gt_class == 0 else 0
-                hom_alt_class_idx = np.where(gt_stage_classes == 2)[0][0] if gt_stage_classes is not None and 2 in gt_stage_classes else hoprs.shape[1]-1
-                svid_to_hopr[positive_variant_ids[i]] = hoprs[i][hom_alt_class_idx]
+                svid_to_gt[positive_variant_ids[i]] = 2 if predictions[i] == 1 else 1
+                svid_to_hopr[positive_variant_ids[i]] = hoprs[i][1]
+
+            het_mask = np.array([svid_to_gt[variant_id] == 1 for variant_id in positive_variant_ids])
+            het_data = positive_data[het_mask]
+            het_variant_ids = positive_variant_ids[het_mask]
+
+            if len(het_data) > 0:
+                for variant_id in het_variant_ids:
+                    svid_to_erefa[variant_id] = 0
+
+                model_file = os.path.join(model_dir, "eref", model_name + ".ubj")
+                if os.path.exists(model_file):
+                    classifier.load_model(model_file)
+                    erefa_predictions = classifier.predict(het_data)
+                    for i in range(len(erefa_predictions)):
+                        svid_to_erefa[het_variant_ids[i]] = int(erefa_predictions[i])
 
             model_file = os.path.join(model_dir, "exact", model_name + ".ubj")
             if os.path.exists(model_file):
@@ -130,7 +134,7 @@ class Classifier:
         if 'EXPR' not in header.formats:
             header.add_line('##FORMAT=<ID=EXPR,Number=1,Type=Float,Description="Probability of the SV to be represented exactly, according to the ML model.">')
         if 'EREFA' not in header.formats:
-            header.add_line('##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description="Whether the GT-stage classifier requires the other allele to be reference.">')
+            header.add_line('##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description="Whether the EREFA-stage classifier requires the other allele to be reference.">')
         Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, out_vcf, stats_fname)
         write_elapsed = timeit.default_timer() - write_start_time
         print("VCF writing was run in %.2f seconds" % write_elapsed)

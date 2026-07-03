@@ -22,10 +22,17 @@ def write_features_file(model_fname, features_names):
         for feature_name in features_names:
             f.write(feature_name + "\n")
 
-def write_classes_file(model_fname, classes):
-    classes_fname = os.path.splitext(model_fname)[0] + ".classes"
-    with open(classes_fname, "w") as f:
-        f.write(" ".join(str(int(c)) for c in classes) + "\n")
+def remove_model_artifacts(model_fname, importance_fname = None):
+    artifact_fnames = [
+        model_fname,
+        os.path.splitext(model_fname)[0] + ".features",
+    ]
+    if importance_fname is not None:
+        artifact_fnames.append(importance_fname)
+
+    for artifact_fname in artifact_fnames:
+        if os.path.exists(artifact_fname):
+            os.remove(artifact_fname)
 
 def make_classifier():
     if cmd_args.cross_species:
@@ -97,6 +104,9 @@ if __name__ == '__main__':
     gts_outdir = os.path.join(cmd_args.outdir, "gts")
     os.makedirs(gts_outdir, exist_ok=True)
 
+    eref_outdir = os.path.join(cmd_args.outdir, "eref")
+    os.makedirs(eref_outdir, exist_ok=True)
+
     exact_outdir = os.path.join(cmd_args.outdir, "exact")
     os.makedirs(exact_outdir, exist_ok=True)
 
@@ -151,28 +161,52 @@ if __name__ == '__main__':
         if len(positive_training_data) == 0:
             raise RuntimeError(f"No known positive training examples found for model {model_name}. Cannot train the GT-stage classifier.")
 
-        gt_stage_classes = np.unique(positive_training_labels)
-        positive_training_labels = np.searchsorted(gt_stage_classes, positive_training_labels).astype(np.int32)
-
         unique_labels = np.unique(positive_training_labels)
         if len(unique_labels) == 1:
-            raise RuntimeError(f"Only one label ({gt_stage_classes[0]}) present in positive training data for model {model_name}. Cannot train the GT-stage classifier.")
+            raise RuntimeError(f"Only one label ({unique_labels[0]}) present in positive training data for model {model_name}. Cannot train the GT-stage classifier.")
 
         unique, counts = np.unique(positive_training_labels, return_counts=True)
 
         classifier = make_classifier()
         classifier.fit(positive_training_data, positive_training_labels)
 
+        model_fname = os.path.join(gts_outdir, model_name + ".ubj")
+        importance_fname = os.path.join(gts_outdir, model_name + ".importance.txt")
+        remove_model_artifacts(model_fname, importance_fname)
+
         importances = classifier.feature_importances_
         indices = np.argsort(importances)[::-1]
-        with open(os.path.join(gts_outdir, model_name + ".importance.txt"), 'w') as f:
+        with open(importance_fname, 'w') as f:
             for i in range(len(features_names)):
                 f.write("%d. %s (%f)\n" % (i + 1, features_names[indices[i]], importances[indices[i]]))
 
-        model_fname = os.path.join(gts_outdir, model_name + ".ubj")
         classifier.save_model(model_fname)
         write_features_file(model_fname, features_names)
-        write_classes_file(model_fname, gt_stage_classes)
+
+        known_het_mask = features.gt_is_known_het_array(training_gts[model_name])
+        eref_training_data = training_data[model_name][known_het_mask]
+        eref_training_labels = np.array(
+            [features.gt_eref_label(gt) for gt in training_gts[model_name][known_het_mask]],
+            dtype=np.int32
+        )
+
+        eref_stage_classes = np.unique(eref_training_labels)
+        model_fname = os.path.join(eref_outdir, model_name + ".ubj")
+        importance_fname = os.path.join(eref_outdir, model_name + ".importance.txt")
+        remove_model_artifacts(model_fname, importance_fname)
+
+        if len(eref_stage_classes) >= 2:
+            write_features_file(model_fname, features_names)
+            classifier = make_classifier()
+            classifier.fit(eref_training_data, eref_training_labels)
+
+            importances = classifier.feature_importances_
+            indices = np.argsort(importances)[::-1]
+            with open(importance_fname, 'w') as f:
+                for i in range(len(features_names)):
+                    f.write("%d. %s (%f)\n" % (i + 1, features_names[indices[i]], importances[indices[i]]))
+
+            classifier.save_model(model_fname)
 
         if model_name == "HP" or model_name.startswith("DEL") or model_name.startswith("INS"):
             exact_start_time = time.time()

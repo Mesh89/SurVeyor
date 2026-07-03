@@ -808,14 +808,23 @@ def gt_is_hom_alt(gt):
     alleles = gt_alleles(gt)
     return len(alleles) > 0 and all(allele == "1" for allele in alleles)
 
+def gt_is_known_het(gt):
+    alleles = gt_alleles(gt)
+    return "." not in alleles and "1" in alleles and not gt_is_hom_alt(gt)
+
 def gt_stage_label(gt):
-    if gt == "0/1":
+    if gt == "0/1" or gt == "1/2":
         return 0
-    if gt == "1/2":
-        return 1
     if gt == "1/1":
-        return 2
+        return 1
     raise RuntimeError(f"Unsupported GT-stage label: {gt}")
+
+def gt_eref_label(gt):
+    if gt == "0/1":
+        return 1
+    if gt == "1/2":
+        return 0
+    raise RuntimeError(f"Unsupported EREFA-stage label: {gt}")
 
 def gt_has_alt_array(gts):
     return np.array([gt_has_alt(gt) for gt in gts])
@@ -825,6 +834,9 @@ def gt_is_known_positive_array(gts):
 
 def gt_is_hom_alt_array(gts):
     return np.array([gt_is_hom_alt(gt) for gt in gts])
+
+def gt_is_known_het_array(gts):
+    return np.array([gt_is_known_het(gt) for gt in gts])
 
 def read_gt_labels(file_path):
     if not os.path.exists(file_path):
