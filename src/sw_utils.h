@@ -521,7 +521,7 @@ std::vector<StripedSmithWaterman::Alignment> get_best_alns(char* contig_seq, hts
 }
 
 void set_junction_remap_ref_range(std::shared_ptr<sv_t> sv, hts_pos_t remap_ref_beg, hts_pos_t remap_ref_end, stats_t& stats, config_t& config) {
-	
+		
 	hts_pos_t island_padding = std::max<hts_pos_t>(0, stats.read_len - 2*config.min_clip_len);
 
 	hts_pos_t island_beg = std::min(sv->start, sv->end);
@@ -538,6 +538,48 @@ void set_junction_remap_ref_range(std::shared_ptr<sv_t> sv, hts_pos_t remap_ref_
 
 	sv->junction_remap_ref_beg = std::max(remap_ref_beg, island_beg - island_padding);
 	sv->junction_remap_ref_end = std::min(remap_ref_end, island_end + island_padding);
+}
+
+// Calculate the reference range covered by the alignment, represented by the cigar string, 
+// when excluding the lowq prefix and suffix of the query sequence. 
+std::pair<hts_pos_t, hts_pos_t> get_highq_ref_range(std::vector<uint32_t>& cigar, hts_pos_t ref_begin,
+		hts_pos_t query_len, int lowq_prefix, int lowq_suffix) {
+	hts_pos_t highq_query_beg = std::min<hts_pos_t>(std::max<hts_pos_t>(0, lowq_prefix), query_len);
+	hts_pos_t highq_query_end = std::max<hts_pos_t>(0, query_len - std::max(0, lowq_suffix));
+	if (highq_query_beg >= highq_query_end) return {ref_begin, ref_begin};
+
+	hts_pos_t ref_pos = ref_begin;
+	hts_pos_t query_pos = 0;
+	hts_pos_t highq_ref_beg = HTS_POS_MAX;
+	hts_pos_t highq_ref_end = HTS_POS_MIN;
+
+	for (uint32_t c : cigar) {
+		int len = cigar_int_to_len(c);
+		char op = cigar_int_to_op(c);
+		bool consumes_ref = op == '=' || op == 'X' || op == 'M' || op == 'D';
+		bool consumes_query = op == '=' || op == 'X' || op == 'M' || op == 'I' || op == 'S';
+
+		hts_pos_t op_ref_beg = ref_pos;
+		hts_pos_t op_query_beg = query_pos;
+
+		if (consumes_ref && consumes_query) {
+			hts_pos_t overlap_beg = std::max(op_query_beg, highq_query_beg);
+			hts_pos_t overlap_end = std::min(op_query_beg + len, highq_query_end);
+			if (overlap_beg < overlap_end) {
+				highq_ref_beg = std::min(highq_ref_beg, op_ref_beg + overlap_beg - op_query_beg);
+				highq_ref_end = std::max(highq_ref_end, op_ref_beg + overlap_end - op_query_beg);
+			}
+		} else if (consumes_ref && highq_query_beg < query_pos && query_pos < highq_query_end) {
+			highq_ref_beg = std::min(highq_ref_beg, op_ref_beg);
+			highq_ref_end = std::max(highq_ref_end, op_ref_beg + len);
+		}
+
+		if (consumes_ref) ref_pos += len;
+		if (consumes_query) query_pos += len;
+	}
+
+	if (highq_ref_beg == HTS_POS_MAX) return {ref_begin, ref_begin};
+	return {highq_ref_beg, highq_ref_end};
 }
 
 // sometimes, we call this function after finding a main SV to find additional SVs. 
@@ -647,9 +689,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 	}
 
 	if (record_junction_remap_ref_range) {
+		std::pair<hts_pos_t, hts_pos_t> highq_ref_range = get_highq_ref_range(cigar, ref_begin, junction_seq.length(), lowq_junction_prefix, lowq_junction_suffix);
 		for (auto& sv : main_svs) {
-			if (sv != input_main_sv) {
-				set_junction_remap_ref_range(sv, ref_begin, ref_end, stats, config);
+			if (sv != input_main_sv && highq_ref_range.first < highq_ref_range.second) {
+				set_junction_remap_ref_range(sv, highq_ref_range.first, highq_ref_range.second, stats, config);
 			}
 		}
 	}
@@ -934,8 +977,15 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		return a.pos < b.pos;
 	});
 
-	set_junction_remap_ref_range(svs[0], std::min(left_anchor_start, right_anchor_start),
-		std::max(left_anchor_end, right_anchor_end), stats, config);
+	std::pair<hts_pos_t, hts_pos_t> left_highq_ref_range = get_highq_ref_range(left_part_aln.cigar,
+		left_anchor_start, left_part.length(), lowq_junction_prefix, 0);
+	std::pair<hts_pos_t, hts_pos_t> right_highq_ref_range = get_highq_ref_range(right_part_aln.cigar,
+		right_anchor_start, right_part.length(), 0, lowq_junction_suffix);
+	if (left_highq_ref_range.first < left_highq_ref_range.second &&
+			right_highq_ref_range.first < right_highq_ref_range.second) {
+		set_junction_remap_ref_range(svs[0], std::min(left_highq_ref_range.first, right_highq_ref_range.first),
+			std::max(left_highq_ref_range.second, right_highq_ref_range.second), stats, config);
+	}
 
     return svs;
 }
