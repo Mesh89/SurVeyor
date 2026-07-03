@@ -74,18 +74,38 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         alt_bp2_seq[alt_bp2_len] = 0;
     }
 
+    hts_pos_t ref_bp1_start = alt_start, ref_bp1_end = std::min(ins_start+extend, contig_len);
+    hts_pos_t ref_bp1_len = ref_bp1_end - ref_bp1_start;
+    hts_pos_t ref_bp2_start = std::max(hts_pos_t(0), ins_end-extend), ref_bp2_end = alt_end;
+    hts_pos_t ref_bp2_len = ref_bp2_end - ref_bp2_start;
+
+    hts_pos_t ref_allele_len = ins_end - ins_start;
+    hts_pos_t ref_bp1_w_aux_ref_len = std::min(extend, ref_allele_len);
+    hts_pos_t ref_bp1_w_aux_rh_len = std::min((hts_pos_t) alt_rf_len, extend - ref_bp1_w_aux_ref_len);
+    hts_pos_t ref_bp1_w_aux_len = alt_lf_len + ref_bp1_w_aux_ref_len + ref_bp1_w_aux_rh_len;
+    char* ref_bp1_w_aux_seq = new char[ref_bp1_w_aux_len + 1];
+    strncpy(ref_bp1_w_aux_seq, lf_seq, alt_lf_len);
+    strncpy(ref_bp1_w_aux_seq + alt_lf_len, contig_seq + ins_start, ref_bp1_w_aux_ref_len);
+    strncpy(ref_bp1_w_aux_seq + alt_lf_len + ref_bp1_w_aux_ref_len, rf_seq, ref_bp1_w_aux_rh_len);
+    ref_bp1_w_aux_seq[ref_bp1_w_aux_len] = 0;
+
+    hts_pos_t ref_bp2_w_aux_ref_len = std::min(extend, ref_allele_len);
+    hts_pos_t ref_bp2_w_aux_lh_len = std::min((hts_pos_t) alt_lf_len, extend - ref_bp2_w_aux_ref_len);
+    hts_pos_t ref_bp2_w_aux_len = ref_bp2_w_aux_lh_len + ref_bp2_w_aux_ref_len + alt_rf_len;
+    char* ref_bp2_w_aux_seq = new char[ref_bp2_w_aux_len + 1];
+    strncpy(ref_bp2_w_aux_seq, lf_seq + alt_lf_len - ref_bp2_w_aux_lh_len, ref_bp2_w_aux_lh_len);
+    strncpy(ref_bp2_w_aux_seq + ref_bp2_w_aux_lh_len, contig_seq + ins_end - ref_bp2_w_aux_ref_len, ref_bp2_w_aux_ref_len);
+    strncpy(ref_bp2_w_aux_seq + ref_bp2_w_aux_lh_len + ref_bp2_w_aux_ref_len, rf_seq, alt_rf_len);
+    ref_bp2_w_aux_seq[ref_bp2_w_aux_len] = 0;
+
     delete[] lf_seq;
     delete[] rf_seq;
 
-    hts_pos_t ref_bp1_start = alt_start, ref_bp1_end = std::min(ins_start+extend, contig_len);
-    hts_pos_t ref_bp1_pos = ins_start - ref_bp1_start;
-    hts_pos_t ref_bp1_len = ref_bp1_end - ref_bp1_start;
-    hts_pos_t ref_bp2_start = std::max(hts_pos_t(0), ins_end-extend), ref_bp2_end = alt_end;
-    hts_pos_t ref_bp2_pos = ins_end - ref_bp2_start;
-    hts_pos_t ref_bp2_len = ref_bp2_end - ref_bp2_start;
+    hts_pos_t ref_bp1_w_aux_pos = alt_lf_len;
+    hts_pos_t ref_bp2_w_aux_pos = ref_bp2_w_aux_lh_len + ref_bp2_w_aux_ref_len;
 
-    std::vector<char*> ref_seqs = {contig_seq+ref_bp1_start, contig_seq+ref_bp2_start};
-    std::vector<hts_pos_t> ref_lens = {ref_bp1_len, ref_bp2_len};
+    std::vector<char*> ref_seqs = {ref_bp1_w_aux_seq, ref_bp2_w_aux_seq};
+    std::vector<hts_pos_t> ref_lens = {ref_bp1_w_aux_len, ref_bp2_w_aux_len};
     std::vector<hts_pos_t> alt1_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_bp1_seq, alt_bp1_len, stats.read_len);
     std::vector<hts_pos_t> alt2_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_bp2_seq, alt_bp2_len, stats.read_len);
     ins->expected_alt1_reads_frac = (double) alt1_ref_diff_reads_expected_positions.size() / std::max(1, alt_bp1_len - stats.read_len + 1);
@@ -145,8 +165,8 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         }
 
         // align to REF (two breakpoints)
-        aligner.Align(seq.c_str(), contig_seq+ref_bp1_start, ref_bp1_len, filter_with_pos, &ref1_aln, 0);
-        aligner.Align(seq.c_str(), contig_seq+ref_bp2_start, ref_bp2_len, filter_with_pos, &ref2_aln, 0);
+        aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_w_aux_len, filter_with_pos, &ref1_aln, 0);
+        aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_w_aux_len, filter_with_pos, &ref2_aln, 0);
 
         StripedSmithWaterman::Alignment& alt_aln = alt1_aln.sw_score >= alt2_aln.sw_score ? alt1_aln : alt2_aln;
         StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
@@ -161,11 +181,11 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
                 alt_bp2_better_scores.push_back(alt2_aln.sw_score);
                 alt_bp2_better_read_positions.push_back(alt2_aln.ref_begin);
             }
-        } else if (!only_allow_alt && alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln)) {
-            if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= ref_bp1_pos && ref1_aln.ref_end >= ref_bp1_pos) {
+        } else if (!only_allow_alt && alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln, config.min_clip_len)) {
+            if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= ref_bp1_w_aux_pos && ref1_aln.ref_end >= ref_bp1_w_aux_pos) {
                 ref_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }
-            if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_aln.ref_begin <= ref_bp2_pos && ref2_aln.ref_end >= ref_bp2_pos) {
+            if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_aln.ref_begin <= ref_bp2_w_aux_pos && ref2_aln.ref_end >= ref_bp2_w_aux_pos) {
                 ref_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }
         } else if (!only_allow_alt && alt_aln.sw_score == ref_aln.sw_score) {
@@ -416,6 +436,9 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     set_bp_consensus_info(ins->sample_info.alt_bp2.reads_info, alt_bp2_better_reads.size(), alt_bp2_better_reads_consistent, alt_bp2_is_exact_read, alt_bp2_avg_score, alt_bp2_stddev_score);
     set_bp_consensus_info(ins->sample_info.ref_bp1.reads_info, ref_bp1_better_reads.size(), ref_bp1_better_reads_consistent, ref_bp1_is_exact_read, ref_bp1_avg_score, ref_bp1_stddev_score);
     set_bp_consensus_info(ins->sample_info.ref_bp2.reads_info, ref_bp2_better_reads.size(), ref_bp2_better_reads_consistent, ref_bp2_is_exact_read, ref_bp2_avg_score, ref_bp2_stddev_score);
+
+    delete[] ref_bp1_w_aux_seq;
+    delete[] ref_bp2_w_aux_seq;
 
     free(regions[0]);
     free(regions[1]);
