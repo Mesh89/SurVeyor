@@ -136,32 +136,45 @@ struct evidence_map_t {
         std::string sv_id, read_name;
         int bp, score;
 
-        // tuple fields are: score of the best association found, whether the
+        struct best_assoc_t {
+            bool passes_min_epr;
+            int score;
+            bool unique;
+            int hpid;
+            std::set<int> hpids;
+
+            best_assoc_t() : passes_min_epr(false), score(0), unique(true), hpid(0), hpids() {}
+            best_assoc_t(bool passes_min_epr, int score, int hpid) :
+                passes_min_epr(passes_min_epr), score(score), unique(true), hpid(hpid), hpids{hpid} {}
+        };
+
+        // fields are: whether the best association passes MIN_EPR, score of
+        // the best association found within that EPR class, whether the
         // association is unique or not, hpid of that association, and all hpids
-        // with that best score
+        // with that best EPR class and score
         // note that unique means that there is a single best association to a HPID
-        std::unordered_map<std::string, std::tuple<int, bool, int, std::set<int>>> read_to_best_assoc_map;
+        std::unordered_map<std::string, best_assoc_t> read_to_best_assoc_map;
 
         // For each read, find the best association. Furthermore, flag reads that have a "best" association to multiple SVs
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score) {
             sv_id = remove_svid_dup_suffix(sv_id);
+            bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
+            int hpid = sv_hpid_map[sv_id];
             if (!read_to_best_assoc_map.count(read_name)) {
-                read_to_best_assoc_map[read_name] = std::make_tuple(score, true, sv_hpid_map[sv_id], std::set<int>{sv_hpid_map[sv_id]});
+                read_to_best_assoc_map[read_name] = best_assoc_t(passes_min_epr, score, hpid);
             } else {
-                auto& curr_best_assoc = read_to_best_assoc_map[read_name];
-                int& best_score = std::get<0>(curr_best_assoc);
-                bool& unique = std::get<1>(curr_best_assoc);
-                int& best_hpid = std::get<2>(curr_best_assoc);
-                std::set<int>& best_hpids = std::get<3>(curr_best_assoc);
-                if (score > best_score) {
-                    best_score = score;
-                    best_hpid = sv_hpid_map[sv_id];
-                    unique = true;
-                    best_hpids.clear();
-                    best_hpids.insert(sv_hpid_map[sv_id]);
-                } else if (score == best_score && sv_hpid_map[sv_id] != best_hpid) {
-                    unique = false;
-                    best_hpids.insert(sv_hpid_map[sv_id]);
+                best_assoc_t& curr_best_assoc = read_to_best_assoc_map[read_name];
+                if (passes_min_epr > curr_best_assoc.passes_min_epr || 
+                    (passes_min_epr == curr_best_assoc.passes_min_epr && score > curr_best_assoc.score)) {
+                    curr_best_assoc.passes_min_epr = passes_min_epr;
+                    curr_best_assoc.score = score;
+                    curr_best_assoc.hpid = hpid;
+                    curr_best_assoc.unique = true;
+                    curr_best_assoc.hpids.clear();
+                    curr_best_assoc.hpids.insert(hpid);
+                } else if (passes_min_epr == curr_best_assoc.passes_min_epr && score == curr_best_assoc.score && hpid != curr_best_assoc.hpid) {
+                    curr_best_assoc.unique = false;
+                    curr_best_assoc.hpids.insert(hpid);
                 }
             }
         }
@@ -182,27 +195,23 @@ struct evidence_map_t {
         using sv_with_bp_t = std::pair<std::string, int>;
         std::unordered_map<int, int> hpid_to_U_map;
         for (const auto& kv : read_to_best_assoc_map) {
-            const auto& best_assoc = kv.second;
-            bool unique = std::get<1>(best_assoc);
-            if (unique) {
-                int best_hpid = std::get<2>(best_assoc);
-                hpid_to_U_map[best_hpid] += 1;
+            const best_assoc_t& best_assoc = kv.second;
+            if (best_assoc.unique) {
+                hpid_to_U_map[best_assoc.hpid] += 1;
             }
         }
         std::unordered_map<std::string, std::vector<sv_with_bp_t>> read_to_multiple_svs; // only for reads with multiple best associations
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score) {
             sv_id = remove_svid_dup_suffix(sv_id);
-            auto& best_assoc = read_to_best_assoc_map[read_name];
-            int best_score = std::get<0>(best_assoc);
-            const std::set<int>& best_hpids = std::get<3>(best_assoc);
-            if (score == best_score) {
-                bool unique = std::get<1>(best_assoc);
-                if (unique) {
+            const best_assoc_t& best_assoc = read_to_best_assoc_map[read_name];
+            bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
+            if (passes_min_epr == best_assoc.passes_min_epr && score == best_assoc.score) {
+                if (best_assoc.unique) {
                     read_to_hpid_map[read_name] = sv_hpid_map[sv_id];
                 } else {
                     read_to_multiple_svs[read_name].push_back({sv_id, bp});
                 }
-            } else if (!best_hpids.count(sv_hpid_map[sv_id])) {
+            } else if (!best_assoc.hpids.count(sv_hpid_map[sv_id])) {
                 read_to_non_chosen_svs_map[read_name].push_back({sv_id, bp});
             }
         }
