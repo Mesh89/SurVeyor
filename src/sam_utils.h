@@ -220,6 +220,17 @@ hts_pos_t get_mate_unclipped_end(bam1_t* r) {
     return get_mate_endpos(r) + get_mate_right_clip_size(r);
 }
 
+bool can_align_to(bam1_t* read, int max_is, int32_t contig_id, hts_pos_t coordinate) {
+    if (is_mate_unmapped(read) || contig_id != read->core.mtid || max_is < 0 || read->core.l_qseq <= 0) return false;
+
+    if (bam_is_mrev(read)) {
+        hts_pos_t mate_endpos = get_mate_endpos(read);
+        return mate_endpos - max_is <= coordinate && coordinate <= mate_endpos;
+    } else {
+        return read->core.mpos <= coordinate && coordinate <= read->core.mpos + max_is;
+    }
+}
+
 bool has_no_indels(bam1_t* read) {
     uint32_t *cigar = bam_get_cigar(read);
     return read->core.n_cigar == 1 && bam_cigar_op(cigar[0]) == BAM_CMATCH && bam_cigar_oplen(cigar[0]) == read->core.l_qseq;

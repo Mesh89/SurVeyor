@@ -115,8 +115,16 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     StripedSmithWaterman::Alignment alt1_aln, alt2_aln, ref1_aln, ref2_aln;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
-        if (get_unclipped_end(read) < ins_start || ins_end < get_unclipped_start(read)) continue;
         if (ins_start < get_unclipped_start(read) && get_unclipped_end(read) < ins_end) continue;
+
+        // sometimes, reads that support an indel do not overlap the indel
+        // in this case, we consider HSR reads that, according to their mate, can align to the an insertion bp
+        // we only allow them to support the alt allele
+        bool only_allow_alt = false;
+        if (get_unclipped_end(read) < ins_start || ins_end < get_unclipped_start(read)) only_allow_alt = true;
+
+        bool can_align_to_alt = can_align_to(read, stats.max_is, read->core.tid, ins_start) || can_align_to(read, stats.max_is, read->core.tid, ins_end);
+        if (only_allow_alt && (!can_align_to_alt || !is_hidden_split_read(read, config))) continue;
 
         std::string seq = get_sequence(read);
         
@@ -153,14 +161,14 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
                 alt_bp2_better_scores.push_back(alt2_aln.sw_score);
                 alt_bp2_better_read_positions.push_back(alt2_aln.ref_begin);
             }
-        } else if (alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln)) {
+        } else if (!only_allow_alt && alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln)) {
             if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= ref_bp1_pos && ref1_aln.ref_end >= ref_bp1_pos) {
                 ref_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }
             if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_aln.ref_begin <= ref_bp2_pos && ref2_aln.ref_end >= ref_bp2_pos) {
                 ref_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }
-        } else {
+        } else if (!only_allow_alt && alt_aln.sw_score == ref_aln.sw_score) {
             ins->sample_info.alt_ref_equal_reads++;
             if (read->core.qual >= config.high_confidence_mapq) {
                 ins->sample_info.alt_ref_equal_reads_highmq++;
