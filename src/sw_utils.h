@@ -64,7 +64,7 @@ int* smith_waterman_gotoh_scalar_reference(
 
     for (int i = 1; i <= ref_len; ++i) {
         for (int j = 1; j <= query_len; ++j) {
-            
+
             // 1. Calculate Scores
             int score = (toupper(ref[i-1]) == toupper(query[j-1])) ? match_score : mismatch_penalty;
             int diagonal_val = H[i-1][j-1] + score;
@@ -104,51 +104,93 @@ int* smith_waterman_gotoh_scalar_reference(
     return prefix_scores;
 }
 
-// This function returns that an array such that the i-th element is the best local alignment score of query[0..i] against ref. 
+struct sw_gotoh_workspace_t {
+	SW_SCORE_INT_16* H = NULL;
+	SW_SCORE_INT_16* RG = NULL;
+	SW_SCORE_INT_16* QG = NULL;
+	SW_SCORE_INT_16* prefix_scores = NULL;
+	SW_SCORE_INT_16* profile_storage = NULL;
+	SW_SCORE_INT_16* profile[5] = {NULL, NULL, NULL, NULL, NULL};
+	int stride = 0;
+	int query_len_rounded = 0;
+
+	~sw_gotoh_workspace_t() {
+		free(H);
+		free(RG);
+		free(QG);
+		free(prefix_scores);
+		free(profile_storage);
+	}
+
+	sw_gotoh_workspace_t() = default;
+	sw_gotoh_workspace_t(const sw_gotoh_workspace_t&) = delete;
+	sw_gotoh_workspace_t& operator=(const sw_gotoh_workspace_t&) = delete;
+
+	void ensure_capacity(int new_query_len_rounded) {
+		int new_stride = new_query_len_rounded + INT_PER_BLOCK_16;
+		if (new_stride <= stride) {
+			query_len_rounded = new_query_len_rounded;
+			return;
+		}
+
+		free(H);
+		free(RG);
+		free(QG);
+		free(prefix_scores);
+		free(profile_storage);
+		H = RG = QG = prefix_scores = profile_storage = NULL;
+		for (int i = 0; i < 5; i++) profile[i] = NULL;
+
+		size_t alignment = lcm(BYTES_PER_BLOCK_16, sizeof(void*));
+		int p1 = posix_memalign(reinterpret_cast<void**>(&H), alignment, 2*(new_stride * sizeof(SW_SCORE_INT_16)));
+		int p2 = posix_memalign(reinterpret_cast<void**>(&RG), alignment, 2*(new_stride * sizeof(SW_SCORE_INT_16)));
+		int p3 = posix_memalign(reinterpret_cast<void**>(&QG), alignment, 2*(new_stride * sizeof(SW_SCORE_INT_16)));
+		int p4 = posix_memalign(reinterpret_cast<void**>(&prefix_scores), alignment, new_stride * sizeof(SW_SCORE_INT_16));
+		int p5 = posix_memalign(reinterpret_cast<void**>(&profile_storage), alignment, 5 * new_stride * sizeof(SW_SCORE_INT_16));
+		if (p1 || p2 || p3 || p4 || p5) {
+			std::cerr << "Error allocating aligned memory of size " << (2*new_stride * sizeof(SW_SCORE_INT_16)) << std::endl;
+			free(H);
+			free(RG);
+			free(QG);
+			free(prefix_scores);
+			free(profile_storage);
+			H = RG = QG = prefix_scores = profile_storage = NULL;
+			stride = query_len_rounded = 0;
+			return;
+		}
+		for (int i = 0; i < 5; i++) profile[i] = profile_storage + i*new_stride;
+		stride = new_stride;
+		query_len_rounded = new_query_len_rounded;
+	}
+};
+
+// This function returns an array such that the i-th element is the best local alignment score of query[0..i] against ref.
 // The exception is that we are NOT interested in alignments that end in a gap in the query, so those are not considered.
+// The returned pointer is owned by workspace and remains valid until the next call using that workspace.
 SW_SCORE_INT_16* smith_waterman_gotoh(const char* ref, int ref_len, const char* query, int query_len,
-		int match_score, int mismatch_penalty, int gap_open, int gap_extend) {
+		int match_score, int mismatch_penalty, int gap_open, int gap_extend, sw_gotoh_workspace_t& workspace) {
 
 	// turn query_len+1 into a multiple of INT_PER_BLOCK
 	int query_len_rounded = (query_len+INT_PER_BLOCK_16-1)/INT_PER_BLOCK_16*INT_PER_BLOCK_16;
+	workspace.ensure_capacity(query_len_rounded);
+	if (workspace.prefix_scores == NULL) return NULL;
 
 	const char* alphabet = "NACGT";
-	const int alphabet_size = strlen(alphabet);
-
-	// H[i][j] = the best local alignment score ending at position i of the reference and j of the query.
-	SW_SCORE_INT_16* H = NULL;
-
-	// RG[i][j] = the best local alignment score ending at position i of the reference and j of the query, with a gap in the reference.
-	SW_SCORE_INT_16* RG = NULL;
-
-	// QG[i][j] = the best local alignment score ending at position i of the reference and j of the query, with a gap in the query.
-	SW_SCORE_INT_16* QG = NULL;
-
-	SW_SCORE_INT_16* prefix_scores = NULL;
-
-	SW_SCORE_INT_16** profile = new SW_SCORE_INT_16*[alphabet_size];
-	size_t alignment = lcm(BYTES_PER_BLOCK_16, sizeof(void*));
-	int stride = query_len_rounded + INT_PER_BLOCK_16;
-	int p1 = posix_memalign(reinterpret_cast<void**>(&H), alignment, 2*(stride * sizeof(SW_SCORE_INT_16)));
-	int p2 = posix_memalign(reinterpret_cast<void**>(&RG), alignment, 2*(stride * sizeof(SW_SCORE_INT_16)));
-	int p3 = posix_memalign(reinterpret_cast<void**>(&QG), alignment, 2*(stride * sizeof(SW_SCORE_INT_16)));
-	int p4 = posix_memalign(reinterpret_cast<void**>(&prefix_scores), alignment, stride * sizeof(SW_SCORE_INT_16));
-	int p5 = 0;
+	const int alphabet_size = 5;
+	int stride = workspace.stride;
 	for (int i = 0; i < alphabet_size; i++) {
-		p5 += posix_memalign(reinterpret_cast<void**>(&profile[i]), alignment, stride * sizeof(SW_SCORE_INT_16));
-		profile[i][0] = 0;
+		SW_SCORE_INT_16* profile = workspace.profile[i];
+		profile[0] = 0;
 		for (int j = 1; j <= query_len; j++) {
-			profile[i][j] = (toupper(query[j-1]) == alphabet[i]) ? match_score : mismatch_penalty;
+			profile[j] = (toupper(query[j-1]) == alphabet[i]) ? match_score : mismatch_penalty;
 		}
-		std::fill(profile[i]+query_len+1, profile[i]+query_len_rounded+1, 0);
-	}
-	if (p1 || p2 || p3 || p4 || p5) {
-		std::cerr << "Error allocating aligned memory of size " << (2*query_len_rounded * sizeof(SW_SCORE_INT_16)) << std::endl;
+		std::fill(profile+query_len+1, profile+query_len_rounded+1, 0);
 	}
 
-	SW_SCORE_INT_16* H_prev = H, *H_curr = H+stride;
-	SW_SCORE_INT_16* RG_prev = RG, *RG_curr = RG+stride;
-	SW_SCORE_INT_16* QG_prev = QG, *QG_curr = QG+stride;
+	SW_SCORE_INT_16* H_prev = workspace.H, *H_curr = workspace.H+stride;
+	SW_SCORE_INT_16* RG_prev = workspace.RG, *RG_curr = workspace.RG+stride;
+	SW_SCORE_INT_16* QG_prev = workspace.QG, *QG_curr = workspace.QG+stride;
+	SW_SCORE_INT_16* prefix_scores = workspace.prefix_scores;
 
 	std::fill(H_prev, H_prev+stride, 0);
 	std::fill(RG_prev, RG_prev+stride, 0);
@@ -162,12 +204,12 @@ SW_SCORE_INT_16* smith_waterman_gotoh(const char* ref, int ref_len, const char* 
 
 	std::fill(prefix_scores, prefix_scores+stride, 0);
 	for (int i = 1; i <= ref_len; i++) {
-		SW_SCORE_INT_16* ref_profile = profile[0];
+		SW_SCORE_INT_16* ref_profile = workspace.profile[0];
 		switch (toupper(ref[i-1])) {
-			case 'A': ref_profile = profile[1]; break;
-			case 'C': ref_profile = profile[2]; break;
-			case 'G': ref_profile = profile[3]; break;
-			case 'T': ref_profile = profile[4]; break;
+			case 'A': ref_profile = workspace.profile[1]; break;
+			case 'C': ref_profile = workspace.profile[2]; break;
+			case 'G': ref_profile = workspace.profile[3]; break;
+			case 'T': ref_profile = workspace.profile[4]; break;
 		}
 
 		for (int j = 0; j < query_len_rounded; j += INT_PER_BLOCK_16) {
@@ -211,12 +253,27 @@ SW_SCORE_INT_16* smith_waterman_gotoh(const char* ref, int ref_len, const char* 
 		std::swap(QG_prev, QG_curr);
 	}
 
-	free(H);
-	free(RG);
-	free(QG);
-	for (int i = 0; i < alphabet_size; i++) free(profile[i]);
-	delete[] profile;
+	return prefix_scores;
+}
 
+// Compatibility wrapper. Callers own the returned pointer and must free it.
+SW_SCORE_INT_16* smith_waterman_gotoh(const char* ref, int ref_len, const char* query, int query_len,
+		int match_score, int mismatch_penalty, int gap_open, int gap_extend) {
+	static thread_local sw_gotoh_workspace_t workspace;
+	SW_SCORE_INT_16* workspace_prefix_scores = smith_waterman_gotoh(ref, ref_len, query, query_len,
+		match_score, mismatch_penalty, gap_open, gap_extend, workspace);
+	if (workspace_prefix_scores == NULL) return NULL;
+
+	int query_len_rounded = (query_len+INT_PER_BLOCK_16-1)/INT_PER_BLOCK_16*INT_PER_BLOCK_16;
+	int stride = query_len_rounded + INT_PER_BLOCK_16;
+	SW_SCORE_INT_16* prefix_scores = NULL;
+	size_t alignment = lcm(BYTES_PER_BLOCK_16, sizeof(void*));
+	int p = posix_memalign(reinterpret_cast<void**>(&prefix_scores), alignment, stride * sizeof(SW_SCORE_INT_16));
+	if (p) {
+		std::cerr << "Error allocating aligned memory of size " << (stride * sizeof(SW_SCORE_INT_16)) << std::endl;
+		return NULL;
+	}
+	memcpy(prefix_scores, workspace_prefix_scores, stride * sizeof(SW_SCORE_INT_16));
 	return prefix_scores;
 }
 
