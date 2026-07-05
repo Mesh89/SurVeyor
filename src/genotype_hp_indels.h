@@ -987,7 +987,8 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         cluster_reads_by_nearest_allele_len(hp_read_infos, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
 
     int ref_reads = 0;
-    std::vector<bp_support_read_t> ref_good_reads;
+    std::vector<hp_read_info_t> ref_assigned_hp_read_infos;
+    std::vector<bp_support_read_t> ref_good_reads, ref_good_reads_non_rescued;
     std::vector<bool> ref_is_exact_match;
  
     std::vector<int> alt_reads(hp_indels.size(), 0);
@@ -1046,7 +1047,9 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             if (is_ref_allele) {
                 // Cluster best matches the reference allele
                 ref_reads += cluster.size();
+                ref_assigned_hp_read_infos.insert(ref_assigned_hp_read_infos.end(), cluster.begin(), cluster.end());
                 ref_good_reads.insert(ref_good_reads.end(), good_reads.begin(), good_reads.end());
+                ref_good_reads_non_rescued.insert(ref_good_reads_non_rescued.end(), good_reads_non_rescued.begin(), good_reads_non_rescued.end());
                 ref_is_exact_match.insert(ref_is_exact_match.end(), is_exact_match.begin(), is_exact_match.end());
             } else {
                 // Cluster best matches an indel allele, so assign its reads to that allele
@@ -1089,7 +1092,15 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         // of the original mapping rather than the remapping to the HP alleles
         set_hp_read_mapq_stats(alt_good_reads_non_rescued[i], hp_indels[i]->sample_info.alt1_hp_min_mapq, hp_indels[i]->sample_info.alt1_hp_max_mapq, 
             hp_indels[i]->sample_info.alt1_hp_avg_mapq, hp_indels[i]->sample_info.alt1_hp_stddev_mapq);
-        set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_reads, ref_good_reads, ref_is_exact_match, 0.0, 0.0);
+        
+            set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_reads, ref_good_reads, ref_is_exact_match, 0.0, 0.0);
+        hp_indels[i]->sample_info.ref1_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false);
+        hp_indels[i]->sample_info.ref1_consistent_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
+        hp_indels[i]->sample_info.ref1_consistent_hp_len_iqr = find_hp_len_iqr(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
+        set_hp_tail_mismatch_rates(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false,
+            hp_indels[i]->sample_info.ref1_hp_5p_mismatch_rate, hp_indels[i]->sample_info.ref1_hp_3p_mismatch_rate);
+        set_hp_read_mapq_stats(ref_good_reads_non_rescued, hp_indels[i]->sample_info.ref1_hp_min_mapq, hp_indels[i]->sample_info.ref1_hp_max_mapq,
+            hp_indels[i]->sample_info.ref1_hp_avg_mapq, hp_indels[i]->sample_info.ref1_hp_stddev_mapq);
     }
 }
 

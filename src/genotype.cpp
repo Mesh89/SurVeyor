@@ -487,6 +487,41 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_float(out_hdr, sv->vcf_entry, "AR1HP5PMR", NULL, 0);
         bcf_update_format_float(out_hdr, sv->vcf_entry, "AR1HP3PMR", NULL, 0);
     }
+    if (sv->sample_info.ref1_hp_len_mode != sv_t::sample_info_t::NOT_COMPUTED) {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1HPMODE", &(sv->sample_info.ref1_hp_len_mode), 1);
+    } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1HPMODE", NULL, 0);
+    }
+    if (sv->sample_info.ref1_consistent_hp_len_mode != sv_t::sample_info_t::NOT_COMPUTED) {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1CHPMODE", &(sv->sample_info.ref1_consistent_hp_len_mode), 1);
+        float rr1_hp_iqr = sv->sample_info.ref1_consistent_hp_len_iqr;
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1CHPIQR", &rr1_hp_iqr, 1);
+    } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1CHPMODE", NULL, 0);
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1CHPIQR", NULL, 0);
+    }
+    if (sv->sample_info.ref1_hp_min_mapq != sv_t::sample_info_t::NOT_COMPUTED) {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1CHPmQ", &(sv->sample_info.ref1_hp_min_mapq), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1CHPMQ", &(sv->sample_info.ref1_hp_max_mapq), 1);
+        float rr1_hp_avg_mapq = sv->sample_info.ref1_hp_avg_mapq;
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1CHPAQ", &rr1_hp_avg_mapq, 1);
+        float rr1_hp_stddev_mapq = sv->sample_info.ref1_hp_stddev_mapq;
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1CHPSQ", &rr1_hp_stddev_mapq, 1);
+    } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1CHPmQ", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "RR1CHPMQ", NULL, 0);
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1CHPAQ", NULL, 0);
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1CHPSQ", NULL, 0);
+    }
+    if (sv->sample_info.ref1_hp_5p_mismatch_rate != sv_t::sample_info_t::NOT_COMPUTED) {
+        float rr1_hp_5p_mismatch_rate = sv->sample_info.ref1_hp_5p_mismatch_rate;
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1HP5PMR", &rr1_hp_5p_mismatch_rate, 1);
+        float rr1_hp_3p_mismatch_rate = sv->sample_info.ref1_hp_3p_mismatch_rate;
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1HP3PMR", &rr1_hp_3p_mismatch_rate, 1);
+    } else {
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1HP5PMR", NULL, 0);
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "RR1HP3PMR", NULL, 0);
+    }
 
     std::string filters;
     for (size_t i = 0; i < sv->sample_info.filters.size(); ++i) {
@@ -664,8 +699,7 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
             std::shared_ptr<bam1_t> read = reads[j];
             const std::string& read_seq = seqs[j];
 
-            ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(),
-            std::max(0, config.min_clip_len - 1));
+            ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1));
 
             if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
                 curr_seqs_idxs.push_back(j);

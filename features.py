@@ -29,6 +29,8 @@ class Features:
                             'AR1CHPmQ', 'AR1CHPMQ', 'AR1CHPAQ', 'AR1CHPSQ', 'AR1HP5PMR', 'AR1HP3PMR',
                             'MAXARCD', 'MAXARED',
                             'RR1', 'RR1C', 'RR1CmQ', 'RR1CMQ', 'RR1C_HQ_RATIO', 'RR1E', 'RR1E_RATIO',
+                            'RR1HPMODE', 'RR1CHPMODE', 'RR1CHPIQR', 'RR1HPMODE_RR1CHPMODE_DIFF', 'RR1HPMODE_REFLEN_DIFF', 'RR1CHPMODE_REFLEN_DIFF',
+                            'RR1CHPmQ', 'RR1CHPMQ', 'RR1CHPAQ', 'RR1CHPSQ', 'RR1HP5PMR', 'RR1HP3PMR',
                             'RR2', 'RR2C', 'RR2CmQ', 'RR2CMQ', 'RR2C_HQ_RATIO', 'RR2E', 'RR2E_RATIO', 'MAXRRCD', 'MAXRRED',
                             'OR1', 'OR2', 'OR1C', 'OR2C', 'OR1CHQ', 'OR2CHQ', 'OR1C_HQ_RATIO', 'OR2C_HQ_RATIO', 'OR1E', 'OR2E',
                             'NAR1', 'NAR2', 'NAR1C', 'NAR2C', 'NAR1CHQ', 'NAR2CHQ', 'NAR1C_HQ_RATIO', 'NAR2C_HQ_RATIO', 'NAR1E', 'NAR2E',
@@ -451,6 +453,19 @@ class Features:
         features['RR1E_RATIO'] = rr1e/max(1, rr1c)
         features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.get_number_value(sample, 'RR1CMSPAN', [0, 0], max_is)
         features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2'] = Features.get_number_value(sample, 'RR1CMHQSPAN', [0, 0], max_is)
+
+        features['RR1HPMODE'] = Features.get_number_value(sample, 'RR1HPMODE', Features.NAN)
+        features['RR1CHPMODE'] = Features.get_number_value(sample, 'RR1CHPMODE', Features.NAN)
+        features['RR1HPMODE_RR1CHPMODE_DIFF'] = features['RR1HPMODE'] - features['RR1CHPMODE']
+        features['RR1HPMODE_REFLEN_DIFF'] = features['RR1HPMODE'] - features['HP_REF_LEN']
+        features['RR1CHPMODE_REFLEN_DIFF'] = features['RR1CHPMODE'] - features['HP_REF_LEN']
+        features['RR1CHPIQR'] = Features.get_number_value(sample, 'RR1CHPIQR', Features.NAN)
+        features['RR1CHPmQ'] = Features.get_number_value(sample, 'RR1CHPmQ', Features.NAN)
+        features['RR1CHPMQ'] = Features.get_number_value(sample, 'RR1CHPMQ', Features.NAN)
+        features['RR1CHPAQ'] = Features.get_number_value(sample, 'RR1CHPAQ', Features.NAN)
+        features['RR1CHPSQ'] = Features.get_number_value(sample, 'RR1CHPSQ', Features.NAN)
+        features['RR1HP5PMR'] = Features.get_number_value(sample, 'RR1HP5PMR', Features.NAN)
+        features['RR1HP3PMR'] = Features.get_number_value(sample, 'RR1HP3PMR', Features.NAN)
 
         rr2cas = Features.get_number_value(sample, 'RR2CAS', Features.NAN)
         rr2css = Features.get_number_value(sample, 'RR2CSS', Features.NAN)

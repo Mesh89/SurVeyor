@@ -278,6 +278,11 @@ struct sv_t {
         double alt1_hp_5p_mismatch_rate = NOT_COMPUTED, alt1_hp_3p_mismatch_rate = NOT_COMPUTED;
         int alt1_hp_min_mapq = NOT_COMPUTED, alt1_hp_max_mapq = NOT_COMPUTED;
         double alt1_hp_avg_mapq = NOT_COMPUTED, alt1_hp_stddev_mapq = NOT_COMPUTED;
+        int ref1_hp_len_mode = NOT_COMPUTED, ref1_consistent_hp_len_mode = NOT_COMPUTED;
+        double ref1_consistent_hp_len_iqr = NOT_COMPUTED;
+        double ref1_hp_5p_mismatch_rate = NOT_COMPUTED, ref1_hp_3p_mismatch_rate = NOT_COMPUTED;
+        int ref1_hp_min_mapq = NOT_COMPUTED, ref1_hp_max_mapq = NOT_COMPUTED;
+        double ref1_hp_avg_mapq = NOT_COMPUTED, ref1_hp_stddev_mapq = NOT_COMPUTED;
 
         int left_flanking_cov = 0, indel_left_cov = 0, indel_right_cov = 0, right_flanking_cov = 0;
         int left_anchor_cov = 0, right_anchor_cov = 0;
