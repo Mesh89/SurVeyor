@@ -877,6 +877,23 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		}
 	}
 
+	// if either the left or right part is fully lowq, find variants by realigning the full junction
+	if ((left_part_aln.query_end-left_part_aln.query_begin)/(double) left_part.length() < 0.5 
+	|| (right_part_aln.query_end-right_part_aln.query_begin)/(double) right_part.length() < 0.5) {
+		if (overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) == 0) {
+			return std::vector<std::shared_ptr<sv_t>>();
+		}
+		hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
+		hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
+		hts_pos_t remap_len = remap_end - remap_start;
+		StripedSmithWaterman::Filter filter;
+		StripedSmithWaterman::Alignment aln;
+		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
+		std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start, junction_seq,
+			nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
+		return remapped_svs;
+	}
+
     hts_pos_t left_anchor_start = ref_remap_lh_start + left_part_aln.ref_begin;
     hts_pos_t left_anchor_end = ref_remap_lh_start + left_part_aln.ref_end;
     hts_pos_t right_anchor_start = ref_remap_rh_start + right_part_aln.ref_begin;
