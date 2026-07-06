@@ -154,45 +154,67 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         bool alt1_covers_bp1 = alt1_aln.ref_begin <= alt_bp1_pos && alt1_aln.ref_end >= alt_bp1_pos;
         bool alt2_covers_bp2 = alt2_aln.ref_begin <= alt_bp2_pos && alt2_aln.ref_end >= alt_bp2_pos;
         
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) {
-            if (alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
-                ins->sample_info.assigned_to_other_sv_bp1_reads++;
-            }
-            if (alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
-                ins->sample_info.assigned_to_other_sv_bp2_reads++;
-            }
-            continue;
-        }
-
         // align to REF (two breakpoints)
         aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_w_aux_len, filter_with_pos, &ref1_aln, 0);
         aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_w_aux_len, filter_with_pos, &ref2_aln, 0);
 
         StripedSmithWaterman::Alignment& alt_aln = alt1_aln.sw_score >= alt2_aln.sw_score ? alt1_aln : alt2_aln;
         StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
+        bool alt_or_ref_read = false;
+        bool add_alt_bp1_better_read = false;
+        bool add_alt_bp2_better_read = false;
+        bool add_ref_bp1_better_read = false;
+        bool add_ref_bp2_better_read = false;
         if (alt_aln.sw_score > ref_aln.sw_score) {
             if (alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
-                alt_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-                alt_bp1_better_scores.push_back(alt1_aln.sw_score);
-                alt_bp1_better_read_positions.push_back(alt1_aln.ref_begin);
+                add_alt_bp1_better_read = true;
+                alt_or_ref_read = true;
             }
             if (alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
-                alt_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-                alt_bp2_better_scores.push_back(alt2_aln.sw_score);
-                alt_bp2_better_read_positions.push_back(alt2_aln.ref_begin);
+                add_alt_bp2_better_read = true;
+                alt_or_ref_read = true;
             }
         } else if (!only_allow_alt && alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln, config.min_clip_len)) {
             if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= ref_bp1_w_aux_pos && ref1_aln.ref_end >= ref_bp1_w_aux_pos) {
-                ref_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+                add_ref_bp1_better_read = true;
+                alt_or_ref_read = true;
             }
             if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_aln.ref_begin <= ref_bp2_w_aux_pos && ref2_aln.ref_end >= ref_bp2_w_aux_pos) {
-                ref_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+                add_ref_bp2_better_read = true;
+                alt_or_ref_read = true;
             }
         } else if (!only_allow_alt && alt_aln.sw_score == ref_aln.sw_score) {
             ins->sample_info.alt_ref_equal_reads++;
             if (read->core.qual >= config.high_confidence_mapq) {
                 ins->sample_info.alt_ref_equal_reads_highmq++;
             }
+        }
+
+        if (alt_or_ref_read && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) {
+            if (add_alt_bp1_better_read || add_ref_bp1_better_read) {
+                ins->sample_info.assigned_to_other_sv_bp1_reads++;
+            }
+            if (add_alt_bp2_better_read || add_ref_bp2_better_read) {
+                ins->sample_info.assigned_to_other_sv_bp2_reads++;
+            }
+            continue;
+        }
+
+        if (add_alt_bp1_better_read) {
+            alt_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+            alt_bp1_better_scores.push_back(alt1_aln.sw_score);
+            alt_bp1_better_read_positions.push_back(alt1_aln.ref_begin);
+        }
+        if (add_alt_bp2_better_read) {
+            alt_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+            alt_bp2_better_scores.push_back(alt2_aln.sw_score);
+            alt_bp2_better_read_positions.push_back(alt2_aln.ref_begin);
+        }
+        if (add_ref_bp1_better_read) {
+            ref_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+        }
+        if (add_ref_bp2_better_read) {
+            ref_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
         }
 
         if (alt_bp1_better_reads.size() + alt_bp2_better_reads.size() + ref_bp1_better_reads.size() + ref_bp2_better_reads.size() + ins->sample_info.alt_ref_equal_reads > 4 * stats.get_max_depth(ins->chr)) {
