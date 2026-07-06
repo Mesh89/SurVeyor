@@ -1066,12 +1066,11 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     }
 
     for (int i = 0; i < hp_indels.size(); i++) {
-        // set OR* reads for other indels
-        for (int j = 0; j < hp_indels.size(); j++) {
-            if (i == j) continue;
-            hp_indels[j]->sample_info.assigned_to_other_sv_bp1_reads += alt_reads[i];
-        }
-        if (reassign_evidence) {
+        if (reassign_evidence) { // set OR* reads for other indels
+            for (int j = 0; j < hp_indels.size(); j++) {
+                if (i == j) continue;
+                hp_indels[j]->sample_info.assigned_to_other_sv_bp1_reads += alt_reads[i];
+            }
             for (int j = 0; j < alt_good_reads[i].size(); j++) {
                 const bp_support_read_t& read = alt_good_reads[i][j];
                 for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(read)) {
@@ -1092,8 +1091,8 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         // of the original mapping rather than the remapping to the HP alleles
         set_hp_read_mapq_stats(alt_good_reads_non_rescued[i], hp_indels[i]->sample_info.alt1_hp_min_mapq, hp_indels[i]->sample_info.alt1_hp_max_mapq, 
             hp_indels[i]->sample_info.alt1_hp_avg_mapq, hp_indels[i]->sample_info.alt1_hp_stddev_mapq);
-        
-            set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_reads, ref_good_reads, ref_is_exact_match, 0.0, 0.0);
+
+        set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_reads, ref_good_reads, ref_is_exact_match, 0.0, 0.0);
         hp_indels[i]->sample_info.ref1_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false);
         hp_indels[i]->sample_info.ref1_consistent_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
         hp_indels[i]->sample_info.ref1_consistent_hp_len_iqr = find_hp_len_iqr(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
