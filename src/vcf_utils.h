@@ -723,13 +723,15 @@ void update_alleles_info(bcf_hdr_t* hdr, bcf1_t* bcf_entry, char* chr_seq, hts_p
 	int int_conv = end+1;
 	bcf_update_info_int32(hdr, bcf_entry, "END", &int_conv, 1);
 
-	if (svtype != "BND") {
+	if (svtype != "BND" && svtype != "DUP") {
 		int_conv = svlen;
 		bcf_update_info_int32(hdr, bcf_entry, "SVLEN", &int_conv, 1);
 		if (!ins_seq.empty()) {
 			int_conv = ins_seq.length();
 			bcf_update_info_int32(hdr, bcf_entry, "SVINSLEN", &int_conv, 1);
 		}
+	} else if (svtype == "DUP") {
+		bcf_update_info_int32(hdr, bcf_entry, "SVLEN", NULL, 0);
 	}
 }
 
@@ -797,7 +799,9 @@ void sv2bcf(bcf_hdr_t* hdr, bcf1_t* bcf_entry, sv_t* sv, char* chr_seq, bool for
 	bcf_update_info_int32(hdr, bcf_entry, "END", &int_conv, 1);
 	
 	bcf_update_info_string(hdr, bcf_entry, "SVTYPE", sv->svtype().c_str());
-	if (!sv->incomplete_ins_seq()) {
+	if (sv->svtype() == "DUP") {
+		bcf_update_info_int32(hdr, bcf_entry, "SVLEN", NULL, 0);
+	} else if (!sv->incomplete_ins_seq()) {
 		int_conv = sv->svlen();
 		bcf_update_info_int32(hdr, bcf_entry, "SVLEN", &int_conv, 1);
 		if (!sv->ins_seq.empty()) {

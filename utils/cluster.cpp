@@ -152,6 +152,7 @@ double ins_seq_similarity(const std::string& seq1, const std::string& seq2) {
 bool ins_seq_similar_enough(sv_w_samplename_t& sv1, sv_w_samplename_t& sv2) {
 	if (min_ins_seq_sim == 0.0 || sv1.svtype != "INS" || sv2.svtype != "INS") return true;
 	if (sv1.incomplete_ins_seq || sv2.incomplete_ins_seq || sv1.ins_seq.empty() || sv2.ins_seq.empty()) return true;
+	if (sv1.ins_seq.length() > UINT16_MAX || sv2.ins_seq.length() > UINT16_MAX) return true;
 	return ins_seq_similarity(sv1.ins_seq, sv2.ins_seq) >= min_ins_seq_sim;
 }
 
@@ -372,8 +373,10 @@ void print_cliques(std::vector<std::vector<int>>& cliques, std::vector<sv_w_samp
 		if (!chosen_sv.ins_seq_inferred.empty()) {
 			bcf_update_info_string(out_hdr, vcf_sv, "SVINSSEQ_INFERRED", chosen_sv.ins_seq_inferred.c_str());
 		}
-		if (!chosen_sv.incomplete_ins_seq) {
+		if (!chosen_sv.incomplete_ins_seq && chosen_sv.svtype != "DUP") {
 			bcf_update_info_int32(out_hdr, vcf_sv, "SVLEN", &chosen_sv.svlen, 1);
+		} else if (chosen_sv.svtype == "DUP") {
+			bcf_update_info_int32(out_hdr, vcf_sv, "SVLEN", NULL, 0);
 		}
 
 		int sv_ploidy = 0;

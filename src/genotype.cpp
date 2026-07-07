@@ -244,8 +244,12 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
             int svinslen = sv->ins_seq.length();
             bcf_update_info_int32(out_hdr, sv->vcf_entry, "SVINSLEN", &svinslen, 1);
         }
-        int svlen = sv->svlen();
-        bcf_update_info_int32(out_hdr, sv->vcf_entry, "SVLEN", &svlen, 1);
+        if (sv->svtype() != "DUP") {
+            int svlen = sv->svlen();
+            bcf_update_info_int32(out_hdr, sv->vcf_entry, "SVLEN", &svlen, 1);
+        } else {
+            bcf_update_info_int32(out_hdr, sv->vcf_entry, "SVLEN", NULL, 0);
+        }
     }
     hts_pos_t la_aln_start = bring_within_range(sv->left_anchor_aln->start, hts_pos_t(0), chr_len);
     hts_pos_t la_aln_end = bring_within_range(sv->left_anchor_aln->end, hts_pos_t(0), chr_len);
