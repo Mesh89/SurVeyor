@@ -256,6 +256,9 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
 
 	// See comments for relative code in genotype_del
 	dup_start++; dup_end++;
+    if (dup_end > contig_len) {
+        dup_end = contig_len;
+    }
 
 	// all ranges will be start-inclusive and end-exclusive, i.e. [a,b)
 
@@ -542,7 +545,7 @@ void genotype_dups(int id, std::string contig_name, char* contig_seq, hts_pos_t 
     depth_filter_dup(contig_name, dups, bam_file, config, stats);
     calculate_confidence_interval_size(contig_name, *global_crossing_isize_dist, small_dups, bam_file, config, stats);
     std::string mates_nms_file = workdir + "/workspace/outward-pairs/" + std::to_string(contig_id) + ".txt";
-    calculate_ptn_ratio(contig_name, dups, bam_file, config, stats, evidence_logger, false, evidence_map, mates_nms_file);
+    calculate_ptn_ratio(contig_name, dups, bam_file, config, stats, contig_len, evidence_logger, false, evidence_map, mates_nms_file);
     count_stray_pairs(contig_name, dups, bam_file, config, stats);
 }
 

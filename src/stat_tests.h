@@ -650,15 +650,18 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& dele
 	}
 }
 void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& duplications, open_samFile_t* bam_file, 
-	config_t& config, stats_t& stats, evidence_logger_t* evidence_logger, 
+	config_t& config, stats_t& stats, hts_pos_t contig_len, evidence_logger_t* evidence_logger, 
 	bool reassign_evidence, evidence_map_t* evidence_map, std::string nm_file = "") {
 	
 	if (duplications.empty()) return;
 
 	std::vector<char*> regions;
 	for (duplication_t* dup : duplications) {
+		hts_pos_t region_start = std::max(hts_pos_t(1), dup->start-stats.max_is);
+		hts_pos_t region_end = std::min(contig_len, dup->start+stats.max_is);
+
 		std::stringstream ss;
-		ss << contig_name << ":" << std::max(hts_pos_t(1), dup->start-stats.max_is) << "-" << dup->start+stats.max_is;
+		ss << contig_name << ":" << region_start << "-" << region_end;
 		regions.push_back(strdup(ss.str().c_str()));
 	}
 
