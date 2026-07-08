@@ -56,7 +56,7 @@ std::shared_ptr<sv_t> atomize_del(std::shared_ptr<sv_t> sv) {
 		hts_pos_t snp_pos = sv->end;
 		char ref_base = chr_seq[snp_pos];
 		char alt_base = sv->ins_seq[0];
-		if (toupper(ref_base) != toupper(alt_base)) {
+		if (toupper(ref_base) != toupper(alt_base) && is_genomic_base(alt_base)) {
 			snp_t snp(snp_pos, alt_base);
 			sv->aux_snps.push_back(snp);
 		}
@@ -94,10 +94,9 @@ std::shared_ptr<sv_t> atomize_del(std::shared_ptr<sv_t> sv) {
 		for (size_t i = 0; i < sv->ins_seq.length(); i++) {
 			char ref_base = chr_seq[sv1_start+1 + most_similar_pos + i];
 			char alt_base = sv->ins_seq[i];
-			if (toupper(ref_base) != toupper(alt_base)) {
+			if (toupper(ref_base) != toupper(alt_base) && is_genomic_base(alt_base)) {
 				hts_pos_t snp_pos = sv1_start+1 + most_similar_pos + i;
-				snp_t snp(snp_pos, alt_base);
-				sv->aux_snps.push_back(snp);
+				sv->aux_snps.push_back(snp_t(snp_pos, alt_base));
 			}
 		}
 
@@ -162,8 +161,7 @@ std::shared_ptr<sv_t> atomize_ins(std::shared_ptr<sv_t> sv) {
 		char alt_base = matched_ins[i];
 		if (toupper(ref_base) != toupper(alt_base)) {
 			hts_pos_t snp_pos = snp_start + i;
-			snp_t snp(snp_pos, alt_base);
-			sv->aux_snps.push_back(snp);
+			sv->aux_snps.push_back(snp_t(snp_pos, alt_base));
 		}
 	}
 
@@ -431,7 +429,11 @@ std::vector<std::shared_ptr<sv_t>> vars_from_alignment(StripedSmithWaterman::Ali
 		} else if (op == 'I') {
 			vars.push_back(std::make_shared<insertion_t>(chr, current_pos-1, current_pos-1, std::string(alt_seq+query_pos, op_length), nullptr, nullptr, nullptr, nullptr));
 		} else if (op == 'X') {
-			for (int j = 0; j < op_length; j++) snps.push_back(snp_t(current_pos+j, alt_seq[query_pos+j]));
+			for (int j = 0; j < op_length; j++) {
+				if (is_genomic_base(alt_seq[query_pos+j])) {
+					snps.push_back(snp_t(current_pos+j, alt_seq[query_pos+j]));
+				}
+			}
 		}
 
 		if (op != 'I' && op != 'S') current_pos += op_length;

@@ -672,6 +672,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 		} else if (op == 'X') {
 			for (int j = 0; j < op_length; j++) {	
 				char alt_base = junction_seq[junction_pos+j];
+				if (!is_genomic_base(alt_base)) continue;
 				if (junction_pos+j >= lowq_junction_prefix && 
 					junction_pos+j < (junction_seq.length() - lowq_junction_suffix)) {
 					snps.push_back(snp_t(current_pos+j, alt_base));

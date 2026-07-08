@@ -517,10 +517,13 @@ struct random_pos_generator_t {
     }
 };
 
-bool is_genomic_string(std::string s) {
+bool is_genomic_base(char c) {
+    return c == 'A' || c == 'C' || c == 'G' || c == 'T' ||
+           c == 'a' || c == 'c' || c == 'g' || c == 't';
+}
+bool is_genomic_string(const std::string& s) {
     for (char c : s) {
-        if (c != 'A' && c != 'C' && c != 'G' && c != 'T' &&
-            c != 'a' && c != 'c' && c != 'g' && c != 't') {
+        if (!is_genomic_base(c)) {
             return false;
         }
     }
