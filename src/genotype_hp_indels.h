@@ -286,11 +286,15 @@ std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::
     std::vector<long long> allele_dist_sums(hp_run_lens.size(), 0);
     for (const hp_read_info_t& hp_read_info : hp_read_infos) {
         int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
-        allele_counts[allele_idx]++;
-        allele_dist_sums[allele_idx] += abs(hp_read_info.hp_len - hp_run_lens[allele_idx]);
+        for (int i = 0; i < hp_run_lens.size(); i++) {
+            if (hp_run_lens[i] == hp_run_lens[allele_idx]) {
+                allele_counts[i]++;
+                allele_dist_sums[i] += abs(hp_read_info.hp_len - hp_run_lens[i]);
+            }
+        }
     }
 
-    // Then pick the (max 2) alleles with the most assigned reads, breaking count ties toward smaller total distance, then smaller length
+    // Then pick the (max 2) hp run lens with the most assigned reads, breaking count ties toward smaller total distance, then smaller length
     std::vector<int> allele_idxs;
     for (int i = 0; i < hp_run_lens.size(); i++) {
         if (allele_counts[i] > 0) allele_idxs.push_back(i);
@@ -301,19 +305,28 @@ std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::
         if (hp_run_lens[a] != hp_run_lens[b]) return hp_run_lens[a] < hp_run_lens[b];
         return a < b;
     });
-    if (allele_idxs.size() > 2) allele_idxs.resize(2);
-    std::sort(allele_idxs.begin(), allele_idxs.end(), [&](int a, int b) {
+
+    std::vector<int> chosen_allele_idxs;
+    chosen_allele_idxs.push_back(allele_idxs[0]);
+    for (int allele_idx : allele_idxs) {
+        if (hp_run_lens[allele_idx] != hp_run_lens[chosen_allele_idxs[0]]) {
+            chosen_allele_idxs.push_back(allele_idx);
+            break;
+        }
+    }
+
+    std::sort(chosen_allele_idxs.begin(), chosen_allele_idxs.end(), [&](int a, int b) {
         if (hp_run_lens[a] != hp_run_lens[b]) return hp_run_lens[a] < hp_run_lens[b];
         return a < b;
     });
 
     // Finally, form max 2 clusters of reads by assigning reads to the max 2 retained alleles
     std::vector<hp_allele_cluster_t> clusters;
-    for (int allele_idx : allele_idxs) {
+    for (int allele_idx : chosen_allele_idxs) {
         clusters.push_back(hp_allele_cluster_t(allele_idx, hp_run_lens[allele_idx]));
     }
     for (const hp_read_info_t& hp_read_info : hp_read_infos) {
-        int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens, hp_run_lens, aligner, &allele_idxs);
+        int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens, hp_run_lens, aligner, &chosen_allele_idxs);
         for (hp_allele_cluster_t& cluster : clusters) {
             if (cluster.allele_idx == allele_idx) {
                 cluster.reads.push_back(hp_read_info);
@@ -325,7 +338,7 @@ std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::
     return clusters;
 }
 
-std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::vector<hp_read_info_t>& hp_read_infos,
+std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len_reassign(const std::vector<hp_read_info_t>& hp_read_infos,
     std::vector<int>& hp_run_lens, std::vector<sv_t*>& hp_indels, evidence_map_t* evidence_map, int seed) {
 
     std::vector<hp_allele_cluster_t> clusters;
@@ -983,9 +996,9 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
     // Cluster reads into up to two clusters around the candidate allele HP lengths
     std::vector<hp_allele_cluster_t> clusters = reassign_evidence ?
-        cluster_reads_by_nearest_allele_len(hp_read_infos, hp_run_lens, hp_indels, evidence_map, config.seed) :
+        cluster_reads_by_nearest_allele_len_reassign(hp_read_infos, hp_run_lens, hp_indels, evidence_map, config.seed) :
         cluster_reads_by_nearest_allele_len(hp_read_infos, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
-
+    
     int ref_reads = 0;
     std::vector<hp_read_info_t> ref_assigned_hp_read_infos;
     std::vector<bp_support_read_t> ref_good_reads, ref_good_reads_non_rescued;
