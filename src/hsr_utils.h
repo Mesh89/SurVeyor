@@ -91,39 +91,76 @@ std::pair<int, int> compute_left_and_right_differences_indel_as_n_diffs(bam1_t* 
     return {left_diffs, right_diffs};
 }
 
-// If the high quality (i.e., supported by >= 3 reads) part of the consensus sequence aligns too well to the reference,
-// it probably means that the differences were due to sequencing errors in the individual reads and they corrected each other
-// during consensus building. We filter out such consensuses.
-void filter_well_aligned_to_ref(char* contig_seq, hts_pos_t contig_len, std::vector<consensus_t*>& consensuses, config_t config) {
-    std::vector<consensus_t*> retained;
+enum class consensus_ref_classification_t {
+	ALIGNS_WELL,
+	LEFT,
+	RIGHT,
+	AMBIGUOUS
+};
+
+// The query is expected to be the high-quality portion of the consensus sequence.
+consensus_ref_classification_t classify_consensus_against_ref(
+		char* contig_seq, hts_pos_t contig_len, hts_pos_t consensus_start, hts_pos_t consensus_end,
+		const std::string& query, const config_t& config) {
 
 	StripedSmithWaterman::Aligner aligner(2, 2, 4, 1, true);
-    StripedSmithWaterman::Filter filter;
-    StripedSmithWaterman::Alignment aln;
-    for (consensus_t* c : consensuses) {
-        hts_pos_t ref_start = c->start - 10, ref_end = c->end + 10;
-		if (ref_start < 0) ref_start = 0;
-		if (ref_end > contig_len) ref_end = contig_len;
-        aligner.Align(c->highq_sequence().c_str(), contig_seq+ref_start, ref_end-ref_start, filter, &aln, 0);
-		int dops = 0, dbases = 0, iops = 0, ibases = 0, xbases = 0;
-		for (uint32_t op : aln.cigar) {
-			char opchar = cigar_int_to_op(op);
-			int oplen = cigar_int_to_len(op);
-			if (opchar == 'D') {
-				dops++;
-				dbases += oplen;
-			} else if (opchar == 'I') {
-				iops++;
-				ibases += oplen;
-			} else if (opchar == 'X') xbases += oplen;
+	StripedSmithWaterman::Filter filter;
+	StripedSmithWaterman::Alignment aln;
+	hts_pos_t ref_start = std::max<hts_pos_t>(0, consensus_start - 10);
+	hts_pos_t ref_end = std::min(contig_len, consensus_end + 10);
+	aligner.Align(query.c_str(), contig_seq + ref_start, ref_end - ref_start, filter, &aln, 0);
+
+	int dops = 0, dbases = 0, iops = 0, ibases = 0, xbases = 0;
+	int left_diffs = 0, right_diffs = 0;
+	int qpos = 0, border = query.length()/2;
+	auto add_query_diffs = [&](int len) {
+		int left_len = std::max(0, std::min(qpos + len, border) - qpos);
+		left_diffs += left_len;
+		right_diffs += len - left_len;
+		qpos += len;
+	};
+
+	for (uint32_t op : aln.cigar) {
+		char opchar = cigar_int_to_op(op);
+		int oplen = cigar_int_to_len(op);
+		if (opchar == 'D') {
+			dops++;
+			dbases += oplen;
+			(qpos < border ? left_diffs : right_diffs) += oplen;
+		} else if (opchar == 'I') {
+			iops++;
+			ibases += oplen;
+			add_query_diffs(oplen);
+		} else if (opchar == 'X') {
+			xbases += oplen;
+			add_query_diffs(oplen);
+		} else if (opchar == '=' || opchar == 'M' || opchar == 'S') {
+			qpos += oplen;
 		}
-        if (dops + iops + xbases >= config.min_diff_hsr || abs(ibases-dbases) >= config.min_sv_size || is_clipped(aln)) {
-			retained.push_back(c);
-        } else {
-        	delete c;
-        }
-    }
-    consensuses.swap(retained);
+	}
+
+	int left_clip_len = get_left_clip_size(aln), right_clip_len = get_right_clip_size(aln);
+	bool supports_hsr = dops + iops + xbases >= config.min_diff_hsr || abs(ibases - dbases) >= config.min_sv_size;
+
+	if (left_clip_len == 0 && right_clip_len == 0 && !supports_hsr) {
+		return consensus_ref_classification_t::ALIGNS_WELL;
+	}
+	
+	// Infer the direction of the clustr
+	// A strong clips (>=min_clip_len) takes the precedence to determine the direction of the cluster
+	// If both sides are strong clips, the longer wins
+	// If a direction cannot be decided with strong clips alone, we include the number of differences of the left and right halves of the read
+	if (left_clip_len > right_clip_len && left_clip_len >= config.min_clip_len) {
+		return consensus_ref_classification_t::LEFT;
+	} else if (right_clip_len > left_clip_len && right_clip_len >= config.min_clip_len) {
+		return consensus_ref_classification_t::RIGHT;
+	} else if (left_clip_len + left_diffs > right_clip_len + right_diffs) {
+		return consensus_ref_classification_t::LEFT;
+	} else if (right_clip_len + right_diffs > left_clip_len + left_diffs) {
+		return consensus_ref_classification_t::RIGHT;
+	}  else {
+		return consensus_ref_classification_t::AMBIGUOUS;
+	}
 }
 
 // Remove consensues that are completely contained within another consensues and their sequence is a substring of the other consensus

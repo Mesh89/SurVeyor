@@ -115,6 +115,27 @@ int64_t get_nm(bam1_t* r) {
     return bam_aux2i(nm);
 }
 
+struct indel_summary_t {
+    int ops = 0;
+    int dels = 0;
+    int inss = 0;
+};
+
+indel_summary_t get_indel_summary(bam1_t* r) {
+    indel_summary_t summary;
+    uint32_t* cigar = bam_get_cigar(r);
+    for (uint32_t i = 0; i < r->core.n_cigar; i++) {
+        char op = bam_cigar_opchr(cigar[i]);
+        if (op == 'D' || op == 'I') {
+            int len = bam_cigar_oplen(cigar[i]);
+            summary.ops++;
+            if (op == 'D') summary.dels += len;
+            else summary.inss += len;
+        }
+    }
+    return summary;
+}
+
 char* get_md(bam1_t* r) {
     uint8_t* md = bam_aux_get(r, "MD");
     if (md == NULL) {
@@ -174,22 +195,10 @@ bool is_hidden_split_read(bam1_t* r, config_t config) {
     if (!is_samechr(r)) return false;
 	if (is_left_clipped(r, config.min_clip_len) || is_right_clipped(r, config.min_clip_len)) return false;
 
-    int mismatches = get_nm(r);
+    indel_summary_t indels = get_indel_summary(r);
+    int mismatches = get_nm(r) - indels.dels - indels.inss;
 
-    int indels = 0, inss = 0, dels = 0;
-    uint32_t* cigar = bam_get_cigar(r);
-    for (uint32_t i = 0; i < r->core.n_cigar; i++) {
-        char op_chr = bam_cigar_opchr(cigar[i]);
-        if (op_chr == 'D' || op_chr == 'I') {
-            int oplen = bam_cigar_oplen(cigar[i]);
-            mismatches -= oplen;
-            indels++;
-            if (op_chr == 'D') dels += oplen;
-            else inss += oplen;
-        }
-    }
-
-    return mismatches + indels >= config.min_diff_hsr || abs(dels-inss) >= config.min_sv_size;
+    return mismatches + indels.ops >= config.min_diff_hsr || abs(indels.dels-indels.inss) >= config.min_sv_size;
 }
 
 
