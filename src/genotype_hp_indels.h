@@ -38,6 +38,22 @@ struct hp_read_info_t {
     }
 };
 
+// The goal of this function is to identify reads that are unlikely to have a correct hp len
+// For now, let's use a simple heuristic: if a read has a hp run len <= 5 bp, it must be a good read
+std::vector<bool> get_valid_reads_mask(const std::vector<hp_read_info_t>& hp_read_infos, int min_tail_len, double max_mismatch_rate) {
+
+    std::vector<bool> valid_reads_mask;
+    valid_reads_mask.reserve(hp_read_infos.size());
+    for (const hp_read_info_t& hp_read_info : hp_read_infos) {
+        if (hp_read_info.hp_len <= 5) {
+            valid_reads_mask.push_back(hp_read_info.is_good_read(min_tail_len, max_mismatch_rate));
+        } else {
+            valid_reads_mask.push_back(true);
+        }
+    }
+    return valid_reads_mask;
+}
+
 
 // Find the mode of HP lengths, optionally restricted to good reads
 // Good reads = <20% mismatches on both tails
@@ -987,6 +1003,17 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
     bam_destroy1(read);
     hts_itr_destroy(iter);
+
+    std::vector<bool> valid_reads_mask = get_valid_reads_mask(hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE);
+
+    std::vector<hp_read_info_t> valid_hp_read_infos;
+    valid_hp_read_infos.reserve(hp_read_infos.size());
+    for (int i = 0; i < hp_read_infos.size(); i++) {
+        if (valid_reads_mask[i]) {
+            valid_hp_read_infos.push_back(hp_read_infos[i]);
+        }
+    }
+    hp_read_infos.swap(valid_hp_read_infos);
 
     std::vector<int> hp_run_lens;
     for (sv_t* hp_indel : hp_indels) {
