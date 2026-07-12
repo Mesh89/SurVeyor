@@ -34,7 +34,7 @@ class Features:
                             'RR2', 'RR2C', 'RR2CmQ', 'RR2CMQ', 'RR2C_HQ_RATIO', 'RR2E', 'RR2E_RATIO', 'MAXRRCD', 'MAXRRED',
                             'OR1', 'OR2', 'OR1C', 'OR2C', 'OR1CHQ', 'OR2CHQ', 'OR1C_HQ_RATIO', 'OR2C_HQ_RATIO', 'OR1E', 'OR2E',
                             'NAR1', 'NAR2', 'NAR1C', 'NAR2C', 'NAR1CHQ', 'NAR2CHQ', 'NAR1C_HQ_RATIO', 'NAR2C_HQ_RATIO', 'NAR1E', 'NAR2E',
-                            'ER',
+                            'ER', 'ERHQ',
                             'AR1CMSPAN_1', 'AR1CMSPAN_2', 'AR1CMHQSPAN_1', 'AR1CMHQSPAN_2',
                             'AR2CMSPAN_1', 'AR2CMSPAN_2', 'AR2CMHQSPAN_1', 'AR2CMHQSPAN_2',
                             'RR1CMSPAN_1', 'RR1CMSPAN_2', 'RR1CMHQSPAN_1', 'RR1CMHQSPAN_2',
@@ -263,7 +263,7 @@ class Features:
         if '-' in svinsseq:
             i = svinsseq.index('-')
             features['INS_SEQ_COV_PREFIX_LEN'] = i/len(svinsseq)
-            features['INS_SEQ_COV_SUFFIX_LEN'] = (len(svinsseq)-i)/len(svinsseq)
+            features['INS_SEQ_COV_SUFFIX_LEN'] = (len(svinsseq)-i-1)/len(svinsseq)
 
         exp_alt_reads_freq1, exp_alt_reads_freq2 = info['EXP_ALT_READS_FREQ']
         features['EXP_ALT_READS_FREQ1'], features['EXP_ALT_READS_FREQ2'] = exp_alt_reads_freq1, exp_alt_reads_freq2
@@ -503,25 +503,11 @@ class Features:
         nar1c = rr1c + or1c
         nar1chq = rr1chq + or1chq
         nar1e = rr1e + or1e
-        nar2 = rr2 + or2
-        nar2c = rr2c + or2c
-        nar2chq = rr2chq + or2chq
-        nar2e = rr2e + or2e
         features['NAR1'] = Features.piecewise_normalise(nar1, min_depth, max_depth)
         features['NAR1C'] = Features.piecewise_normalise(nar1c, min_depth, max_depth)
         features['NAR1CHQ'] = Features.piecewise_normalise(nar1chq, min_depth, max_depth)
         features['NAR1C_HQ_RATIO'] = nar1chq/max(1, nar1c)
         features['NAR1E'] = Features.piecewise_normalise(nar1e, min_depth, max_depth)
-        features['NAR2'] = Features.piecewise_normalise(nar2, min_depth, max_depth)
-        features['NAR2C'] = Features.piecewise_normalise(nar2c, min_depth, max_depth)
-        features['NAR2CHQ'] = Features.piecewise_normalise(nar2chq, min_depth, max_depth)
-        features['NAR2C_HQ_RATIO'] = nar2chq/max(1, nar2c)
-        features['NAR2E'] = Features.piecewise_normalise(nar2e, min_depth, max_depth)
-
-        er = Features.get_number_value(sample, 'ER', 0)
-        features['ER'] = Features.piecewise_normalise(er, min_depth, max_depth)
-
-        features['AR1_RR1_CAS_Z_SCORE'] = Features.calculate_z_score(ar1cas, ar1css, ar1c, rr1cas, rr1css, rr1c)
 
         if 'AR2' not in sample:
             ar2 = ar1
@@ -532,10 +518,32 @@ class Features:
         if 'RR2' not in sample:
             rr2 = rr1
             rr2c = rr1c
+            rr2chq = rr1chq
             rr2cas = rr1cas
             rr2css = rr1css
             rr2e = rr1e
+        if 'OR2' not in sample:
+            or2 = or1
+            or2c = or1c
+            or2chq = or1chq
+            or2e = or1e
 
+        nar2 = rr2 + or2
+        nar2c = rr2c + or2c
+        nar2chq = rr2chq + or2chq
+        nar2e = rr2e + or2e
+        features['NAR2'] = Features.piecewise_normalise(nar2, min_depth, max_depth)
+        features['NAR2C'] = Features.piecewise_normalise(nar2c, min_depth, max_depth)
+        features['NAR2CHQ'] = Features.piecewise_normalise(nar2chq, min_depth, max_depth)
+        features['NAR2C_HQ_RATIO'] = nar2chq/max(1, nar2c)
+        features['NAR2E'] = Features.piecewise_normalise(nar2e, min_depth, max_depth)
+
+        er = Features.get_number_value(sample, 'ER', 0)
+        erhq = Features.get_number_value(sample, 'ERHQ', 0)
+        features['ER'] = Features.piecewise_normalise(er, min_depth, max_depth)
+        features['ERHQ'] = Features.piecewise_normalise(erhq, min_depth, max_depth)
+
+        features['AR1_RR1_CAS_Z_SCORE'] = Features.calculate_z_score(ar1cas, ar1css, ar1c, rr1cas, rr1css, rr1c)
         features['AR2_RR2_CAS_Z_SCORE'] = Features.calculate_z_score(ar2cas, ar2css, ar2c, rr2cas, rr2css, rr2c)
 
         features['AR1_OVER_RR1'] = ar1/max(1, ar1+rr1)
@@ -758,9 +766,16 @@ class Features:
 
         exl1 = Features.get_number_value(sample, 'EXL', Features.NAN)
         exl2 = Features.get_number_value(sample, 'EXL2', Features.NAN)
-        features['MEXL'] = max(exl1/(max_is+read_len), exl2/(max_is+read_len))
-        features['mEXL'] = min(exl1/(max_is+read_len), exl2/(max_is+read_len))
-        features['EXL'] = features['MEXL'] + features['mEXL']
+        exl_norm_factor = max_is + read_len
+        normalised_exls = [exl / exl_norm_factor for exl in (exl1, exl2) if np.isfinite(exl)]
+        if normalised_exls:
+            features['MEXL'] = max(normalised_exls)
+            features['mEXL'] = min(normalised_exls) if len(normalised_exls) == 2 else Features.NAN
+            features['EXL'] = sum(normalised_exls)
+        else:
+            features['MEXL'] = Features.NAN
+            features['mEXL'] = Features.NAN
+            features['EXL'] = Features.NAN
 
         exas1 = Features.get_number_value(sample, 'EXAS', 0)
         exas2 = Features.get_number_value(sample, 'EXAS2', 0)
