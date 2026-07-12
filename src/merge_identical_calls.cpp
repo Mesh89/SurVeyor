@@ -117,7 +117,7 @@ int main(int argc, char* argv[]) {
 			}
 			continue;
 		}
-		
+
 		if (has_junction_remap_ref_range(sv) && sv->junction_remap_ref_end > sv->junction_remap_ref_beg) {
 			auto tree_it = svs_by_jrr.find(sv->chr);
 
@@ -146,7 +146,16 @@ int main(int argc, char* argv[]) {
 		surviving_sv_keys[sv->unique_key()] = sv;
 	}
 
-	std::sort(surviving_svs.begin(), surviving_svs.end(), sv_output_order);
+	// sv_output_order orders variants within a contig but does not compare
+	// contig names. Include the VCF header RID first so chromosome blocks remain
+	// continuous and downstream outputs can be indexed.
+	std::sort(surviving_svs.begin(), surviving_svs.end(), [in_vcf_hdr](
+			const std::shared_ptr<sv_t>& a, const std::shared_ptr<sv_t>& b) {
+		int a_rid = bcf_hdr_name2id(in_vcf_hdr, a->chr.c_str());
+		int b_rid = bcf_hdr_name2id(in_vcf_hdr, b->chr.c_str());
+		if (a_rid != b_rid) return a_rid < b_rid;
+		return sv_output_order(a, b);
+	});
 
 	// output
 	htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "wz");
