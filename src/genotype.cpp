@@ -353,7 +353,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
 	int or1e = get_orc_exact_count(sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
 	bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1E", &or1e, 1);
 
-	if (sv->sample_info.ref_bp2.reads_info.computed) { // OR2 is only relevant for SVs with RR2
+    if (sv->sample_info.ref_bp2.reads_info.computed) { // OR2 is only relevant for SVs with RR2
         int or2 = sv->sample_info.assigned_to_other_sv_bp2_reads;
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2", &or2, 1);
     
@@ -362,10 +362,14 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     
         int or2chq = get_orc_hq_count(sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2CHQ", &or2chq, 1);
+
+        int or2e = get_orc_exact_count(sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2E", &or2e, 1);
     } else {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2C", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2CHQ", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2E", NULL, 0);
     }
 
     int td = sv->sample_info.too_deep;

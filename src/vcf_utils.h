@@ -379,6 +379,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 			"yet better support the ALT allele of a different SV, and are consistent reads.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or2chq_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR2E");
+	const char* or2e_tag = "##FORMAT=<ID=OR2E,Number=1,Type=Integer,Description=\"Number of exact consistent reads supporting breakpoint 2 of a different SV that competes with this SV.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or2e_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "TD");
 	const char* nc_tag = "##FORMAT=<ID=TD,Number=1,Type=Integer,Description=\"The variant region is too deep to be genotyped reliably.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, nc_tag, &len));
