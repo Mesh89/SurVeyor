@@ -931,15 +931,35 @@ int main(int argc, char* argv[]) {
     workdir = argv[5];
     std::string sample_name = argv[6];
 
+    bool reassign_evidence = false;
+    std::string alt_reads_association_fname = workdir + "/alt_reads_to_sv_associations.txt";
+    std::string alt_pairs_association_fname = workdir + "/alt_pairs_to_sv_associations.txt";
+    for (int i = 7; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--reassign-evidence") {
+            reassign_evidence = true;
+        } else if (arg == "--alt-read-associations") {
+            if (++i >= argc) {
+                throw std::runtime_error("Missing path after --alt-read-associations.");
+            }
+            alt_reads_association_fname = argv[i];
+        } else if (arg == "--alt-pair-associations") {
+            if (++i >= argc) {
+                throw std::runtime_error("Missing path after --alt-pair-associations.");
+            }
+            alt_pairs_association_fname = argv[i];
+        } else {
+            throw std::runtime_error("Unknown genotype option: " + arg);
+        }
+    }
+
     contig_map.load(workdir);
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
     evidence_map_t* evidence_map = new evidence_map_t();
-    bool reassign_evidence = false;
-    if (argc > 7 && std::string(argv[7]) == "--reassign-evidence") {
-        evidence_map->load(workdir, in_vcf_fname, config);
-        reassign_evidence = true;
+    if (reassign_evidence) {
+        evidence_map->load(alt_reads_association_fname, in_vcf_fname, config);
     }
 
     chr_seqs.read_fasta_into_map(reference_fname);
@@ -1019,7 +1039,7 @@ int main(int argc, char* argv[]) {
 
     evidence_logger_t* evidence_logger = NULL;
     if (!reassign_evidence) {
-        evidence_logger = new evidence_logger_t(workdir);
+        evidence_logger = new evidence_logger_t(alt_reads_association_fname, alt_pairs_association_fname);
     }
 
     // genotype chrs in descending order of svs

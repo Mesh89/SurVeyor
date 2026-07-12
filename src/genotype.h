@@ -61,9 +61,15 @@ struct evidence_logger_t {
     std::ofstream alt_reads_to_sv_associations, alt_pairs_to_sv_associations;
     std::mutex mtx;
 
-    evidence_logger_t(const std::string& workdir) {
-        alt_reads_to_sv_associations.open(workdir + "/alt_reads_to_sv_associations.txt");
-        alt_pairs_to_sv_associations.open(workdir + "/alt_pairs_to_sv_associations.txt");
+    evidence_logger_t(const std::string& alt_reads_association_fname, const std::string& alt_pairs_association_fname) {
+        alt_reads_to_sv_associations.open(alt_reads_association_fname);
+        if (!alt_reads_to_sv_associations) {
+            throw std::runtime_error("Unable to open file " + alt_reads_association_fname + ".");
+        }
+        alt_pairs_to_sv_associations.open(alt_pairs_association_fname);
+        if (!alt_pairs_to_sv_associations) {
+            throw std::runtime_error("Unable to open file " + alt_pairs_association_fname + ".");
+        }
     }
 
     void log_pair_association(const std::string& sv_id, bam1_t* pair) {
@@ -94,7 +100,7 @@ struct evidence_map_t {
 
     evidence_map_t() {}
 
-    void load(std::string workdir, std::string vcf_fname, config_t& config) {
+    void load(const std::string& alt_reads_association_fname, const std::string& vcf_fname, config_t& config) {
         
         htsFile* vcf_file = bcf_open(vcf_fname.c_str(), "r");
         if (vcf_file == NULL) {
@@ -131,8 +137,10 @@ struct evidence_map_t {
         bcf_hdr_destroy(vcf_header);
         bcf_destroy(vcf_record);
 
-        std::string alt_reads_association_fname = workdir + "/alt_reads_to_sv_associations.txt";
         std::ifstream alt_reads_association_fin(alt_reads_association_fname);
+        if (!alt_reads_association_fin) {
+            throw std::runtime_error("Unable to open file " + alt_reads_association_fname + ".");
+        }
         std::string sv_id, read_name;
         int bp, score;
 
