@@ -39,6 +39,9 @@ call_genotype_shared_options_parser.add_argument('--two-pass', action='store_tru
 call_genotype_shared_options_parser.add_argument('--min-diff-hsr', type=int, default=3, help='Minimum number of differences with the reference \
                         (considered as number of insertions, deletions and mismatches) for a read to be considered a hidden split read.')
 call_genotype_shared_options_parser.add_argument('--tr-bed', help='BED file with tandem repetitive regions. If provided, it will be used for a more aggrestive duplicate removal.')
+call_genotype_shared_options_parser.add_argument('--haploid_contigs', '--haploid-contigs', default='',
+                        help='Comma-separated contigs to treat as haploid (for example, chrX,chrY). '
+                             'Retained positive variants on these contigs are written as 1/1 and may not overlap.')
 
 call_parser = subparsers.add_parser('call', parents=[common_parser, call_genotype_shared_options_parser], help='Call SVs denovo.')
 call_parser.add_argument('bam_file', help='Input bam file.')
@@ -328,6 +331,8 @@ def reads_categorizer(workdir):
         config_file.write("min_diff_hsr %s\n" % cmd_args.min_diff_hsr)
         config_file.write("min_stable_mapq %d\n" % cmd_args.min_stable_mapq)
         config_file.write("high_confidence_mapq %d\n" % cmd_args.high_confidence_mapq)
+        if cmd_args.haploid_contigs:
+            config_file.write("haploid_contigs %s\n" % cmd_args.haploid_contigs)
 
     mkdir(workdir + "/workspace")
     mkdir_clean(workdir + "/workspace/sr")
@@ -451,7 +456,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
     reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s" % (workdir + "/intermediate_results/calls-raw.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.reconciled.vcf.gz", sample_name)
     run_cmd(reconcile_vcf_gt_cmd)
 
-    write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s/intermediate_results/calls-with-gt.reconciled.vcf.gz %s/calls-genotyped.smvars %s/calls-genotyped.stvars %s" % (workdir, workdir, workdir, reference_fname)
+    write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s/intermediate_results/calls-with-gt.reconciled.vcf.gz %s/calls-genotyped.smvars %s/calls-genotyped.stvars %s %s" % (workdir, workdir, workdir, reference_fname, workdir)
     run_cmd(write_aux_snps_cmd)
 
     if cmd_args.two_pass:
@@ -476,7 +481,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
         reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s" % (workdir + "/intermediate_results/calls-raw.vcf.gz", final_iter_gt_file, reconciled_file, sample_name)
         run_cmd(reconcile_vcf_gt_cmd)
 
-        write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s %s/calls-genotyped.reassigned.smvars %s/calls-genotyped.reassigned.stvars %s" % (reconciled_file, workdir, workdir, reference_fname)
+        write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s %s/calls-genotyped.reassigned.smvars %s/calls-genotyped.reassigned.stvars %s %s" % (reconciled_file, workdir, workdir, reference_fname, workdir)
         run_cmd(write_aux_snps_cmd)
 
 

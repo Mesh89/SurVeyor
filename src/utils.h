@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <queue>
 #include <numeric>
@@ -30,6 +31,7 @@ struct config_t {
     bool per_contig_stats;
     bool training_mode;
     std::string sampling_regions, version;
+    std::unordered_set<std::string> haploid_contigs;
 
     const int flanking_size = 5000, indel_tested_region_size = 10000;
     const int min_assembled_ins_size = 50;
@@ -56,6 +58,9 @@ struct config_t {
         training_mode = std::stoi(config_params["training_mode"]);
         sampling_regions = config_params["sampling_regions"];
         version = config_params["version"];
+        std::istringstream haploid_stream(config_params["haploid_contigs"]);
+        for (std::string contig; std::getline(haploid_stream, contig, ',');)
+            haploid_contigs.insert(contig);
     }
 };
 
