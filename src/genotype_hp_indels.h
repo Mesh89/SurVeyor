@@ -292,6 +292,15 @@ int nearest_hp_allele_idx(int hp_len, const std::string& read_seq,
     return best_idx;
 }
 
+bool hp_read_supports_alt_allele(const hp_read_info_t& hp_read_info, int alt_allele_idx,
+    std::vector<std::unique_ptr<char[]>>& alt_alleles, std::vector<int>& alt_allele_lens,
+    std::vector<int>& hp_run_lens, StripedSmithWaterman::Aligner& aligner) {
+
+    std::vector<int> candidate_allele_idxs = {alt_allele_idx, int(hp_run_lens.size()) - 1};
+    return nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens,
+        hp_run_lens, aligner, &candidate_allele_idxs) == alt_allele_idx;
+}
+
 std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::vector<hp_read_info_t>& hp_read_infos,
     std::vector<std::unique_ptr<char[]>>& alt_alleles, std::vector<int>& alt_allele_lens, std::vector<int>& hp_run_lens, StripedSmithWaterman::Aligner& aligner) {
 
@@ -828,7 +837,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
     char hp_base = get_homopolymer_base(hp_indels[0], contig_seq);
 
-    std::vector<hp_read_info_t> hp_read_infos;
+    std::vector<hp_read_info_t> hp_read_infos, hp_read_infos_assigned_outside_group;
 
     std::stringstream region_ss;
     region_ss << hp_indels[0]->chr << ":" << ref_hp_range.beg-1 << "-" << ref_hp_range.end+1;
@@ -894,19 +903,12 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (!is_proper_pair(read, stats.min_is, stats.max_is)) continue;
 
-        // If this read is assigned to a different, non-HP SV, we don't use it for evidence here
-        bool discard_read = reassign_evidence;
+        bool assigned_outside_group = reassign_evidence;
         for (int i = 0; i < hp_indels.size(); i++) {
              if (!reassign_evidence || !evidence_map->is_read_assigned_to_different_sv(read, hp_indels[i])) {
-                discard_read = false;
+                assigned_outside_group = false;
                 break;
             }
-        }
-        if (discard_read) {
-            for (sv_t* hp_indel : hp_indels) {
-                hp_indel->sample_info.assigned_to_other_sv_bp1_reads++;
-            }
-            continue;
         }
 
         // If a read is clipped, try and realign it using a more permissive aligner, due to the very noisy nature of HP reads tails
@@ -939,7 +941,11 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             }
             continue;
         }
-        hp_read_infos.push_back(hp_read_info);
+        if (assigned_outside_group) {
+            hp_read_infos_assigned_outside_group.push_back(hp_read_info);
+        } else {
+            hp_read_infos.push_back(hp_read_info);
+        }
     }
     hts_itr_destroy(iter);
 
@@ -998,22 +1004,34 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         // We need this to feed into set_bp_consensus_info
         // However, we don't want to feed it to set_hp_read_mapq_stats
         hp_read_info.rescued = true;
-        hp_read_infos.push_back(hp_read_info);
+        bool assigned_outside_group = reassign_evidence;
+        for (sv_t* hp_indel : hp_indels) {
+            if (!reassign_evidence || !evidence_map->is_read_assigned_to_different_sv(hp_read_info.read, hp_indel)) {
+                assigned_outside_group = false;
+                break;
+            }
+        }
+        if (assigned_outside_group) {
+            hp_read_infos_assigned_outside_group.push_back(hp_read_info);
+        } else {
+            hp_read_infos.push_back(hp_read_info);
+        }
     }
 
     bam_destroy1(read);
     hts_itr_destroy(iter);
 
-    std::vector<bool> valid_reads_mask = get_valid_reads_mask(hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE);
-
-    std::vector<hp_read_info_t> valid_hp_read_infos;
-    valid_hp_read_infos.reserve(hp_read_infos.size());
-    for (int i = 0; i < hp_read_infos.size(); i++) {
-        if (valid_reads_mask[i]) {
-            valid_hp_read_infos.push_back(hp_read_infos[i]);
+    auto remove_invalid_hp_reads = [&](std::vector<hp_read_info_t>& reads) {
+        std::vector<bool> valid_reads_mask = get_valid_reads_mask(reads, config.min_clip_len, MAX_TAIL_MISMATCH_RATE);
+        std::vector<hp_read_info_t> valid_reads;
+        valid_reads.reserve(reads.size());
+        for (int i = 0; i < reads.size(); i++) {
+            if (valid_reads_mask[i]) valid_reads.push_back(reads[i]);
         }
-    }
-    hp_read_infos.swap(valid_hp_read_infos);
+        reads.swap(valid_reads);
+    };
+    remove_invalid_hp_reads(hp_read_infos);
+    remove_invalid_hp_reads(hp_read_infos_assigned_outside_group);
 
     std::vector<int> hp_run_lens;
     for (sv_t* hp_indel : hp_indels) {
@@ -1025,20 +1043,40 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     std::vector<hp_allele_cluster_t> clusters = reassign_evidence ?
         cluster_reads_by_nearest_allele_len_reassign(hp_read_infos, hp_run_lens, hp_indels, evidence_map, config.seed) :
         cluster_reads_by_nearest_allele_len(hp_read_infos, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
-    
-    int ref_reads = 0;
-    std::vector<hp_read_info_t> ref_assigned_hp_read_infos;
-    std::vector<bp_support_read_t> ref_good_reads, ref_good_reads_non_rescued;
-    std::vector<bool> ref_is_exact_match;
+
+    std::vector<int> ref_reads(hp_indels.size(), 0);
+    std::vector<std::vector<hp_read_info_t>> ref_assigned_hp_read_infos(hp_indels.size());
+    std::vector<std::vector<bp_support_read_t>> ref_good_reads(hp_indels.size()), ref_good_reads_non_rescued(hp_indels.size());
+    std::vector<std::vector<bool>> ref_is_exact_match(hp_indels.size());
+
+    auto add_ref_support = [&](int allele_idx, const hp_read_info_t& hp_read_info) {
+        ref_reads[allele_idx]++;
+        ref_assigned_hp_read_infos[allele_idx].push_back(hp_read_info);
+        if (!hp_read_info.is_good_read(config.min_clip_len, MAX_TAIL_MISMATCH_RATE)) return;
+        ref_good_reads[allele_idx].push_back(hp_read_info.read);
+        if (!hp_read_info.rescued) ref_good_reads_non_rescued[allele_idx].push_back(hp_read_info.read);
+        ref_is_exact_match[allele_idx].push_back(hp_read_info.hp_len == hp_run_lens.back() && !hp_read_info.original_alignment_has_indel_outside_hp);
+    };
+
+    // Reads assigned outside this HP group are classified against each candidate's ALT and REF alleles.
+    for (const hp_read_info_t& hp_read_info : hp_read_infos_assigned_outside_group) {
+        for (int i = 0; i < hp_indels.size(); i++) {
+            hp_indels[i]->sample_info.assigned_to_other_sv_bp1_reads++;
+            if (hp_read_supports_alt_allele(hp_read_info, i, alt_alleles, alt_allele_lens, hp_run_lens, aligner)) {
+                hp_indels[i]->sample_info.oar_bp1_reads++;
+                evidence_map->register_oar_support(hp_indels[i]->sample_info, 1, hp_read_info.read);
+            } else {
+                hp_indels[i]->sample_info.orr_bp1_reads++;
+                evidence_map->register_orr_support(hp_indels[i]->sample_info, 1, hp_read_info.read);
+                add_ref_support(i, hp_read_info);
+            }
+        }
+    }
  
     std::vector<int> alt_reads(hp_indels.size(), 0);
     std::vector<std::vector<hp_read_info_t>> alt_assigned_hp_read_infos(hp_indels.size());
     std::vector<std::vector<bp_support_read_t>> alt_good_reads(hp_indels.size()),alt_good_reads_non_rescued(hp_indels.size());
     std::vector<std::vector<bool>> alt_is_exact_match(hp_indels.size());
-    std::unordered_set<std::string> hp_indel_ids;
-    for (sv_t* hp_indel : hp_indels) {
-        hp_indel_ids.insert(remove_svid_dup_suffix(hp_indel->id));
-    }
 
     // Associate each allele-aware cluster to its selected allele
     for (const hp_allele_cluster_t& allele_cluster : clusters) {
@@ -1083,14 +1121,15 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
                 is_exact_match.push_back(exact_match);
             }
 
-
             if (is_ref_allele) {
                 // Cluster best matches the reference allele
-                ref_reads += cluster.size();
-                ref_assigned_hp_read_infos.insert(ref_assigned_hp_read_infos.end(), cluster.begin(), cluster.end());
-                ref_good_reads.insert(ref_good_reads.end(), good_reads.begin(), good_reads.end());
-                ref_good_reads_non_rescued.insert(ref_good_reads_non_rescued.end(), good_reads_non_rescued.begin(), good_reads_non_rescued.end());
-                ref_is_exact_match.insert(ref_is_exact_match.end(), is_exact_match.begin(), is_exact_match.end());
+                for (int i = 0; i < hp_indels.size(); i++) {
+                    ref_reads[i] += cluster.size();
+                    ref_assigned_hp_read_infos[i].insert(ref_assigned_hp_read_infos[i].end(), cluster.begin(), cluster.end());
+                    ref_good_reads[i].insert(ref_good_reads[i].end(), good_reads.begin(), good_reads.end());
+                    ref_good_reads_non_rescued[i].insert(ref_good_reads_non_rescued[i].end(), good_reads_non_rescued.begin(), good_reads_non_rescued.end());
+                    ref_is_exact_match[i].insert(ref_is_exact_match[i].end(), is_exact_match.begin(), is_exact_match.end());
+                }
             } else {
                 // Cluster best matches an indel allele, so assign its reads to that allele
                 alt_reads[best_allele_idx] += cluster.size();
@@ -1105,16 +1144,32 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         }
     }
 
-    for (int i = 0; i < hp_indels.size(); i++) {
-        if (reassign_evidence) { // set OR* reads for other indels
-            for (int j = 0; j < hp_indels.size(); j++) {
-                if (i == j) continue;
-                hp_indels[j]->sample_info.assigned_to_other_sv_bp1_reads += alt_reads[i];
+    if (reassign_evidence) {
+        // Classify reads assigned to one HP allele against every other HP candidate's ALT and REF alleles.
+        for (int assigned_allele_idx = 0; assigned_allele_idx < hp_indels.size(); assigned_allele_idx++) {
+            for (const hp_read_info_t& hp_read_info : alt_assigned_hp_read_infos[assigned_allele_idx]) {
+                for (int target_allele_idx = 0; target_allele_idx < hp_indels.size(); target_allele_idx++) {
+                    if (target_allele_idx == assigned_allele_idx || !evidence_map->is_read_assigned_to_different_sv(hp_read_info.read, hp_indels[target_allele_idx])) continue;
+                    hp_indels[target_allele_idx]->sample_info.assigned_to_other_sv_bp1_reads++;
+                    if (hp_read_supports_alt_allele(hp_read_info, target_allele_idx, alt_alleles, alt_allele_lens, hp_run_lens, aligner)) {
+                        hp_indels[target_allele_idx]->sample_info.oar_bp1_reads++;
+                        evidence_map->register_oar_support(hp_indels[target_allele_idx]->sample_info, 1, hp_read_info.read);
+                    } else {
+                        hp_indels[target_allele_idx]->sample_info.orr_bp1_reads++;
+                        evidence_map->register_orr_support(hp_indels[target_allele_idx]->sample_info, 1, hp_read_info.read);
+                        add_ref_support(target_allele_idx, hp_read_info);
+                    }
+                }
             }
+        }
+    }
+
+    for (int i = 0; i < hp_indels.size(); i++) {
+        if (reassign_evidence) { // set OR*C reads for other variants
             for (int j = 0; j < alt_good_reads[i].size(); j++) {
                 const bp_support_read_t& read = alt_good_reads[i][j];
+                evidence_map->record_assigned_read_consistency(read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
                 for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(read)) {
-                    if (hp_indel_ids.count(remove_svid_dup_suffix(ov.first))) continue;
                     increase_orc(sv_map, ov.first, ov.second, read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
                 }
             }
@@ -1132,13 +1187,13 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         set_hp_read_mapq_stats(alt_good_reads_non_rescued[i], hp_indels[i]->sample_info.alt1_hp_min_mapq, hp_indels[i]->sample_info.alt1_hp_max_mapq, 
             hp_indels[i]->sample_info.alt1_hp_avg_mapq, hp_indels[i]->sample_info.alt1_hp_stddev_mapq);
 
-        set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_reads, ref_good_reads, ref_is_exact_match, 0.0, 0.0);
-        hp_indels[i]->sample_info.ref1_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false);
-        hp_indels[i]->sample_info.ref1_consistent_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
-        hp_indels[i]->sample_info.ref1_consistent_hp_len_iqr = find_hp_len_iqr(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
-        set_hp_tail_mismatch_rates(ref_assigned_hp_read_infos, config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false,
+        set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_reads[i], ref_good_reads[i], ref_is_exact_match[i], 0.0, 0.0);
+        hp_indels[i]->sample_info.ref1_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false);
+        hp_indels[i]->sample_info.ref1_consistent_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
+        hp_indels[i]->sample_info.ref1_consistent_hp_len_iqr = find_hp_len_iqr(ref_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
+        set_hp_tail_mismatch_rates(ref_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false,
             hp_indels[i]->sample_info.ref1_hp_5p_mismatch_rate, hp_indels[i]->sample_info.ref1_hp_3p_mismatch_rate);
-        set_hp_read_mapq_stats(ref_good_reads_non_rescued, hp_indels[i]->sample_info.ref1_hp_min_mapq, hp_indels[i]->sample_info.ref1_hp_max_mapq,
+        set_hp_read_mapq_stats(ref_good_reads_non_rescued[i], hp_indels[i]->sample_info.ref1_hp_min_mapq, hp_indels[i]->sample_info.ref1_hp_max_mapq,
             hp_indels[i]->sample_info.ref1_hp_avg_mapq, hp_indels[i]->sample_info.ref1_hp_stddev_mapq);
     }
 }

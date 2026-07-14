@@ -60,7 +60,9 @@ void add_read_support_headers(bcf_hdr_t* hdr, const char prefix, int bp_n, const
     const format_tag_def_t formats[] = {
         {
             "%cR%d", 1, "Integer",
-            "Number of reads supporting %s in the %s allele."
+            prefix == 'R'
+                ? "Number of reads supporting %s in the %s allele, including reads that also support another variant."
+                : "Number of reads supporting %s in the %s allele."
         },
         {
             "%cR%dC", 1, "Integer", 
@@ -344,6 +346,70 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "ERHQ");
 	const char* erhq_tag = "##FORMAT=<ID=ERHQ,Number=1,Type=Integer,Description=\"Number of high-quality reads supporting equally well reference and alternate allele.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, erhq_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1");
+	const char* oar1_tag = "##FORMAT=<ID=OAR1,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the ALT allele of this SV, but assigned to another variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1C");
+	const char* oar1c_tag = "##FORMAT=<ID=OAR1C,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the ALT allele of this SV that are assigned to another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1c_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1CHQ");
+	const char* oar1chq_tag = "##FORMAT=<ID=OAR1CHQ,Number=1,Type=Integer,Description=\"Number of high-quality reads supporting breakpoint 1 of the ALT allele of this SV that are assigned to another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1chq_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1E");
+	const char* oar1e_tag = "##FORMAT=<ID=OAR1E,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the ALT allele of this SV that are assigned to another variant and are exact, consistent reads for that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1e_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2");
+	const char* oar2_tag = "##FORMAT=<ID=OAR2,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the ALT allele of this SV, but assigned to another variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2C");
+	const char* oar2c_tag = "##FORMAT=<ID=OAR2C,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the ALT allele of this SV that are assigned to another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2c_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2CHQ");
+	const char* oar2chq_tag = "##FORMAT=<ID=OAR2CHQ,Number=1,Type=Integer,Description=\"Number of high-quality reads supporting breakpoint 2 of the ALT allele of this SV that are assigned to another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2chq_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2E");
+	const char* oar2e_tag = "##FORMAT=<ID=OAR2E,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the ALT allele of this SV that are assigned to another variant and are exact, consistent reads for that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2e_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR1");
+	const char* orr1_tag = "##FORMAT=<ID=ORR1,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the REF allele of this SV that also support another variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr1_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR1C");
+	const char* orr1c_tag = "##FORMAT=<ID=ORR1C,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the REF allele of this SV that also support another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr1c_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR1CHQ");
+	const char* orr1chq_tag = "##FORMAT=<ID=ORR1CHQ,Number=1,Type=Integer,Description=\"Number of high-quality reads supporting breakpoint 1 of the REF allele of this SV that also support another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr1chq_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR1E");
+	const char* orr1e_tag = "##FORMAT=<ID=ORR1E,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the REF allele of this SV that also support another variant and are exact, consistent reads for that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr1e_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR2");
+	const char* orr2_tag = "##FORMAT=<ID=ORR2,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the REF allele of this SV that also support another variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr2_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR2C");
+	const char* orr2c_tag = "##FORMAT=<ID=ORR2C,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the REF allele of this SV that also support another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr2c_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR2CHQ");
+	const char* orr2chq_tag = "##FORMAT=<ID=ORR2CHQ,Number=1,Type=Integer,Description=\"Number of high-quality reads supporting breakpoint 2 of the REF allele of this SV that also support another variant and are consistent with that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr2chq_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "ORR2E");
+	const char* orr2e_tag = "##FORMAT=<ID=ORR2E,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the REF allele of this SV that also support another variant and are exact, consistent reads for that variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr2e_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR1");
 	const char* or1_tag = "##FORMAT=<ID=OR1,Number=1,Type=Integer,Description=\"Number of reads supporting the breakpoint 1 of the ALT allele of this SV, "

@@ -190,6 +190,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
             }
         }
 
+        // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
         if (alt_or_ref_read && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) {
             if (add_alt_bp1_better_read || add_ref_bp1_better_read) {
                 ins->sample_info.assigned_to_other_sv_bp1_reads++;
@@ -197,7 +198,23 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
             if (add_alt_bp2_better_read || add_ref_bp2_better_read) {
                 ins->sample_info.assigned_to_other_sv_bp2_reads++;
             }
-            continue;
+            if (add_alt_bp1_better_read) {
+                ins->sample_info.oar_bp1_reads++;
+                evidence_map->register_oar_support(ins->sample_info, 1, read);
+            }
+            if (add_alt_bp2_better_read) {
+                ins->sample_info.oar_bp2_reads++;
+                evidence_map->register_oar_support(ins->sample_info, 2, read);
+            }
+            if (add_ref_bp1_better_read) {
+                ins->sample_info.orr_bp1_reads++;
+                evidence_map->register_orr_support(ins->sample_info, 1, read);
+            }
+            if (add_ref_bp2_better_read) {
+                ins->sample_info.orr_bp2_reads++;
+                evidence_map->register_orr_support(ins->sample_info, 2, read);
+            }
+            if (add_alt_bp1_better_read || add_alt_bp2_better_read) continue;
         }
 
         if (add_alt_bp1_better_read) {
@@ -270,6 +287,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
             }
         }
         for (bam1_t* r : alt_better_reads_consistent) {
+            evidence_map->record_assigned_read_consistency(r, get_mq(r) >= config.high_confidence_mapq, alt_better_read_is_exact[read_name_with_suffix(r)]);
             for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r)) {
                 increase_orc(sv_map, ov.first, ov.second, r, get_mq(r) >= config.high_confidence_mapq, alt_better_read_is_exact[read_name_with_suffix(r)]);
             }

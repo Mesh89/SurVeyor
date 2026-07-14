@@ -98,6 +98,13 @@ struct evidence_map_t {
     std::unordered_map<std::string, int> read_to_hpid_map;
     std::unordered_map<std::string, std::vector<std::pair<std::string, int>>> read_to_non_chosen_svs_map;
 
+    // OAR/ORR consistency joins two observations that can arrive in either order on different genotyping threads:
+    // a variant classifies an assigned-away read as ALT or REF, and the assigned variant later finds it consistent.
+    std::mutex other_read_support_mtx;
+    std::unordered_map<std::string, sv_t::orc_read_info_t> assigned_consistent_reads;
+    std::unordered_map<std::string, std::vector<std::pair<sv_t::sample_info_t*, int>>> oar_targets_by_read;
+    std::unordered_map<std::string, std::vector<std::pair<sv_t::sample_info_t*, int>>> orr_targets_by_read;
+
     evidence_map_t() {}
 
     void load(const std::string& alt_reads_association_fname, const std::string& vcf_fname, config_t& config) {
@@ -298,6 +305,13 @@ struct evidence_map_t {
         return read_to_hpid_map[read_name] != sv->hpid;
     }
 
+    // Check assignment for reads represented without their original BAM record, preserving the /1 or /2 suffix in the lookup key.
+    bool is_read_assigned_to_different_sv(const bp_support_read_t& read, sv_t* sv) {
+        std::string read_name = read_name_with_suffix(read);
+        if (!read_to_hpid_map.count(read_name)) return false;
+        return read_to_hpid_map[read_name] != sv->hpid;
+    }
+
     bool is_read_assigned_to_this_sv(const bp_support_read_t& read, sv_t* sv) {
         std::string read_name = read_name_with_suffix(read);
         if (!read_to_hpid_map.count(read_name)) return false;
@@ -314,6 +328,150 @@ struct evidence_map_t {
         std::string read_name = read.read_name + (read.is_first_in_pair ? "/1" : "/2");
         if (!read_to_non_chosen_svs_map.count(read_name)) return {};
         return read_to_non_chosen_svs_map[read_name];
+    }
+
+    // Explicitly insert one OAR*C read, or upgrade its flags if it was already inserted. The caller must hold other_read_support_mtx.
+    void insert_or_update_oar_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::orc_read_info_t& assigned_read_info) {
+        std::unordered_map<std::string, sv_t::orc_read_info_t>* consistent_reads;
+        if (bp_n == 1) {
+            consistent_reads = &sample_info.oar_bp1_consistent_reads;
+        } else if (bp_n == 2) {
+            consistent_reads = &sample_info.oar_bp2_consistent_reads;
+        } else {
+            throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
+        }
+
+        sv_t::orc_read_info_t read_info = assigned_read_info;
+        auto existing_read = consistent_reads->find(read_name);
+        if (existing_read == consistent_reads->end()) {
+            consistent_reads->emplace(read_name, read_info);
+        } else {
+            existing_read->second.hq |= read_info.hq;
+            existing_read->second.exact |= read_info.exact;
+        }
+    }
+
+    // Explicitly insert one ORR*C read, or upgrade its flags if it was already inserted. The caller must hold other_read_support_mtx.
+    void insert_or_update_orr_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::orc_read_info_t& assigned_read_info) {
+        std::unordered_map<std::string, sv_t::orc_read_info_t>* consistent_reads;
+        if (bp_n == 1) {
+            consistent_reads = &sample_info.orr_bp1_consistent_reads;
+        } else if (bp_n == 2) {
+            consistent_reads = &sample_info.orr_bp2_consistent_reads;
+        } else {
+            throw std::runtime_error("Invalid ORR breakpoint number " + std::to_string(bp_n) + ".");
+        }
+
+        sv_t::orc_read_info_t read_info = assigned_read_info;
+        auto existing_read = consistent_reads->find(read_name);
+        if (existing_read == consistent_reads->end()) {
+            consistent_reads->emplace(read_name, read_info);
+        } else {
+            existing_read->second.hq |= read_info.hq;
+            existing_read->second.exact |= read_info.exact;
+        }
+    }
+
+    // Remember that an assigned-away read supports this variant's ALT breakpoint. If the assigned
+    // variant has already reported consistency, populate OAR*C immediately; otherwise record_assigned_read_consistency does it later.
+    void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name) {
+        std::lock_guard<std::mutex> lock(other_read_support_mtx);
+
+        auto existing_targets = oar_targets_by_read.find(read_name);
+        if (existing_targets == oar_targets_by_read.end()) {
+            std::vector<std::pair<sv_t::sample_info_t*, int>> targets = {{&sample_info, bp_n}};
+            oar_targets_by_read.emplace(read_name, targets);
+        } else {
+            bool already_registered = false;
+            for (const auto& target : existing_targets->second) {
+                if (target.first == &sample_info && target.second == bp_n) {
+                    already_registered = true;
+                    break;
+                }
+            }
+            if (!already_registered) existing_targets->second.push_back({&sample_info, bp_n});
+        }
+
+        auto assigned_read_it = assigned_consistent_reads.find(read_name);
+        if (assigned_read_it != assigned_consistent_reads.end()) insert_or_update_oar_consistent_read(sample_info, bp_n, read_name, assigned_read_it->second);
+    }
+
+    // Convenience overloads preserve the /1 or /2 suffix used as the read key.
+    void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, bam1_t* read) {
+        register_oar_support(sample_info, bp_n, read_name_with_suffix(read));
+    }
+
+    void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, const bp_support_read_t& read) {
+        register_oar_support(sample_info, bp_n, read_name_with_suffix(read));
+    }
+
+    // Remember that an assigned-away read supports this variant's REF breakpoint. If the assigned
+    // variant has already reported consistency, populate ORR*C immediately; otherwise record_assigned_read_consistency does it later.
+    void register_orr_support(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name) {
+        std::lock_guard<std::mutex> lock(other_read_support_mtx);
+
+        // Insert the read into the list of targets for this read name, if not already present.
+        auto existing_targets = orr_targets_by_read.find(read_name);
+        if (existing_targets == orr_targets_by_read.end()) {
+            std::vector<std::pair<sv_t::sample_info_t*, int>> targets = {{&sample_info, bp_n}};
+            orr_targets_by_read.emplace(read_name, targets);
+        } else {
+            bool already_registered = false;
+            for (const auto& target : existing_targets->second) {
+                if (target.first == &sample_info && target.second == bp_n) {
+                    already_registered = true;
+                    break;
+                }
+            }
+            if (!already_registered) existing_targets->second.push_back({&sample_info, bp_n});
+        }
+
+        // If the assigned variant has already reported consistency, insert or update ORR*C immediately.
+        auto assigned_read_it = assigned_consistent_reads.find(read_name);
+        if (assigned_read_it != assigned_consistent_reads.end()) insert_or_update_orr_consistent_read(sample_info, bp_n, read_name, assigned_read_it->second);
+    }
+
+    // Convenience overloads preserve the /1 or /2 suffix used as the read key.
+    void register_orr_support(sv_t::sample_info_t& sample_info, int bp_n, bam1_t* read) {
+        register_orr_support(sample_info, bp_n, read_name_with_suffix(read));
+    }
+
+    void register_orr_support(sv_t::sample_info_t& sample_info, int bp_n, const bp_support_read_t& read) {
+        register_orr_support(sample_info, bp_n, read_name_with_suffix(read));
+    }
+
+    // Record consistency with the variant that received this read, then propagate it to every variant
+    // where the read was classified as ALT or REF. hq and exact are OR-upgraded across duplicate records for CHQ and E.
+    void record_assigned_read_consistency(const std::string& read_name, bool hq, bool exact) {
+        std::lock_guard<std::mutex> lock(other_read_support_mtx);
+        sv_t::orc_read_info_t assigned_read_info;
+        assigned_read_info.hq = hq;
+        assigned_read_info.exact = exact;
+        auto existing_read = assigned_consistent_reads.find(read_name);
+        if (existing_read == assigned_consistent_reads.end()) {
+            assigned_consistent_reads.emplace(read_name, assigned_read_info);
+        } else {
+            existing_read->second.hq |= assigned_read_info.hq;
+            existing_read->second.exact |= assigned_read_info.exact;
+            assigned_read_info = existing_read->second;
+        }
+        auto oar_targets_it = oar_targets_by_read.find(read_name);
+        if (oar_targets_it != oar_targets_by_read.end()) {
+            for (const auto& target : oar_targets_it->second) insert_or_update_oar_consistent_read(*target.first, target.second, read_name, assigned_read_info);
+        }
+        auto orr_targets_it = orr_targets_by_read.find(read_name);
+        if (orr_targets_it != orr_targets_by_read.end()) {
+            for (const auto& target : orr_targets_it->second) insert_or_update_orr_consistent_read(*target.first, target.second, read_name, assigned_read_info);
+        }
+    }
+
+    // Convenience overloads preserve the /1 or /2 suffix used as the read key.
+    void record_assigned_read_consistency(bam1_t* read, bool hq, bool exact) {
+        record_assigned_read_consistency(read_name_with_suffix(read), hq, exact);
+    }
+
+    void record_assigned_read_consistency(const bp_support_read_t& read, bool hq, bool exact) {
+        record_assigned_read_consistency(read_name_with_suffix(read), hq, exact);
     }
 
 };

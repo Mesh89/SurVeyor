@@ -69,12 +69,6 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         if (dup_start < get_unclipped_start(read) && get_unclipped_end(read) < dup_end) continue;
         if (!is_samechr(read) || is_samestr(read)) continue;
 
-        // if the read is assigned to a different SV, no need to align it, just count and continue
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
-            dup->sample_info.assigned_to_other_sv_bp1_reads++;
-            continue;
-        }
-
         std::string seq;
         if (!bam_is_mrev(read)) {
             if (read->core.mpos < dup_start-stats.max_is || read->core.mpos > dup_end) continue;
@@ -100,7 +94,24 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
             }
         }
         
-        if (best_aln_score > ref_aln.sw_score) {
+        bool add_alt_better_read = best_aln_score > ref_aln.sw_score;
+        bool add_ref_better_read = best_aln_score < ref_aln.sw_score;
+
+        // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
+        if ((add_alt_better_read || add_ref_better_read) && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
+            dup->sample_info.assigned_to_other_sv_bp1_reads++;
+            if (add_alt_better_read) {
+                dup->sample_info.oar_bp1_reads++;
+                evidence_map->register_oar_support(dup->sample_info, 1, read);
+            }
+            if (add_ref_better_read) {
+                dup->sample_info.orr_bp1_reads++;
+                evidence_map->register_orr_support(dup->sample_info, 1, read);
+            }
+            if (add_alt_better_read) continue;
+        }
+
+        if (add_alt_better_read) {
             for (int i = 0; i < alt_seqs.size(); i++) {
                 if (alt_aln_scores[i] == best_aln_score) {
                     alt_better_reads[i].push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
@@ -108,7 +119,7 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
                     alt_better_read_positions[i].push_back(alt_aln_start_positions[i]);
                 }
             }
-        } else if (best_aln_score < ref_aln.sw_score) {
+        } else if (add_ref_better_read) {
             ref_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
         } else {
             dup->sample_info.alt_ref_equal_reads++;
@@ -227,6 +238,7 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
         for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
             std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
+            evidence_map->record_assigned_read_consistency(r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
                 increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             }
@@ -309,13 +321,6 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         if (get_unclipped_end(read) < dup_start || dup_end < get_unclipped_start(read)) continue;
         if (dup_start < get_unclipped_start(read) && get_unclipped_end(read) < dup_end) continue;
 
-        // if the read is assigned to a different SV, no need to align it, just count and continue
-        if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
-            dup->sample_info.assigned_to_other_sv_bp1_reads++;
-            dup->sample_info.assigned_to_other_sv_bp2_reads++;
-            continue;
-        }
-
         std::string seq;
         
         if (!is_samechr(read) || is_samestr(read)) continue;
@@ -354,16 +359,45 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
 
         // align to ALT
         aligner.Align(seq.c_str(), alt_seq, alt_len, filter_with_pos, &alt_aln, 0);
+        hts_pos_t alt_right_flank_pos = alt_lh_len + dup->ins_seq.length();
+        bool alt_spans_bp1 = alt_aln.ref_begin < alt_lh_len && alt_aln.ref_end >= alt_lh_len;
+        bool alt_spans_bp2 = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;
+        bool add_alt_better_read = alt_aln.sw_score > ref_aln_score;
+        bool add_ref_bp1_better_read = alt_aln.sw_score < ref_aln_score && increase_ref_bp1_better;
+        bool add_ref_bp2_better_read = alt_aln.sw_score < ref_aln_score && increase_ref_bp2_better;
 
-        if (alt_aln.sw_score > ref_aln_score) {
+        // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
+        if ((add_alt_better_read || add_ref_bp1_better_read || add_ref_bp2_better_read) && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
+            dup->sample_info.assigned_to_other_sv_bp1_reads++;
+            dup->sample_info.assigned_to_other_sv_bp2_reads++;
+            if (add_alt_better_read && alt_spans_bp1) {
+                dup->sample_info.oar_bp1_reads++;
+                evidence_map->register_oar_support(dup->sample_info, 1, read);
+            }
+            if (add_alt_better_read && alt_spans_bp2) {
+                dup->sample_info.oar_bp2_reads++;
+                evidence_map->register_oar_support(dup->sample_info, 2, read);
+            }
+            if (add_ref_bp1_better_read) {
+                dup->sample_info.orr_bp1_reads++;
+                evidence_map->register_orr_support(dup->sample_info, 1, read);
+            }
+            if (add_ref_bp2_better_read) {
+                dup->sample_info.orr_bp2_reads++;
+                evidence_map->register_orr_support(dup->sample_info, 2, read);
+            }
+            if (add_alt_better_read) continue;
+        }
+
+        if (add_alt_better_read) {
             alt_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             alt_better_read_positions.push_back(alt_aln.ref_begin);
             alt_better_reads_scores.push_back(alt_aln.sw_score);
         } else if (alt_aln.sw_score < ref_aln_score) {
-            if (increase_ref_bp1_better) {
+            if (add_ref_bp1_better_read) {
                 ref_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }
-            if (increase_ref_bp2_better) {
+            if (add_ref_bp2_better_read) {
                 ref_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }
         } else {
@@ -410,6 +444,7 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
         for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
             std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
+            evidence_map->record_assigned_read_consistency(r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
                 increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             }

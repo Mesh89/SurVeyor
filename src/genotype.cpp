@@ -229,6 +229,32 @@ int get_orc_exact_count(const std::unordered_map<std::string, sv_t::orc_read_inf
     return count;
 }
 
+void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const std::string& prefix, int bp_number, bool computed, int reads, const std::unordered_map<std::string, sv_t::orc_read_info_t>& consistent_reads) {
+    const std::string tag = prefix + std::to_string(bp_number);
+    const std::string consistent_tag = tag + "C";
+    const std::string consistent_hq_tag = tag + "CHQ";
+    const std::string exact_tag = tag + "E";
+
+    if (!computed) {
+        bcf_update_format_int32(out_hdr, record, tag.c_str(), NULL, 0);
+        bcf_update_format_int32(out_hdr, record, consistent_tag.c_str(), NULL, 0);
+        bcf_update_format_int32(out_hdr, record, consistent_hq_tag.c_str(), NULL, 0);
+        bcf_update_format_int32(out_hdr, record, exact_tag.c_str(), NULL, 0);
+        return;
+    }
+
+    bcf_update_format_int32(out_hdr, record, tag.c_str(), &reads, 1);
+
+    int consistent = get_orc_count(consistent_reads);
+    bcf_update_format_int32(out_hdr, record, consistent_tag.c_str(), &consistent, 1);
+
+    int consistent_hq = get_orc_hq_count(consistent_reads);
+    bcf_update_format_int32(out_hdr, record, consistent_hq_tag.c_str(), &consistent_hq, 1);
+
+    int exact = get_orc_exact_count(consistent_reads);
+    bcf_update_format_int32(out_hdr, record, exact_tag.c_str(), &exact, 1);
+}
+
 void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_seq, hts_pos_t chr_len, int sample_idx) {
     
     bcf_translate(out_hdr, in_hdr, sv->vcf_entry);
@@ -341,36 +367,14 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     int erhq = sv->sample_info.alt_ref_equal_reads_highmq;
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "ERHQ", &erhq, 1);
 
-    int or1 = sv->sample_info.assigned_to_other_sv_bp1_reads;
-    bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1", &or1, 1);
-    
-    int or1c = get_orc_count(sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
-    bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1C", &or1c, 1);
-    
-	int or1chq = get_orc_hq_count(sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
-	bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1CHQ", &or1chq, 1);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 1, true, sv->sample_info.oar_bp1_reads, sv->sample_info.oar_bp1_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 1, true, sv->sample_info.orr_bp1_reads, sv->sample_info.orr_bp1_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OR", 1, true, sv->sample_info.assigned_to_other_sv_bp1_reads, sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
 
-	int or1e = get_orc_exact_count(sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
-	bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR1E", &or1e, 1);
-
-    if (sv->sample_info.ref_bp2.reads_info.computed) { // OR2 is only relevant for SVs with RR2
-        int or2 = sv->sample_info.assigned_to_other_sv_bp2_reads;
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2", &or2, 1);
-    
-        int or2c = get_orc_count(sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2C", &or2c, 1);
-    
-        int or2chq = get_orc_hq_count(sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2CHQ", &or2chq, 1);
-
-        int or2e = get_orc_exact_count(sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2E", &or2e, 1);
-    } else {
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2C", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2CHQ", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "OR2E", NULL, 0);
-    }
+    const bool bp2_computed = sv->sample_info.ref_bp2.reads_info.computed;
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 2, bp2_computed, sv->sample_info.oar_bp2_reads, sv->sample_info.oar_bp2_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 2, bp2_computed, sv->sample_info.orr_bp2_reads, sv->sample_info.orr_bp2_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OR", 2, bp2_computed, sv->sample_info.assigned_to_other_sv_bp2_reads, sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
 
     int td = sv->sample_info.too_deep;
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "TD", &td, 1);

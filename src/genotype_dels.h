@@ -175,11 +175,28 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
             }
         }
 
-        // if the read is assigned to a different SV, no need to align it, just count and continue
+        // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
         if (alt_or_ref_read && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, del)) {
             del->sample_info.assigned_to_other_sv_bp1_reads++;
             del->sample_info.assigned_to_other_sv_bp2_reads++;
-            continue;
+
+            if (add_alt_better_read && alt_spans_left_bp) {
+                del->sample_info.oar_bp1_reads++;
+                evidence_map->register_oar_support(del->sample_info, 1, read);
+            }
+            if (add_alt_better_read && alt_spans_right_bp) {
+                del->sample_info.oar_bp2_reads++;
+                evidence_map->register_oar_support(del->sample_info, 2, read);
+            }
+            if (add_ref_bp1_better_seq) {
+                del->sample_info.orr_bp1_reads++;
+                evidence_map->register_orr_support(del->sample_info, 1, read);
+            }
+            if (add_ref_bp2_better_seq) {
+                del->sample_info.orr_bp2_reads++;
+                evidence_map->register_orr_support(del->sample_info, 2, read);
+            }
+            if (add_alt_better_read) continue;
         }
 
         if (add_alt_better_read) {
@@ -221,6 +238,7 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
     if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
         for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
             std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
+            evidence_map->record_assigned_read_consistency(r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
                 increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
             }
