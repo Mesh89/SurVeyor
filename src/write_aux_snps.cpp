@@ -18,6 +18,14 @@
 const hts_pos_t MIN_SV_SIZE = 50;
 std::ofstream merge_identical_log;
 config_t config;
+using par_tree_t = DynamicIntervalTree<hts_pos_t, bool>;
+std::unordered_map<std::string, std::shared_ptr<par_tree_t>> par_regions;
+
+bool is_haploid_region(const std::string& chr, hts_pos_t start, hts_pos_t end) {
+    auto par_tree = par_regions.find(chr);
+    return config.haploid_contigs.count(chr) &&
+        (par_tree == par_regions.end() || par_tree->second->query(start, end).empty());
+}
 
 void index_vcf(const std::string& vcf_fname) {
     if (tbx_index_build(vcf_fname.c_str(), 0, &tbx_conf_vcf) != 0) {
@@ -519,7 +527,6 @@ void make_multiallelic_new(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants)
 
     for (auto& chr_variants : variants_by_chr) {
         const std::string& chr = chr_variants.first;
-        bool haploid = config.haploid_contigs.count(chr);
         std::vector<std::pair<bcf1_t*, float>>& variants = chr_variants.second;
 
         std::stable_sort(variants.begin(), variants.end(),
@@ -535,6 +542,7 @@ void make_multiallelic_new(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants)
 
             hts_pos_t start = record->pos;
             hts_pos_t end = get_sv_end(hdr, record);
+            bool haploid = is_haploid_region(chr, start, end);
 
             if (seg_tree.any_ge(start, end, haploid ? 1 : 2)) {
                 set_gt(hdr, record, 0, 0);
@@ -560,6 +568,16 @@ int main(int argc, char* argv[]) {
     std::string reference_fname = argv[4];
     std::string workdir = argv[5];
     config.parse(workdir + "/config.txt");
+    std::ifstream par_bed(config.par_regions_bed);
+    for (std::string line; std::getline(par_bed, line);) {
+        std::istringstream fields(line);
+        std::string chr;
+        hts_pos_t start, end;
+        if (fields >> chr >> start >> end && start < end) {
+            if (!par_regions.count(chr)) par_regions[chr] = std::make_shared<par_tree_t>();
+            par_regions[chr]->insert(start, end - 1, true);
+        }
+    }
     std::string out_smvars_vcf_fname = out_smvars_prefix + ".vcf.gz";
     std::string out_stvars_vcf_fname = out_stvars_prefix + ".vcf.gz";
     std::string merge_identical_log_fname = out_smvars_prefix + ".merge-identical.log";
@@ -679,7 +697,8 @@ int main(int argc, char* argv[]) {
     remove_lower_priority_duplicates(in_vcf_hdr, vcf_records, aux_records);
 
     for (bcf1_t* record : vcf_records) {
-        if (config.haploid_contigs.count(bcf_seqname_safe(in_vcf_hdr, record)) && count_alt_alleles(in_vcf_hdr, record) > 0) {
+        std::string chr = bcf_seqname_safe(in_vcf_hdr, record);
+        if (is_haploid_region(chr, record->pos, get_sv_end(in_vcf_hdr, record)) && count_alt_alleles(in_vcf_hdr, record) > 0) {
             set_gt(in_vcf_hdr, record, 1, 1);
         }
     }

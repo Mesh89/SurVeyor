@@ -28,10 +28,8 @@ call_genotype_shared_options_parser.add_argument('--min-clip-len', type=int, def
 call_genotype_shared_options_parser.add_argument('--sampling-regions', help='File in BED format containing regions to be used to estimate statistics such as depth.')
 call_genotype_shared_options_parser.add_argument('--min-stable-mapq', type=int, default=20, help='Minimum MAPQ for a stable read.')
 call_genotype_shared_options_parser.add_argument('--high-confidence-mapq', type=int, default=60, help='MAPQ threshold above which a read is considered high-confidence.')
-call_genotype_shared_options_parser.add_argument('--skip-bam-ref-validation', action='store_true',
-                        help='Skip BAM/reference compatibility checks. Use this at your own risk.')
-call_genotype_shared_options_parser.add_argument('--force-workdir', action='store_true',
-                        help='Allow execution in a non-empty workdir. Use this with caution.')
+call_genotype_shared_options_parser.add_argument('--skip-bam-ref-validation', action='store_true', help='Skip BAM/reference compatibility checks. Use this at your own risk.')
+call_genotype_shared_options_parser.add_argument('--force-workdir', action='store_true', help='Allow execution in a non-empty workdir. Use this with caution.')
 call_genotype_shared_options_parser.add_argument('--per-contig-stats', action='store_true',
                         help='Depth statistics are computed separately for each contig. Useful when one or more of the target contigs are expected to have '
                         'dramatically different depth than others. Otherwise, it is not recommended to use this option.')
@@ -40,8 +38,8 @@ call_genotype_shared_options_parser.add_argument('--min-diff-hsr', type=int, def
                         (considered as number of insertions, deletions and mismatches) for a read to be considered a hidden split read.')
 call_genotype_shared_options_parser.add_argument('--tr-bed', help='BED file with tandem repetitive regions. If provided, it will be used for a more aggrestive duplicate removal.')
 call_genotype_shared_options_parser.add_argument('--haploid_contigs', '--haploid-contigs', default='',
-                        help='Comma-separated contigs to treat as haploid (for example, chrX,chrY). '
-                             'Retained positive variants on these contigs are written as 1/1 and may not overlap.')
+                        help='Comma-separated contigs to treat as haploid (for example, chrX,chrY). Retained positive variants on these contigs are written as 1/1 and may not overlap.')
+call_genotype_shared_options_parser.add_argument('--par_regions_bed', '--par-regions-bed', help='BED file containing pseudoautosomal regions to treat as diploid.')
 
 call_parser = subparsers.add_parser('call', parents=[common_parser, call_genotype_shared_options_parser], help='Call SVs denovo.')
 call_parser.add_argument('bam_file', help='Input bam file.')
@@ -49,10 +47,8 @@ call_parser.add_argument('workdir', help='Working directory for Surveyor to use.
 call_parser.add_argument('reference', help='Reference genome in FASTA format.')
 call_parser.add_argument('--generate-training-data', action='store_true', help='Generate data needed to train a genotyping ML model.')
 call_parser.add_argument('--ml-model', help='Path to the ML model to be used for filtering and genotyping.')
-call_parser.add_argument('--samplename', default='', help='Name of the sample to be used in the VCF output.'
-                                                         'If not provided, the basename of the bam/cram file will be used, up until the first \'.\'')
-call_parser.add_argument('--max-trans-size', type=int, default=10000, help='Maximum size of the transpositions which '
-                                                                          'SurVeyor will predict when only one side is available.')
+call_parser.add_argument('--samplename', default='', help='Name of the sample to be used in the VCF output. If not provided, the basename of the bam/cram file will be used, up until the first \'.\'')
+call_parser.add_argument('--max-trans-size', type=int, default=10000, help='Maximum size of the transpositions which SurVeyor will predict when only one side is available.')
 
 genotype_parser = subparsers.add_parser('genotype', parents=[common_parser, call_genotype_shared_options_parser], help='Genotype SVs.')
 genotype_parser.add_argument('in_vcf_file', help='Input VCF file.')
@@ -62,8 +58,7 @@ genotype_parser.add_argument('reference', help='Reference genome in FASTA format
 genotype_parser.add_argument('--generate-training-data', action='store_true', help='Generate data needed to train a genotyping ML model.')
 genotype_parser.add_argument('--ml-model', help='Path to the ML model to be used for genotyping.')
 genotype_parser.add_argument('--samplename', default='', help='Name of the sample to be used in the VCF output.'
-                                                         'If not provided, the basename of the bam/cram file will be used,'
-                                                         'up until the first \'.\'')
+                                                         'If not provided, the basename of the bam/cram file will be used, up until the first \'.\'')
 
 generate_training_data_parser = subparsers.add_parser('generate-training-data', parents=[common_parser], help='Generate training data for ML model starting from the workdir of a call run.')
 generate_training_data_parser.add_argument('benchmark_vcf', help='Benchmark VCF file used to assign labels to the training data.')
@@ -333,6 +328,8 @@ def reads_categorizer(workdir):
         config_file.write("high_confidence_mapq %d\n" % cmd_args.high_confidence_mapq)
         if cmd_args.haploid_contigs:
             config_file.write("haploid_contigs %s\n" % cmd_args.haploid_contigs)
+        if cmd_args.par_regions_bed:
+            config_file.write("par_regions_bed %s\n" % cmd_args.par_regions_bed)
 
     mkdir(workdir + "/workspace")
     mkdir_clean(workdir + "/workspace/sr")
