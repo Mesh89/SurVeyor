@@ -1,4 +1,4 @@
-import sys, os, argparse, hashlib, pysam, timeit, shutil
+import sys, os, argparse, hashlib, pysam, timeit, shutil, shlex
 from run_classifier import Classifier
 
 VERSION = "0.13"
@@ -182,8 +182,18 @@ def parse_bed_regions(bed_fname):
              (bed_fname, exc))
     return regions
 
+def copy_vcf(in_vcf_fname, out_vcf_fname, extra_header_lines=()):
+    with pysam.VariantFile(in_vcf_fname) as in_vcf:
+        header = in_vcf.header.copy()
+        for header_line in extra_header_lines:
+            header.add_line(header_line)
+
+        with pysam.VariantFile(out_vcf_fname, 'wz', header=header) as out_vcf:
+            for record in in_vcf:
+                out_vcf.write(record)
+
 # This function assumes that the input VCF is sorted by coordinate
-def restrict_vcf_to_regions_sweep(in_vcf_fname, out_vcf_fname, regions):
+def restrict_vcf_to_regions_sweep(in_vcf_fname, out_vcf_fname, regions, extra_header_lines=()):
     regions_by_contig = {}
     for _, contig_name, start, end in regions:
         regions_by_contig.setdefault(contig_name, []).append((start, end))
@@ -198,27 +208,31 @@ def restrict_vcf_to_regions_sweep(in_vcf_fname, out_vcf_fname, regions):
                 merged_regions.append((start, end))
         regions_by_contig[contig_name] = merged_regions
 
-    with pysam.VariantFile(in_vcf_fname) as in_vcf, \
-         pysam.VariantFile(out_vcf_fname, 'wz', header=in_vcf.header) as out_vcf:
-        current_contig = None
-        current_regions = []
-        current_region_idx = 0
+    with pysam.VariantFile(in_vcf_fname) as in_vcf:
+        header = in_vcf.header.copy()
+        for header_line in extra_header_lines:
+            header.add_line(header_line)
 
-        for record in in_vcf:
-            if record.contig != current_contig:
-                current_contig = record.contig
-                current_regions = regions_by_contig.get(current_contig, [])
-                current_region_idx = 0
+        with pysam.VariantFile(out_vcf_fname, 'wz', header=header) as out_vcf:
+            current_contig = None
+            current_regions = []
+            current_region_idx = 0
 
-            while current_region_idx < len(current_regions) and current_regions[current_region_idx][1] <= record.start:
-                current_region_idx += 1
+            for record in in_vcf:
+                if record.contig != current_contig:
+                    current_contig = record.contig
+                    current_regions = regions_by_contig.get(current_contig, [])
+                    current_region_idx = 0
 
-            if current_region_idx == len(current_regions):
-                continue
+                while current_region_idx < len(current_regions) and current_regions[current_region_idx][1] <= record.start:
+                    current_region_idx += 1
 
-            region_start, region_end = current_regions[current_region_idx]
-            if region_start <= record.start and record.stop <= region_end:
-                out_vcf.write(record)
+                if current_region_idx == len(current_regions):
+                    continue
+
+                region_start, region_end = current_regions[current_region_idx]
+                if region_start <= record.start and record.stop <= region_end:
+                    out_vcf.write(record)
 
 def validate_bam_reference_compatibility(bam_fname, reference_fname, sampling_regions_fname=None):
     skip_hint = " You can bypass this check with --skip-bam-ref-validation. This is generally discouraged. Only use it if you are sure this will not cause problems downstream."
@@ -501,7 +515,7 @@ if cmd_args.command == 'call':
             print("Error: --two-pass requires --ml-model to be provided.", flush=True)
             exit(1)
 
-    call_candidate_variants(cmd_args.bam_file, cmd_args.workdir, cmd_args.reference, sample_name)
+    # call_candidate_variants(cmd_args.bam_file, cmd_args.workdir, cmd_args.reference, sample_name)
 
     n_iters = 1
     genotype_variants(cmd_args.bam_file, cmd_args.workdir, cmd_args.reference, sample_name, cmd_args.ml_model, n_iters, cmd_args.generate_training_data)
@@ -509,8 +523,8 @@ if cmd_args.command == 'call':
     if not cmd_args.ml_model:
         exit(0)
 
-    deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.smvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.smvars.deduped.vcf.gz")
-    deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.stvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.stvars.deduped.vcf.gz")
+    # deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.smvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.smvars.deduped.vcf.gz")
+    # deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.stvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.stvars.deduped.vcf.gz")
 
 elif cmd_args.command == 'genotype':
 
@@ -568,12 +582,13 @@ elif cmd_args.command == 'generate-training-data':
     mkdir(cmd_args.outdir)
     sample_training_data_vcf = os.path.join(cmd_args.outdir, cmd_args.samplename + ".vcf.gz")
     sample_ins_to_dup_training_data_vcf = os.path.join(cmd_args.outdir, cmd_args.samplename + ".INS_TO_DUP.vcf.gz")
+    command_header_lines = ["##SurVeyorCommand=" + shlex.join(sys.argv)]
     if restrict_to_bed_regions:
-        restrict_vcf_to_regions_sweep(source_training_data_vcf, sample_training_data_vcf, restrict_to_bed_regions)
-        restrict_vcf_to_regions_sweep(source_ins_to_dup_training_data_vcf, sample_ins_to_dup_training_data_vcf, restrict_to_bed_regions)
+        restrict_vcf_to_regions_sweep(source_training_data_vcf, sample_training_data_vcf, restrict_to_bed_regions, command_header_lines)
+        restrict_vcf_to_regions_sweep(source_ins_to_dup_training_data_vcf, sample_ins_to_dup_training_data_vcf, restrict_to_bed_regions, command_header_lines)
     else:
-        shutil.copyfile(source_training_data_vcf, sample_training_data_vcf)
-        shutil.copyfile(source_ins_to_dup_training_data_vcf, sample_ins_to_dup_training_data_vcf)
+        copy_vcf(source_training_data_vcf, sample_training_data_vcf, command_header_lines)
+        copy_vcf(source_ins_to_dup_training_data_vcf, sample_ins_to_dup_training_data_vcf, command_header_lines)
     shutil.copyfile(cmd_args.workdir + "/stats.txt", os.path.join(cmd_args.outdir, cmd_args.samplename + ".stats"))
 
     # if training-data.reassigned.vcf.gz and training-data.reassigned.INS_TO_DUP.vcf.gz are present,

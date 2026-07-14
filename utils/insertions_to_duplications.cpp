@@ -1,3 +1,4 @@
+#include <fstream>
 #include <string>
 #include <unordered_set>
 
@@ -17,8 +18,12 @@ int main(int argc, char* argv[]) {
 
     std::string in_vcf_fname = argv[1];
 	std::string out_vcf_fname = argv[2];
-	std::string reference_fname = argv[3];
+    std::string reference_fname = argv[3];
     std::string workdir = argv[4];
+
+    std::ifstream full_cmd_fin(workdir + "/cmd.txt");
+    std::string full_cmd_str;
+    std::getline(full_cmd_fin, full_cmd_str);
 
     chr_seqs.read_fasta_into_map(reference_fname);
 
@@ -109,7 +114,7 @@ int main(int argc, char* argv[]) {
         if (chr_a != chr_b) return chr_a < chr_b;
         return sv_output_order(a, b);
     });
-    bcf_hdr_t* out_hdr = generate_vcf_header(chr_seqs, "", config, "");
+    bcf_hdr_t* out_hdr = generate_vcf_header(chr_seqs, "", config, full_cmd_str);
     bcf_hdr_remove(out_hdr, BCF_HL_INFO, "INS_TO_DUP");
     int len = 0;
     const char* ins_to_dup_tag = "##INFO=<ID=INS_TO_DUP,Number=0,Type=Flag,Description=\"Originally an insertion.\">";
