@@ -826,7 +826,7 @@ int choose_best_allele_idx_for_hp_len(int allele_len, std::vector<hp_read_info_t
 void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_hp_range, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len,
     stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& permissive_aligner,
     std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, evidence_logger_t* evidence_logger,
-    bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map) {
+    bool reassign_evidence, evidence_map_t* evidence_map) {
 
     if (hp_indels.empty()) return;
     for (sv_t* hp_indel : hp_indels) {
@@ -1061,7 +1061,6 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     // Reads assigned outside this HP group are classified against each candidate's ALT and REF alleles.
     for (const hp_read_info_t& hp_read_info : hp_read_infos_assigned_outside_group) {
         for (int i = 0; i < hp_indels.size(); i++) {
-            hp_indels[i]->sample_info.assigned_to_other_sv_bp1_reads++;
             if (hp_read_supports_alt_allele(hp_read_info, i, alt_alleles, alt_allele_lens, hp_run_lens, aligner)) {
                 hp_indels[i]->sample_info.oar_bp1_reads++;
                 evidence_map->register_oar_support(hp_indels[i]->sample_info, 1, hp_read_info.read);
@@ -1150,7 +1149,6 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             for (const hp_read_info_t& hp_read_info : alt_assigned_hp_read_infos[assigned_allele_idx]) {
                 for (int target_allele_idx = 0; target_allele_idx < hp_indels.size(); target_allele_idx++) {
                     if (target_allele_idx == assigned_allele_idx || !evidence_map->is_read_assigned_to_different_sv(hp_read_info.read, hp_indels[target_allele_idx])) continue;
-                    hp_indels[target_allele_idx]->sample_info.assigned_to_other_sv_bp1_reads++;
                     if (hp_read_supports_alt_allele(hp_read_info, target_allele_idx, alt_alleles, alt_allele_lens, hp_run_lens, aligner)) {
                         hp_indels[target_allele_idx]->sample_info.oar_bp1_reads++;
                         evidence_map->register_oar_support(hp_indels[target_allele_idx]->sample_info, 1, hp_read_info.read);
@@ -1165,13 +1163,10 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     }
 
     for (int i = 0; i < hp_indels.size(); i++) {
-        if (reassign_evidence) { // set OR*C reads for other variants
+        if (reassign_evidence) {
             for (int j = 0; j < alt_good_reads[i].size(); j++) {
                 const bp_support_read_t& read = alt_good_reads[i][j];
                 evidence_map->record_assigned_read_consistency(read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
-                for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(read)) {
-                    increase_orc(sv_map, ov.first, ov.second, read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
-                }
             }
         }
 
@@ -1203,8 +1198,7 @@ void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int c
     stats_t& stats, config_t& config, contig_map_t& contig_map, bam_pool_t* bam_pool,
     std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr, 
     std::vector<double>* global_crossing_isize_dist,
-    evidence_logger_t* evidence_logger, bool reassign_evidence, evidence_map_t* evidence_map,
-    std::unordered_map<std::string, std::shared_ptr<sv_t>>* sv_map) {
+    evidence_logger_t* evidence_logger, bool reassign_evidence, evidence_map_t* evidence_map) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
     StripedSmithWaterman::Aligner permissive_aligner(2, 2, 6, 1, false);
@@ -1225,7 +1219,7 @@ void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int c
         std::vector<sv_t*>& hp_indels_in_range = kv.second;
         hts_pair_pos_t ref_hp_range = find_ref_hp_range_for_indel(hp_indels_in_range[0], contig_seq, contig_len);
         genotype_hp_indels_group(hp_indels_in_range, ref_hp_range, bam_file, contig_seq, contig_len, stats, config, aligner, permissive_aligner,
-            *mateseqs_w_mapq_chr, evidence_logger, reassign_evidence, evidence_map, *sv_map);
+            *mateseqs_w_mapq_chr, evidence_logger, reassign_evidence, evidence_map);
     }
     depth_filter_indel(contig_name, hp_indels, bam_file, config, stats);
     calculate_confidence_interval_size(contig_name, *global_crossing_isize_dist, hp_indels, bam_file, config, stats);

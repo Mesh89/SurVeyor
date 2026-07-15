@@ -209,11 +209,11 @@ bool genotype_when_reassigning_evidence(const sv_t* sv) {
     return config.training_mode || sv->sample_info.epr >= MIN_EPR;
 }
 
-int get_orc_count(const std::unordered_map<std::string, sv_t::orc_read_info_t>& reads) {
+int get_other_read_count(const std::unordered_map<std::string, sv_t::other_read_info_t>& reads) {
     return static_cast<int>(reads.size());
 }
 
-int get_orc_hq_count(const std::unordered_map<std::string, sv_t::orc_read_info_t>& reads) {
+int get_other_read_hq_count(const std::unordered_map<std::string, sv_t::other_read_info_t>& reads) {
     int count = 0;
     for (const auto& kv : reads) {
         if (kv.second.hq) count++;
@@ -221,7 +221,7 @@ int get_orc_hq_count(const std::unordered_map<std::string, sv_t::orc_read_info_t
     return count;
 }
 
-int get_orc_exact_count(const std::unordered_map<std::string, sv_t::orc_read_info_t>& reads) {
+int get_other_read_exact_count(const std::unordered_map<std::string, sv_t::other_read_info_t>& reads) {
     int count = 0;
     for (const auto& kv : reads) {
         if (kv.second.exact) count++;
@@ -229,7 +229,7 @@ int get_orc_exact_count(const std::unordered_map<std::string, sv_t::orc_read_inf
     return count;
 }
 
-void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const std::string& prefix, int bp_number, bool computed, int reads, const std::unordered_map<std::string, sv_t::orc_read_info_t>& consistent_reads) {
+void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const std::string& prefix, int bp_number, bool computed, int reads, const std::unordered_map<std::string, sv_t::other_read_info_t>& consistent_reads) {
     const std::string tag = prefix + std::to_string(bp_number);
     const std::string consistent_tag = tag + "C";
     const std::string consistent_hq_tag = tag + "CHQ";
@@ -245,13 +245,13 @@ void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const 
 
     bcf_update_format_int32(out_hdr, record, tag.c_str(), &reads, 1);
 
-    int consistent = get_orc_count(consistent_reads);
+    int consistent = get_other_read_count(consistent_reads);
     bcf_update_format_int32(out_hdr, record, consistent_tag.c_str(), &consistent, 1);
 
-    int consistent_hq = get_orc_hq_count(consistent_reads);
+    int consistent_hq = get_other_read_hq_count(consistent_reads);
     bcf_update_format_int32(out_hdr, record, consistent_hq_tag.c_str(), &consistent_hq, 1);
 
-    int exact = get_orc_exact_count(consistent_reads);
+    int exact = get_other_read_exact_count(consistent_reads);
     bcf_update_format_int32(out_hdr, record, exact_tag.c_str(), &exact, 1);
 }
 
@@ -369,12 +369,10 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
 
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 1, true, sv->sample_info.oar_bp1_reads, sv->sample_info.oar_bp1_consistent_reads);
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 1, true, sv->sample_info.orr_bp1_reads, sv->sample_info.orr_bp1_consistent_reads);
-    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OR", 1, true, sv->sample_info.assigned_to_other_sv_bp1_reads, sv->sample_info.assigned_to_other_sv_bp1_consistent_reads);
 
     const bool bp2_computed = sv->sample_info.ref_bp2.reads_info.computed;
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 2, bp2_computed, sv->sample_info.oar_bp2_reads, sv->sample_info.oar_bp2_consistent_reads);
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 2, bp2_computed, sv->sample_info.orr_bp2_reads, sv->sample_info.orr_bp2_consistent_reads);
-    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OR", 2, bp2_computed, sv->sample_info.assigned_to_other_sv_bp2_reads, sv->sample_info.assigned_to_other_sv_bp2_consistent_reads);
 
     int td = sv->sample_info.too_deep;
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "TD", &td, 1);
@@ -1009,15 +1007,12 @@ int main(int argc, char* argv[]) {
     std::unordered_map<std::string, std::vector<std::shared_ptr<duplication_t>>> dups_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<insertion_t>>> inss_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<inversion_t>>> invs_by_chr;
-    std::unordered_map<std::string, std::shared_ptr<sv_t>> sv_map;
     while (bcf_read(in_vcf_file, in_vcf_header, vcf_record) == 0) {
         std::shared_ptr<sv_t> sv = bcf_to_sv(in_vcf_header, vcf_record);
         if (sv == nullptr) {
             std::cout << "Ignoring SV of unsupported type: " << vcf_record->d.id << std::endl; 
             continue;
         }
-        sv_map[sv->id] = sv;
-
         if (sv->start > sv->end) {
             std::cout << "Discarding SV with invalid coordinates: " << sv->id << std::endl;
             continue;
@@ -1072,8 +1067,7 @@ int main(int argc, char* argv[]) {
                 std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool,
                         &mateseqs_w_mapq[contig_map.get_id(contig_name)], 
-                        &global_crossing_isize_dist, evidence_logger, reassign_evidence, evidence_map,
-                        &sv_map);
+                        &global_crossing_isize_dist, evidence_logger, reassign_evidence, evidence_map);
                 block_hps.clear();
             }
         }
@@ -1088,7 +1082,7 @@ int main(int argc, char* argv[]) {
                 std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
                         std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
-                        evidence_logger, reassign_evidence, evidence_map, &sv_map);
+                        evidence_logger, reassign_evidence, evidence_map);
                 futures.push_back(std::move(future));
                 block_dels.clear();
             }
@@ -1104,7 +1098,7 @@ int main(int argc, char* argv[]) {
                 std::future<void> future = thread_pool.push(genotype_dups, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_dups, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
                         std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
-                        evidence_logger, reassign_evidence, evidence_map, &sv_map);
+                        evidence_logger, reassign_evidence, evidence_map);
                 futures.push_back(std::move(future));
                 block_dups.clear();
             }
@@ -1120,7 +1114,7 @@ int main(int argc, char* argv[]) {
                 std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
                         std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], &global_crossing_isize_dist, evidence_logger,
-                        reassign_evidence, evidence_map, &sv_map);
+                        reassign_evidence, evidence_map);
                 futures.push_back(std::move(future));
                 block_inss.clear();
             }

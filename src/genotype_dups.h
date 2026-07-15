@@ -8,7 +8,7 @@
 void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_logger_t* evidence_logger,
-                bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map) {
+                bool reassign_evidence, evidence_map_t* evidence_map) {
 
 	hts_pos_t dup_start = dup->start, dup_end = dup->end;
     
@@ -99,7 +99,6 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
 
         // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
         if ((add_alt_better_read || add_ref_better_read) && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
-            dup->sample_info.assigned_to_other_sv_bp1_reads++;
             if (add_alt_better_read) {
                 dup->sample_info.oar_bp1_reads++;
                 evidence_map->register_oar_support(dup->sample_info, 1, read);
@@ -235,13 +234,10 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
 
     alt_better_reads_consistent = find_seqs_consistent_with_ref_seq(alt_consensus_seq, alt_better_reads_consistent, alt_avg_score, alt_stddev_score, alt_is_exact_read);
 
-    if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
+    if (reassign_evidence) {
         for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
             std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
             evidence_map->record_assigned_read_consistency(r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
-            for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
-                increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
-            }
         }
     }
 
@@ -260,7 +256,7 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
 void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_logger_t* evidence_logger,
-                bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map) {
+                bool reassign_evidence, evidence_map_t* evidence_map) {
 
     hts_pos_t dup_start = dup->start, dup_end = dup->end;
 
@@ -368,8 +364,6 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
 
         // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
         if ((add_alt_better_read || add_ref_bp1_better_read || add_ref_bp2_better_read) && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) {
-            dup->sample_info.assigned_to_other_sv_bp1_reads++;
-            dup->sample_info.assigned_to_other_sv_bp2_reads++;
             if (add_alt_better_read && alt_spans_bp1) {
                 dup->sample_info.oar_bp1_reads++;
                 evidence_map->register_oar_support(dup->sample_info, 1, read);
@@ -441,13 +435,10 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_better_reads_consistent, alt_better_reads, alt_better_read_positions);
     dup->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
 
-    if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
+    if (reassign_evidence) {
         for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
             std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
             evidence_map->record_assigned_read_consistency(r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
-            for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
-                increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
-            }
         }
     }
 
@@ -546,7 +537,7 @@ void genotype_dups(int id, std::string contig_name, char* contig_seq, hts_pos_t 
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
     bam_pool_t* bam_pool, std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr,
     std::string workdir, std::vector<double>* global_crossing_isize_dist, evidence_logger_t* evidence_logger,
-    bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::shared_ptr<sv_t>>* sv_map) {
+    bool reassign_evidence, evidence_map_t* evidence_map) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 
@@ -566,10 +557,10 @@ void genotype_dups(int id, std::string contig_name, char* contig_seq, hts_pos_t 
     std::vector<sv_t*> small_dups;
     for (duplication_t* dup : dups) {
         if (dup->svlen() <= stats.read_len-2*config.min_clip_len) {
-			genotype_small_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_logger, reassign_evidence, evidence_map, *sv_map);
+			genotype_small_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_logger, reassign_evidence, evidence_map);
             small_dups.push_back(dup);
 		} else {
-			genotype_large_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_logger, reassign_evidence, evidence_map, *sv_map);
+			genotype_large_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_logger, reassign_evidence, evidence_map);
 		}
     }
 

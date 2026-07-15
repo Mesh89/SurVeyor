@@ -411,44 +411,6 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* orr2e_tag = "##FORMAT=<ID=ORR2E,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the REF allele of this SV that also support another variant and are exact, consistent reads for that variant.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, orr2e_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR1");
-	const char* or1_tag = "##FORMAT=<ID=OR1,Number=1,Type=Integer,Description=\"Number of reads supporting the breakpoint 1 of the ALT allele of this SV, "
-			"yet better support the ALT allele of a different SV.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or1_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR2");
-	const char* or2_tag = "##FORMAT=<ID=OR2,Number=1,Type=Integer,Description=\"Number of reads supporting the breakpoint 2 of the ALT allele of this SV, "
-			"yet better support the ALT allele of a different SV.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or2_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR1C");
-	const char* or1c_tag = "##FORMAT=<ID=OR1C,Number=1,Type=Integer,Description=\"Number of reads supporting the breakpoint 1 of the ALT allele of this SV, "
-			"yet better support the ALT allele of a different SV, and are consistent reads.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or1c_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR2C");
-	const char* or2c_tag = "##FORMAT=<ID=OR2C,Number=1,Type=Integer,Description=\"Number of reads supporting the breakpoint 2 of the ALT allele of this SV, "
-			"yet better support the ALT allele of a different SV, and are consistent reads.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or2c_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR1CHQ");
-	const char* or1chq_tag = "##FORMAT=<ID=OR1CHQ,Number=1,Type=Integer,Description=\"Number of high-quality reads supporting the breakpoint 1 of the ALT allele of this SV, "
-			"yet better support the ALT allele of a different SV, and are consistent reads.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or1chq_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR1E");
-	const char* or1e_tag = "##FORMAT=<ID=OR1E,Number=1,Type=Integer,Description=\"Number of exact consistent reads supporting breakpoint 1 of a different SV that competes with this SV.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or1e_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR2CHQ");
-	const char* or2chq_tag = "##FORMAT=<ID=OR2CHQ,Number=1,Type=Integer,Description=\"Number of high-quality reads supporting the breakpoint 2 of the ALT allele of this SV, "
-			"yet better support the ALT allele of a different SV, and are consistent reads.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or2chq_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "OR2E");
-	const char* or2e_tag = "##FORMAT=<ID=OR2E,Number=1,Type=Integer,Description=\"Number of exact consistent reads supporting breakpoint 2 of a different SV that competes with this SV.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, or2e_tag, &len));
-
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "TD");
 	const char* nc_tag = "##FORMAT=<ID=TD,Number=1,Type=Integer,Description=\"The variant region is too deep to be genotyped reliably.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, nc_tag, &len));

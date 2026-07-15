@@ -14,8 +14,7 @@
 void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner,
-                evidence_logger_t* evidence_logger, bool reassign_evidence, evidence_map_t* evidence_map, 
-                std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map) {
+                evidence_logger_t* evidence_logger, bool reassign_evidence, evidence_map_t* evidence_map) {
     int del_start = del->start, del_end = del->end;
 
     hts_pos_t extend = stats.read_len-1;
@@ -177,9 +176,6 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
 
         // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
         if (alt_or_ref_read && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, del)) {
-            del->sample_info.assigned_to_other_sv_bp1_reads++;
-            del->sample_info.assigned_to_other_sv_bp2_reads++;
-
             if (add_alt_better_read && alt_spans_left_bp) {
                 del->sample_info.oar_bp1_reads++;
                 evidence_map->register_oar_support(del->sample_info, 1, read);
@@ -235,13 +231,10 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_better_reads_consistent, alt_better_reads, alt_better_read_positions);
     del->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
 
-    if (reassign_evidence) { // increment ORC counters for other SVs that lost support from these reads
+    if (reassign_evidence) {
         for (int i = 0; i < alt_better_reads_consistent.size(); i++) {
             std::shared_ptr<bam1_t>& r = alt_better_reads_consistent[i];
             evidence_map->record_assigned_read_consistency(r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
-            for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r.get())) {
-                increase_orc(sv_map, ov.first, ov.second, r.get(), get_mq(r.get()) >= config.high_confidence_mapq, alt_is_exact_read[i]);
-            }
         }
     }
 
@@ -353,7 +346,7 @@ void genotype_dels(int id, std::string contig_name, char* contig_seq, int contig
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
     bam_pool_t* bam_pool, std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr,
     std::string workdir, std::vector<double>* global_crossing_isize_dist, evidence_logger_t* evidence_logger,
-    bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::shared_ptr<sv_t>>* sv_map) {
+    bool reassign_evidence, evidence_map_t* evidence_map) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 
@@ -374,7 +367,7 @@ void genotype_dels(int id, std::string contig_name, char* contig_seq, int contig
     std::vector<sv_t*> small_svs;  
     for (deletion_t* del : dels) {
         genotype_del(del, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, 
-            stats, config, aligner, evidence_logger, reassign_evidence, evidence_map, *sv_map);
+            stats, config, aligner, evidence_logger, reassign_evidence, evidence_map);
         if (-del->svlen() >= stats.max_is) {
             large_deletions.push_back(del);
         } else {

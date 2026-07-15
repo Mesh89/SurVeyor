@@ -8,8 +8,7 @@
 void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_logger_t* evidence_logger,
-                bool reassign_evidence, evidence_map_t* evidence_map, 
-                std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map) {
+                bool reassign_evidence, evidence_map_t* evidence_map) {
 
     hts_pos_t ins_start = ins->start, ins_end = ins->end;
 
@@ -192,12 +191,6 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
 
         // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
         if (alt_or_ref_read && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) {
-            if (add_alt_bp1_better_read || add_ref_bp1_better_read) {
-                ins->sample_info.assigned_to_other_sv_bp1_reads++;
-            }
-            if (add_alt_bp2_better_read || add_ref_bp2_better_read) {
-                ins->sample_info.assigned_to_other_sv_bp2_reads++;
-            }
             if (add_alt_bp1_better_read) {
                 ins->sample_info.oar_bp1_reads++;
                 evidence_map->register_oar_support(ins->sample_info, 1, read);
@@ -264,7 +257,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     std::vector<int> alt_bp2_better_read_positions_consistent = get_consistent_reads_start_positions(alt_bp2_better_reads_consistent, alt_bp2_better_reads, alt_bp2_better_read_positions);
     ins->sample_info.alt2_occ_ratio = occ_ratio(alt_bp2_better_read_positions_consistent, alt2_ref_diff_reads_expected_positions.size());
 
-    if (reassign_evidence) {  // increment ORC counters for other SVs that lost support from these reads
+    if (reassign_evidence) {
         std::vector<bam1_t*> alt_better_reads_consistent;
         std::unordered_map<std::string, bool> alt_better_read_is_exact;
         std::unordered_set<std::string> seen;
@@ -288,9 +281,6 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         }
         for (bam1_t* r : alt_better_reads_consistent) {
             evidence_map->record_assigned_read_consistency(r, get_mq(r) >= config.high_confidence_mapq, alt_better_read_is_exact[read_name_with_suffix(r)]);
-            for (std::pair<std::string, int>& ov : evidence_map->get_non_chosen_svs_for_read(r)) {
-                increase_orc(sv_map, ov.first, ov.second, r, get_mq(r) >= config.high_confidence_mapq, alt_better_read_is_exact[read_name_with_suffix(r)]);
-            }
         }
     }
 
@@ -491,7 +481,7 @@ void genotype_inss(int id, std::string contig_name, char* contig_seq, int contig
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
     bam_pool_t* bam_pool, std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr,
     std::vector<double>* global_crossing_isize_dist, evidence_logger_t* evidence_logger,
-    bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::shared_ptr<sv_t>>* sv_map) {
+    bool reassign_evidence, evidence_map_t* evidence_map) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 
@@ -508,7 +498,7 @@ void genotype_inss(int id, std::string contig_name, char* contig_seq, int contig
              
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
     for (insertion_t* ins : inss) { 
-        genotype_ins(ins, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_logger, reassign_evidence, evidence_map, *sv_map);
+        genotype_ins(ins, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_logger, reassign_evidence, evidence_map);
     }
 
     for (ext_read_t* ext_read : candidate_reads_for_extension) delete ext_read;

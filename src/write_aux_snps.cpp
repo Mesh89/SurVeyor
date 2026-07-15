@@ -241,8 +241,8 @@ int get_format_int32_or_default(bcf_hdr_t* hdr, bcf1_t* record, const char* tag,
 
 bool ref_support_exceeds_other_alt_support(bcf_hdr_t* hdr, bcf1_t* record) {
     int rr = get_format_int32_or_default(hdr, record, "RR1") + get_format_int32_or_default(hdr, record, "RR2");
-    int orc = get_format_int32_or_default(hdr, record, "OR1") + get_format_int32_or_default(hdr, record, "OR2");
-    return rr > orc;
+    int oar = get_format_int32_or_default(hdr, record, "OAR1") + get_format_int32_or_default(hdr, record, "OAR2");
+    return rr > oar;
 }
 
 void concat_record_ids(bcf_hdr_t* hdr, bcf1_t* record, bcf1_t* other_record) {

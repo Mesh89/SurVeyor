@@ -96,12 +96,11 @@ struct evidence_logger_t {
 
 struct evidence_map_t {
     std::unordered_map<std::string, int> read_to_hpid_map;
-    std::unordered_map<std::string, std::vector<std::pair<std::string, int>>> read_to_non_chosen_svs_map;
 
     // OAR/ORR consistency joins two observations that can arrive in either order on different genotyping threads:
     // a variant classifies an assigned-away read as ALT or REF, and the assigned variant later finds it consistent.
     std::mutex other_read_support_mtx;
-    std::unordered_map<std::string, sv_t::orc_read_info_t> assigned_consistent_reads;
+    std::unordered_map<std::string, sv_t::other_read_info_t> assigned_consistent_reads;
     std::unordered_map<std::string, std::vector<std::pair<sv_t::sample_info_t*, int>>> oar_targets_by_read;
     std::unordered_map<std::string, std::vector<std::pair<sv_t::sample_info_t*, int>>> orr_targets_by_read;
 
@@ -226,8 +225,6 @@ struct evidence_map_t {
                 } else {
                     read_to_multiple_svs[read_name].push_back({sv_id, bp});
                 }
-            } else if (!best_assoc.hpids.count(sv_hpid_map[sv_id])) {
-                read_to_non_chosen_svs_map[read_name].push_back({sv_id, bp});
             }
         }
 
@@ -287,15 +284,6 @@ struct evidence_map_t {
                 }
             }
 
-            for (const auto& sv_w_bp : sv_w_bps) {
-                if (sv_hpid_map[sv_w_bp.first] != read_to_hpid_map[read_name]) {
-                    read_to_non_chosen_svs_map[read_name].push_back(sv_w_bp);
-                }
-            }
-        }
-
-        for (auto& kv : read_to_non_chosen_svs_map) {
-            std::sort(kv.second.begin(), kv.second.end());
         }
     }
 
@@ -318,21 +306,9 @@ struct evidence_map_t {
         return read_to_hpid_map[read_name] == sv->hpid;
     }
 
-    std::vector<std::pair<std::string, int>> get_non_chosen_svs_for_read(bam1_t* read) {
-        std::string read_name = read_name_with_suffix(read);
-        if (!read_to_non_chosen_svs_map.count(read_name)) return {};
-        return read_to_non_chosen_svs_map[read_name];
-    }
-
-    std::vector<std::pair<std::string, int>> get_non_chosen_svs_for_read(const bp_support_read_t& read) {
-        std::string read_name = read.read_name + (read.is_first_in_pair ? "/1" : "/2");
-        if (!read_to_non_chosen_svs_map.count(read_name)) return {};
-        return read_to_non_chosen_svs_map[read_name];
-    }
-
     // Explicitly insert one OAR*C read, or upgrade its flags if it was already inserted. The caller must hold other_read_support_mtx.
-    void insert_or_update_oar_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::orc_read_info_t& assigned_read_info) {
-        std::unordered_map<std::string, sv_t::orc_read_info_t>* consistent_reads;
+    void insert_or_update_oar_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::other_read_info_t& assigned_read_info) {
+        std::unordered_map<std::string, sv_t::other_read_info_t>* consistent_reads;
         if (bp_n == 1) {
             consistent_reads = &sample_info.oar_bp1_consistent_reads;
         } else if (bp_n == 2) {
@@ -341,7 +317,7 @@ struct evidence_map_t {
             throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
         }
 
-        sv_t::orc_read_info_t read_info = assigned_read_info;
+        sv_t::other_read_info_t read_info = assigned_read_info;
         auto existing_read = consistent_reads->find(read_name);
         if (existing_read == consistent_reads->end()) {
             consistent_reads->emplace(read_name, read_info);
@@ -352,8 +328,8 @@ struct evidence_map_t {
     }
 
     // Explicitly insert one ORR*C read, or upgrade its flags if it was already inserted. The caller must hold other_read_support_mtx.
-    void insert_or_update_orr_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::orc_read_info_t& assigned_read_info) {
-        std::unordered_map<std::string, sv_t::orc_read_info_t>* consistent_reads;
+    void insert_or_update_orr_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::other_read_info_t& assigned_read_info) {
+        std::unordered_map<std::string, sv_t::other_read_info_t>* consistent_reads;
         if (bp_n == 1) {
             consistent_reads = &sample_info.orr_bp1_consistent_reads;
         } else if (bp_n == 2) {
@@ -362,7 +338,7 @@ struct evidence_map_t {
             throw std::runtime_error("Invalid ORR breakpoint number " + std::to_string(bp_n) + ".");
         }
 
-        sv_t::orc_read_info_t read_info = assigned_read_info;
+        sv_t::other_read_info_t read_info = assigned_read_info;
         auto existing_read = consistent_reads->find(read_name);
         if (existing_read == consistent_reads->end()) {
             consistent_reads->emplace(read_name, read_info);
@@ -444,7 +420,7 @@ struct evidence_map_t {
     // where the read was classified as ALT or REF. hq and exact are OR-upgraded across duplicate records for CHQ and E.
     void record_assigned_read_consistency(const std::string& read_name, bool hq, bool exact) {
         std::lock_guard<std::mutex> lock(other_read_support_mtx);
-        sv_t::orc_read_info_t assigned_read_info;
+        sv_t::other_read_info_t assigned_read_info;
         assigned_read_info.hq = hq;
         assigned_read_info.exact = exact;
         auto existing_read = assigned_consistent_reads.find(read_name);
@@ -475,43 +451,6 @@ struct evidence_map_t {
     }
 
 };
-
-std::mutex orc_mtx;
-
-void increase_orc_supp(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, bool hq, bool exact) {
-    std::lock_guard<std::mutex> lock(orc_mtx);
-    if (bp_n == 1) {
-        auto& read_info = sample_info.assigned_to_other_sv_bp1_consistent_reads[read_name];
-        read_info.hq |= hq;
-        read_info.exact |= exact;
-    } else if (bp_n == 2) {
-        auto& read_info = sample_info.assigned_to_other_sv_bp2_consistent_reads[read_name];
-        read_info.hq |= hq;
-        read_info.exact |= exact;
-    }
-}
-
-void increase_orc(std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map, std::string sv_id, int bp_n, bam1_t* read, bool hq, bool exact) {
-    if (!sv_map.count(sv_id)) return;
-
-    std::string read_name = read_name_with_suffix(read);
-    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
-
-    sv_id += "_DUP";
-    if (!sv_map.count(sv_id)) return;
-    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
-}
-
-void increase_orc(std::unordered_map<std::string, std::shared_ptr<sv_t>>& sv_map, std::string sv_id, int bp_n, const bp_support_read_t& read, bool hq, bool exact) {
-    if (!sv_map.count(sv_id)) return;
-
-    std::string read_name = read_name_with_suffix(read);
-    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
-
-    sv_id += "_DUP";
-    if (!sv_map.count(sv_id)) return;
-    increase_orc_supp(sv_map[sv_id]->sample_info, bp_n, read_name, hq, exact);
-}
 
 std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs);
 std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subset(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads, 
