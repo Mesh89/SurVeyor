@@ -5,6 +5,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import xgboost as xgb
+from training_manifest import build_training_manifest, write_training_manifest
 
 cmd_parser = argparse.ArgumentParser(description='Train ML model.')
 cmd_parser.add_argument('training_prefixes', help='Prefix of the training VCF and FP files.')
@@ -80,18 +81,30 @@ if __name__ == '__main__':
 
     training_prefixes = cmd_args.training_prefixes.split(",")
     restrict_to_model_name = None if cmd_args.model_name == "ALL" else cmd_args.model_name
+    training_manifest = build_training_manifest(
+        training_prefixes,
+        model_name=cmd_args.model_name,
+        cross_species=cmd_args.cross_species,
+    )
+
+    processed_samples = [None] * len(training_prefixes)
     with ProcessPoolExecutor(max_workers=cmd_args.threads) as executor:
-        future_to_prefix = {executor.submit(process_vcf, prefix, restrict_to_model_name): prefix for prefix in training_prefixes}
-        for future in as_completed(future_to_prefix):
-            prefix = future_to_prefix[future]
+        future_to_sample = {
+            executor.submit(process_vcf, prefix, restrict_to_model_name): (sample_index, prefix)
+            for sample_index, prefix in enumerate(training_prefixes)
+        }
+        for future in as_completed(future_to_sample):
+            sample_index, prefix = future_to_sample[future]
             try:
-                vcf_training_data, vcf_training_gts, vcf_training_exact = future.result()
+                processed_samples[sample_index] = future.result()
             except Exception as e:
                 raise RuntimeError(f"Failed while processing training prefix: {prefix}") from e
-            for model in vcf_training_data:
-                training_data[model].append(vcf_training_data[model])
-                training_gts[model].append(vcf_training_gts[model])
-                training_exact[model].append(vcf_training_exact[model])
+
+    for vcf_training_data, vcf_training_gts, vcf_training_exact in processed_samples:
+        for model in vcf_training_data:
+            training_data[model].append(vcf_training_data[model])
+            training_gts[model].append(vcf_training_gts[model])
+            training_exact[model].append(vcf_training_exact[model])
 
     for model in training_data:
         training_data[model] = np.concatenate(training_data[model])
@@ -109,6 +122,9 @@ if __name__ == '__main__':
 
     exact_outdir = os.path.join(cmd_args.outdir, "exact")
     os.makedirs(exact_outdir, exist_ok=True)
+
+    manifest_path = write_training_manifest(cmd_args.outdir, training_manifest)
+    print(f"Wrote training manifest to {manifest_path}")
 
     for model_name in training_data:
         if cmd_args.model_name != "ALL" and model_name != cmd_args.model_name:
