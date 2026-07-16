@@ -40,6 +40,7 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
     strncpy(alt_seq+alt_lh_len, del->ins_seq.c_str(), del->ins_seq.length());
     strncpy(alt_seq+alt_lh_len+del->ins_seq.length(), rh_seq, alt_rh_len);
     alt_seq[alt_len] = 0;
+    to_uppercase(alt_seq);
 
     // extract ref alleles - will be useful for consensus generation
     hts_pos_t ref_bp1_start = alt_start, ref_bp1_end = std::min(del_start+extend, contig_len);
@@ -124,7 +125,8 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
         // align to REF (two breakpoints)
         uint16_t ref_aln_score = 0;
         bool increase_ref_bp1_better = false, increase_ref_bp2_better = false;
-        if (is_perfectly_aligned(read)) {
+        bool ref_is_exact_match = is_perfectly_aligned(read);
+        if (ref_is_exact_match) {
             ref_aln_score = read->core.l_qseq;
             if (read->core.pos < del_start && bam_endpos(read) > del_start) {
                 increase_ref_bp1_better = true;
@@ -145,7 +147,7 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
         }
 
         // align to ALT
-        aligner.Align(seq.c_str(), alt_seq, alt_len, filter_with_pos_and_cigar, &alt_aln, 0);
+        alt_aln = align_fast(aligner, seq.c_str(), alt_seq, alt_len, filter_with_pos_and_cigar, ref_is_exact_match);
         hts_pos_t alt_right_flank_pos = alt_lh_len + del->ins_seq.length();
         bool alt_spans_left_bp = alt_aln.ref_begin < alt_lh_len && alt_aln.ref_end >= alt_lh_len;
         bool alt_spans_right_bp = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;

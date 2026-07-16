@@ -286,6 +286,7 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     strncpy(alt_seq+alt_lh_len, dup->ins_seq.c_str(), dup->ins_seq.length());
     strncpy(alt_seq+alt_lh_len+dup->ins_seq.length(), contig_seq+dup_start, alt_rh_len);
 	alt_seq[alt_len] = 0;
+    to_uppercase(alt_seq);
 
     std::vector<char*> ref_seqs = {contig_seq+ref_bp1_start, contig_seq+ref_bp2_start};
     std::vector<hts_pos_t> ref_lens = {ref_bp1_len, ref_bp2_len};
@@ -333,7 +334,8 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         // align to REF (two breakpoints)
         uint16_t ref_aln_score = 0;
         bool increase_ref_bp1_better = false, increase_ref_bp2_better = false;
-        if (is_perfectly_aligned(read)) {
+        bool ref_is_exact_match = is_perfectly_aligned(read);
+        if (ref_is_exact_match) {
             ref_aln_score = read->core.l_qseq;
             if (read->core.pos < dup_start && bam_endpos(read) > dup_start) {
                 increase_ref_bp1_better = true;
@@ -354,7 +356,7 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         }
 
         // align to ALT
-        aligner.Align(seq.c_str(), alt_seq, alt_len, filter_with_pos, &alt_aln, 0);
+        alt_aln = align_fast(aligner, seq.c_str(), alt_seq, alt_len, filter_with_pos, ref_is_exact_match);
         hts_pos_t alt_right_flank_pos = alt_lh_len + dup->ins_seq.length();
         bool alt_spans_bp1 = alt_aln.ref_begin < alt_lh_len && alt_aln.ref_end >= alt_lh_len;
         bool alt_spans_bp2 = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;

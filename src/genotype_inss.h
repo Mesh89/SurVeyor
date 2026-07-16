@@ -72,6 +72,8 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         strncpy(alt_bp2_seq+ins_rh_len, rf_seq, alt_rf_len);
         alt_bp2_seq[alt_bp2_len] = 0;
     }
+    to_uppercase(alt_bp1_seq);
+    to_uppercase(alt_bp2_seq);
 
     hts_pos_t ref_bp1_start = alt_start, ref_bp1_end = std::min(ins_start+extend, contig_len);
     hts_pos_t ref_bp1_len = ref_bp1_end - ref_bp1_start;
@@ -146,16 +148,29 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         if (only_allow_alt && (!can_align_to_alt || !is_hidden_split_read(read, config))) continue;
 
         std::string seq = get_sequence(read);
+        bool ref_is_exact_match = is_perfectly_aligned(read);
         
         // align to ALT
-        aligner.Align(seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, &alt1_aln, 0);
-        aligner.Align(seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_pos, &alt2_aln, 0);
+        alt1_aln = align_fast(aligner, seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, ref_is_exact_match);
+        alt2_aln = align_fast(aligner, seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_pos, ref_is_exact_match);
         bool alt1_covers_bp1 = alt1_aln.ref_begin <= alt_bp1_pos && alt1_aln.ref_end >= alt_bp1_pos;
         bool alt2_covers_bp2 = alt2_aln.ref_begin <= alt_bp2_pos && alt2_aln.ref_end >= alt_bp2_pos;
         
         // align to REF (two breakpoints)
-        aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_w_aux_len, filter_with_pos, &ref1_aln, 0);
-        aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_w_aux_len, filter_with_pos, &ref2_aln, 0);
+        bool ref1_covers_bp1, ref2_covers_bp2;
+        if (ref_is_exact_match) {
+            ref1_aln.Clear();
+            ref2_aln.Clear();
+            ref1_aln.sw_score = read->core.l_qseq;
+            ref2_aln.sw_score = read->core.l_qseq;
+            ref1_covers_bp1 = read->core.pos <= ins_start && bam_endpos(read) > ins_start;
+            ref2_covers_bp2 = read->core.pos <= ins_end && bam_endpos(read) > ins_end;
+        } else {
+            aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_w_aux_len, filter_with_pos, &ref1_aln, 0);
+            aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_w_aux_len, filter_with_pos, &ref2_aln, 0);
+            ref1_covers_bp1 = ref1_aln.ref_begin <= ref_bp1_w_aux_pos && ref1_aln.ref_end >= ref_bp1_w_aux_pos;
+            ref2_covers_bp2 = ref2_aln.ref_begin <= ref_bp2_w_aux_pos && ref2_aln.ref_end >= ref_bp2_w_aux_pos;
+        }
 
         StripedSmithWaterman::Alignment& alt_aln = alt1_aln.sw_score >= alt2_aln.sw_score ? alt1_aln : alt2_aln;
         StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
@@ -174,11 +189,11 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
                 alt_or_ref_read = true;
             }
         } else if (!only_allow_alt && alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln, config.min_clip_len)) {
-            if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= ref_bp1_w_aux_pos && ref1_aln.ref_end >= ref_bp1_w_aux_pos) {
+            if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_covers_bp1) {
                 add_ref_bp1_better_read = true;
                 alt_or_ref_read = true;
             }
-            if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_aln.ref_begin <= ref_bp2_w_aux_pos && ref2_aln.ref_end >= ref_bp2_w_aux_pos) {
+            if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_covers_bp2) {
                 add_ref_bp2_better_read = true;
                 alt_or_ref_read = true;
             }

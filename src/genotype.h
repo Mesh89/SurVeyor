@@ -2,6 +2,7 @@
 #define GENOTYPE_H
 
 #include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -9,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../libs/ssw_cpp.h"
 #include "extend_1sr_consensus.h"
 #include "htslib/sam.h"
 #include "sam_utils.h"
@@ -17,6 +19,67 @@
 #include "vcf_utils.h"
 
 constexpr double MIN_EPR = 0.05;
+
+// query and reference must be NUL-terminated. In exact-match mode, strstr uses
+// the terminator to bound its search; reference_len is still used to validate
+// that the returned match lies within the requested reference interval.
+inline StripedSmithWaterman::Alignment align_fast(StripedSmithWaterman::Aligner& aligner, const char* query, const char* reference, int reference_len, 
+    const StripedSmithWaterman::Filter& filter, bool require_exact_match = false) {
+
+    StripedSmithWaterman::Alignment alignment;
+    alignment.Clear();
+
+    if (!require_exact_match) {
+        aligner.Align(query, reference, reference_len, filter, &alignment, 0);
+        return alignment;
+    }
+
+    if (query == nullptr || reference == nullptr || reference_len <= 0) {
+        return alignment;
+    }
+
+    const int query_len = std::strlen(query);
+    if (query_len <= 0 || query_len > reference_len) {
+        return alignment;
+    }
+
+    // Queries and alleles are uppercase. Reject ambiguous query bases because
+    // the genotyping SSW uses Nasmatch=false.
+    if (std::strspn(query, "ACGT") != static_cast<size_t>(query_len)) {
+        return alignment;
+    }
+
+    // Exact-match references must be NUL-terminated; constructed alleles are.
+    const char* match = std::strstr(reference, query);
+    if (match == nullptr || match - reference + query_len > reference_len) {
+        return alignment;
+    }
+
+    const int ref_begin = match - reference;
+    alignment.Clear();
+    alignment.sw_score = query_len; // Genotyping aligners use match_score = 1.
+    alignment.sw_score_next_best = 0;
+    alignment.ref_end = ref_begin + query_len - 1;
+    alignment.query_end = query_len - 1;
+    alignment.ref_end_next_best = -1;
+    alignment.mismatches = 0;
+
+    if (filter.report_begin_position || filter.report_cigar) {
+        alignment.ref_begin = ref_begin;
+        alignment.query_begin = 0;
+    } else {
+        alignment.ref_begin = -1;
+        alignment.query_begin = -1;
+    }
+
+    if (filter.report_cigar && alignment.sw_score >= filter.score_filter &&
+            query_len - 1 <= filter.distance_filter) {
+        alignment.cigar.push_back(bam_cigar_gen(query_len, BAM_CEQUAL));
+        alignment.cigar_string = std::to_string(query_len) + "=";
+    }
+
+    return alignment;
+}
 
 std::string remove_svid_dup_suffix(const std::string& sv_id) {
     if (sv_id.size() > 4 && sv_id.substr(sv_id.size()-4) == "_DUP") {
