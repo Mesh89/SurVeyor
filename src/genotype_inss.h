@@ -234,7 +234,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
             ref_bp2_better_reads.clear();
             ins->sample_info.alt_ref_equal_reads = 0;
             ins->sample_info.alt_ref_equal_reads_highmq = 0;
-            ins->sample_info.too_deep = true;
+            evidence_map->clear_other_read_support_for_too_deep(ins->sample_info);
             break;
         }
     }

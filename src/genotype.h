@@ -308,6 +308,8 @@ struct evidence_map_t {
 
     // Explicitly insert one OAR*C read, or upgrade its flags if it was already inserted. The caller must hold other_read_support_mtx.
     void insert_or_update_oar_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::other_read_info_t& assigned_read_info) {
+        if (sample_info.too_deep) return;
+
         std::unordered_map<std::string, sv_t::other_read_info_t>* consistent_reads;
         if (bp_n == 1) {
             consistent_reads = &sample_info.oar_bp1_consistent_reads;
@@ -329,6 +331,8 @@ struct evidence_map_t {
 
     // Explicitly insert one ORR*C read, or upgrade its flags if it was already inserted. The caller must hold other_read_support_mtx.
     void insert_or_update_orr_consistent_read(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name, const sv_t::other_read_info_t& assigned_read_info) {
+        if (sample_info.too_deep) return;
+
         std::unordered_map<std::string, sv_t::other_read_info_t>* consistent_reads;
         if (bp_n == 1) {
             consistent_reads = &sample_info.orr_bp1_consistent_reads;
@@ -448,6 +452,21 @@ struct evidence_map_t {
 
     void record_assigned_read_consistency(const bp_support_read_t& read, bool hq, bool exact) {
         record_assigned_read_consistency(read_name_with_suffix(read), hq, exact);
+    }
+
+    // Mark a variant as too deep and clear all OAR/ORR counts and consistency information while
+    // holding the join mutex. Later consistency observations will see too_deep and leave the fields empty.
+    void clear_other_read_support_for_too_deep(sv_t::sample_info_t& sample_info) {
+        std::lock_guard<std::mutex> lock(other_read_support_mtx);
+        sample_info.too_deep = true;
+        sample_info.oar_bp1_reads = 0;
+        sample_info.oar_bp2_reads = 0;
+        sample_info.orr_bp1_reads = 0;
+        sample_info.orr_bp2_reads = 0;
+        sample_info.oar_bp1_consistent_reads.clear();
+        sample_info.oar_bp2_consistent_reads.clear();
+        sample_info.orr_bp1_consistent_reads.clear();
+        sample_info.orr_bp2_consistent_reads.clear();
     }
 
 };

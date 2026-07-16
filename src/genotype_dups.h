@@ -140,7 +140,7 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         ref_better_reads.clear();
         dup->sample_info.alt_ref_equal_reads = 0;
         dup->sample_info.alt_ref_equal_reads_highmq = 0;
-        dup->sample_info.too_deep = true;
+        evidence_map->clear_other_read_support_for_too_deep(dup->sample_info);
     }
 
     if (evidence_logger) evidence_logger->log_reads_associations(dup->id, 1, alt_better_reads[alt_with_most_reads], alt_better_reads_scores[alt_with_most_reads]);
@@ -407,7 +407,7 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
             ref_bp2_better_reads.clear();
             dup->sample_info.alt_ref_equal_reads = 0;
             dup->sample_info.alt_ref_equal_reads_highmq = 0;
-            dup->sample_info.too_deep = true;
+            evidence_map->clear_other_read_support_for_too_deep(dup->sample_info);
             break;
         }
     }

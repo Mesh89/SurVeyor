@@ -213,7 +213,7 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
             ref_bp2_better_seqs.clear();
             del->sample_info.alt_ref_equal_reads = 0;
             del->sample_info.alt_ref_equal_reads_highmq = 0;
-            del->sample_info.too_deep = true;
+            evidence_map->clear_other_read_support_for_too_deep(del->sample_info);
             break;
         }
     }
