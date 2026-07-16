@@ -1,10 +1,13 @@
 import hashlib
 import json
 import os
+import re
 
 
 MANIFEST_FILENAME = "training_manifest.json"
+VCF_HEADER_KEY = "SurVeyorTrainingSetSHA256"
 _READ_BUFFER_SIZE = 1024 * 1024
+_SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 
 
 def sha256_file(path):
@@ -77,3 +80,41 @@ def write_training_manifest(output_dir, manifest):
         output_file.write("\n")
     os.replace(temporary_path, manifest_path)
     return manifest_path
+
+
+def load_training_set_sha256(model_dir):
+    manifest_path = os.path.join(model_dir, MANIFEST_FILENAME)
+    if not os.path.exists(manifest_path):
+        return None
+
+    try:
+        with open(manifest_path, encoding="utf-8") as input_file:
+            manifest = json.load(input_file)
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            f"Could not read training manifest: {manifest_path}"
+        ) from error
+
+    training_set_sha256 = manifest.get("training_set_sha256")
+    if (
+        manifest.get("hash_algorithm") != "sha256"
+        or not isinstance(training_set_sha256, str)
+        or _SHA256_PATTERN.fullmatch(training_set_sha256) is None
+    ):
+        raise RuntimeError(
+            f"Training manifest has an invalid training_set_sha256: {manifest_path}"
+        )
+    return training_set_sha256.lower()
+
+
+def training_set_vcf_header_line(training_set_sha256):
+    if _SHA256_PATTERN.fullmatch(training_set_sha256) is None:
+        raise ValueError("training_set_sha256 must be a 64-character hexadecimal digest")
+    return f"##{VCF_HEADER_KEY}={training_set_sha256.lower()}"
+
+
+def set_training_set_vcf_header(vcf_header, training_set_sha256):
+    for header_record in list(vcf_header.records):
+        if header_record.key == VCF_HEADER_KEY:
+            header_record.remove()
+    vcf_header.add_line(training_set_vcf_header_line(training_set_sha256))

@@ -4,6 +4,7 @@ import xgboost as xgb
 import os
 import numpy as np
 import timeit
+from training_manifest import load_training_set_sha256, set_training_set_vcf_header
 
 class Classifier:
     def load_features_files(model_stage_dir):
@@ -58,6 +59,13 @@ class Classifier:
         cmd = "Classifier.run_classifier %s %s %s %s --threads %d" % (in_vcf, out_vcf, stats_fname, model_dir, threads)
         start_time = timeit.default_timer()
         print("Executing:", cmd)
+
+        training_set_sha256 = load_training_set_sha256(model_dir)
+        if training_set_sha256 is None:
+            print(
+                "Warning: model directory has no training_manifest.json; "
+                "the output VCF will not identify its training set."
+            )
 
         parse_start_time = timeit.default_timer()
         feature_names_by_model = Classifier.load_features_files(os.path.join(model_dir, "yes_or_no"))
@@ -135,6 +143,8 @@ class Classifier:
             header.add_line('##FORMAT=<ID=EXPR,Number=1,Type=Float,Description="Probability of the SV to be represented exactly, according to the ML model.">')
         if 'EREFA' not in header.formats:
             header.add_line('##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description="Whether the EREFA-stage classifier requires the other allele to be reference.">')
+        if training_set_sha256 is not None:
+            set_training_set_vcf_header(header, training_set_sha256)
         Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, out_vcf, stats_fname)
         write_elapsed = timeit.default_timer() - write_start_time
         print("VCF writing was run in %.2f seconds" % write_elapsed)

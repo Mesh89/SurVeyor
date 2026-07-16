@@ -187,6 +187,23 @@ int main(int argc, char** argv) {
     add_fmt_tags(out_hdr);
     int len = 0;
 
+    htsFile* gt_fp = bcf_open(gt_vcf_fname.c_str(), "r");
+    if (!gt_fp) {
+        std::cerr << "Error opening " << gt_vcf_fname << std::endl;
+        exit(1);
+    }
+    bcf_hdr_t* gt_hdr = bcf_hdr_read(gt_fp);
+
+    const char* training_set_header_key = "SurVeyorTrainingSetSHA256";
+    bcf_hrec_t* training_set_hrec = bcf_hdr_get_hrec(gt_hdr, BCF_HL_GEN, training_set_header_key, NULL, NULL);
+    if (training_set_hrec) {
+        bcf_hdr_remove(out_hdr, BCF_HL_GEN, training_set_header_key);
+        if (bcf_hdr_add_hrec(out_hdr, bcf_hrec_dup(training_set_hrec)) < 0) {
+            std::cerr << "Error copying training-set header to output VCF" << std::endl;
+            exit(1);
+        }
+    }
+
     bcf_hdr_remove(out_hdr, BCF_HL_INFO, "HP_GENOTYPED");
     const char* hp_genotyped_tag = "##INFO=<ID=HP_GENOTYPED,Number=0,Type=Flag,Description=\"This variant was genotyped using the homopolymer-specific genotyping path.\">";
     bcf_hdr_add_hrec(out_hdr, bcf_hdr_parse_line(out_hdr, hp_genotyped_tag, &len));
@@ -210,12 +227,6 @@ int main(int argc, char** argv) {
     }
 
     // Write updated records to base_vcf
-    htsFile* gt_fp = bcf_open(gt_vcf_fname.c_str(), "r");
-    if (!gt_fp) {
-        std::cerr << "Error opening " << gt_vcf_fname << std::endl;
-        exit(1);
-    }
-    bcf_hdr_t* gt_hdr = bcf_hdr_read(gt_fp);
     copy_all_format_to_base(base_hdr, base_fp, gt_records, gt_hdr, out_fp, out_hdr);
     
     // Cleanup
