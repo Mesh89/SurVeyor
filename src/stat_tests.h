@@ -779,8 +779,6 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 	std::vector<pairs_data_t> neutral_bp1_pairs_data(insertions.size());
 	std::vector<pairs_data_t> stray_bp1_pairs_data(insertions.size()), stray_bp2_pairs_data(insertions.size());	
 
-	StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, false);
-
 	std::unordered_map<std::string, std::vector<std::pair<pairs_data_t*, bam1_t*> > > pairs_waiting_for_neg_nm;
 
 	int curr_del_bystart_idx = 0, curr_del_byend_idx = 0;
@@ -794,24 +792,25 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 
         std::string qname = get_mate_lookup_qname(read);
 		
-        if (mateseqs_w_mapq_chr.count(qname) > 0) {
+		if (mateseqs_w_mapq_chr.count(qname) > 0) {
 			std::string mate_seq = mateseqs_w_mapq_chr[qname].first;
+			int mate_seq_len = mate_seq.length();
+			int min_aligned_len = (mate_seq_len+1)/2;
 			
-			StripedSmithWaterman::Filter filter;
-			StripedSmithWaterman::Alignment aln;
 			if (!bam_is_rev(read)) {
 				rc(mate_seq);
 				for (int i = curr_del_bystart_idx; i < insertions_by_start.size() && insertions_by_start[i]->start < read->core.pos+stats.max_is; i++) {
 					insertion_t* ins = insertions_by_start[i];
 					int idx = insertion_to_idx[ins];
 
-					harsh_aligner.Align(mate_seq.c_str(), ins->ins_seq.c_str(), ins->ins_seq.length(), filter, &aln, 0);
+					ungapped_aln_t aln = best_ungapped_aln(mate_seq.c_str(), mate_seq_len, ins->ins_seq.c_str(), ins->ins_seq.length(), mate_seq_len/2, 1, -4);
+					int lc_size = aln.query_begin;
+					int rc_size = mate_seq_len - aln.query_end;
+					int aligned_len = aln.query_end - aln.query_begin;
 
-					double mismatch_rate = double(aln.mismatches)/(aln.query_end-aln.query_begin);
-					int lc_size = get_left_clip_size(aln), rc_size = get_right_clip_size(aln);
-
-					if (mismatch_rate <= config.max_seq_error && (lc_size < config.min_clip_len || aln.ref_begin == 0) &&
-						(rc_size < config.min_clip_len || aln.ref_end >= ins->ins_seq.length()-1)) {
+					if (aligned_len >= min_aligned_len && aln.mismatch_rate() <= config.max_seq_error &&
+						(lc_size < config.min_clip_len || aln.ref_begin == 0) &&
+						(rc_size < config.min_clip_len || aln.ref_end >= ins->ins_seq.length())) {
 						if (evidence_logger) evidence_logger->log_pair_association(ins->id, read);
 						if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) continue;
 						add_read(alt_bp1_pairs_data[idx], read, aln.mismatches);
@@ -824,13 +823,14 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 					insertion_t* ins = insertions_by_end[i];
 					int idx = insertion_to_idx[ins];
 
-					harsh_aligner.Align(mate_seq.c_str(), ins->ins_seq.c_str(), ins->ins_seq.length(), filter, &aln, 0);
+					ungapped_aln_t aln = best_ungapped_aln(mate_seq.c_str(), mate_seq_len, ins->ins_seq.c_str(), ins->ins_seq.length(), mate_seq_len/2, 1, -4);
+					int lc_size = aln.query_begin;
+					int rc_size = mate_seq_len - aln.query_end;
+					int aligned_len = aln.query_end - aln.query_begin;
 
-					double mismatch_rate = double(aln.mismatches)/(aln.query_end-aln.query_begin);
-					int lc_size = get_left_clip_size(aln), rc_size = get_right_clip_size(aln);
-
-					if (mismatch_rate <= config.max_seq_error && (lc_size < config.min_clip_len || aln.ref_begin == 0) &&
-						(rc_size < config.min_clip_len || aln.ref_end >= ins->ins_seq.length()-1)) {
+					if (aligned_len >= min_aligned_len && aln.mismatch_rate() <= config.max_seq_error &&
+						(lc_size < config.min_clip_len || aln.ref_begin == 0) &&
+						(rc_size < config.min_clip_len || aln.ref_end >= ins->ins_seq.length())) {
 						if (evidence_logger) evidence_logger->log_pair_association(ins->id, read);
 						if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) continue;
 						add_read(alt_bp2_pairs_data[idx], read, aln.mismatches);

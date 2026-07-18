@@ -134,6 +134,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     StripedSmithWaterman::Filter filter_with_pos_and_cigar(true, true, 0, 32767);
     StripedSmithWaterman::Filter filter_with_score_only(false, false, 0, 32767);
     StripedSmithWaterman::Alignment alt1_aln, alt2_aln, ref1_aln, ref2_aln;
+    int aln_reads = 0;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (ins_start < get_unclipped_start(read) && get_unclipped_end(read) < ins_end) continue;
@@ -149,6 +150,19 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
 
         std::string seq = get_sequence(read);
         bool ref_is_exact_match = is_perfectly_aligned(read);
+
+        // do not consider pathologically deep regions
+        aln_reads++;
+        if (aln_reads > 8 * stats.get_max_depth(ins->chr)) {
+            alt_bp1_better_reads.clear();
+            alt_bp2_better_reads.clear();
+            ref_bp1_better_reads.clear();
+            ref_bp2_better_reads.clear();
+            ins->sample_info.alt_ref_equal_reads = 0;
+            ins->sample_info.alt_ref_equal_reads_highmq = 0;
+            evidence_map->clear_other_read_support_for_too_deep(ins->sample_info);
+            break;
+        }
         
         // align to ALT
         alt1_aln = align_fast(aligner, seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, ref_is_exact_match);
@@ -240,17 +254,6 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         }
         if (add_ref_bp2_better_read) {
             ref_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-        }
-
-        if (alt_bp1_better_reads.size() + alt_bp2_better_reads.size() + ref_bp1_better_reads.size() + ref_bp2_better_reads.size() + ins->sample_info.alt_ref_equal_reads > 4 * stats.get_max_depth(ins->chr)) {
-            alt_bp1_better_reads.clear();
-            alt_bp2_better_reads.clear();
-            ref_bp1_better_reads.clear();
-            ref_bp2_better_reads.clear();
-            ins->sample_info.alt_ref_equal_reads = 0;
-            ins->sample_info.alt_ref_equal_reads_highmq = 0;
-            evidence_map->clear_other_read_support_for_too_deep(ins->sample_info);
-            break;
         }
     }
 
@@ -510,9 +513,9 @@ void genotype_inss(int id, std::string contig_name, char* contig_seq, int contig
     }
     std::vector<ext_read_t*> candidate_reads_for_extension;
     IntervalTree<ext_read_t*> candidate_reads_for_extension_itree = get_candidate_reads_for_extension_itree(contig_name, contig_len, target_ivals, bam_pool->get_bam_reader(id), candidate_reads_for_extension);
-             
+
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
-    for (insertion_t* ins : inss) { 
+    for (insertion_t* ins : inss) {
         genotype_ins(ins, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_logger, reassign_evidence, evidence_map);
     }
 
@@ -520,10 +523,12 @@ void genotype_inss(int id, std::string contig_name, char* contig_seq, int contig
 
     depth_filter_ins(contig_name, inss, bam_file, config, stats);
     calculate_ptn_ratio(contig_name, inss, bam_file, config, stats, evidence_logger, false, evidence_map, *mateseqs_w_mapq_chr);
+
     std::vector<sv_t*> inss_sv(inss.begin(), inss.end());
     calculate_confidence_interval_size(contig_name, *global_crossing_isize_dist, inss_sv, bam_file, config, stats);
 
     release_mates(contig_id);
+
 }
 
 #endif // GENOTYPE_INSS_H

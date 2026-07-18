@@ -2,7 +2,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -1063,7 +1062,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < hps.size(); i++) {
             block_hps.push_back(hps[i].get());
             if ((i == hps.size()-1 && !block_hps.empty()) 
-            || (block_hps.size() == BLOCK_SIZE && ref_hp_ranges[i].beg != ref_hp_ranges[i+1].beg)) {
+            || (block_hps.size() >= BLOCK_SIZE && ref_hp_ranges[i].beg != ref_hp_ranges[i+1].beg)) {
                 std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool,
                         &mateseqs_w_mapq[contig_map.get_id(contig_name)], 

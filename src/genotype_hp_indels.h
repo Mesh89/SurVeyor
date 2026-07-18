@@ -1221,6 +1221,7 @@ void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int c
         genotype_hp_indels_group(hp_indels_in_range, ref_hp_range, bam_file, contig_seq, contig_len, stats, config, aligner, permissive_aligner,
             *mateseqs_w_mapq_chr, evidence_logger, reassign_evidence, evidence_map);
     }
+
     depth_filter_indel(contig_name, hp_indels, bam_file, config, stats);
     calculate_confidence_interval_size(contig_name, *global_crossing_isize_dist, hp_indels, bam_file, config, stats);
 
