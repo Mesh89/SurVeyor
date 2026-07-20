@@ -420,6 +420,9 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     clip_consensus_builder_cmd = SURVEYOR_PATH + "/bin/clip_consensus_builder %s %s %s" % (workdir, reference_fname, sample_name)
     run_cmd(clip_consensus_builder_cmd)
 
+    find_hp_indels_cmd = SURVEYOR_PATH + "/bin/find_hp_indels %s %s %s %s/intermediate_results/hp.vcf.gz %s/resources/max-3p-error-rate-by-hp-len.tsv" % (workdir, reference_fname, bam_fname, workdir, SURVEYOR_PATH)
+    run_cmd(find_hp_indels_cmd)
+
     find_svs_from_sr_consensuses_cmd = SURVEYOR_PATH + "/bin/find_svs_from_sr_consensuses %s %s %s %s" % (bam_fname, workdir, reference_fname, sample_name)
     run_cmd(find_svs_from_sr_consensuses_cmd)
 

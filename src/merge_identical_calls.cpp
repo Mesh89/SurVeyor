@@ -24,6 +24,7 @@ int priority(sv_t* sv) {
 	else if (sv->source == "DP-DP") return 7;
 	else if (sv->source == "DP") return 7;
 	else if (sv->source == "READ") return 8;
+	else if (sv->source == "HP") return 9;
 	throw std::runtime_error("Unknown source: " + sv->source);
 }
 

@@ -856,22 +856,27 @@ int main(int argc, char* argv[]) {
 		svs.erase(std::remove(svs.begin(), svs.end(), nullptr), svs.end());
 	}
 
-	// Input read_svs, i.e., SVs detected from read alignments directly
+	// Input SVs detected from read alignments directly
 	std::unordered_map<std::string, std::vector<std::shared_ptr<sv_t>>> read_svs_by_chr;
 
-	std::string sv_vcf_fname = workdir + "/intermediate_results/read_svs.vcf.gz";
-	htsFile* sv_vcf_file = bcf_open(sv_vcf_fname.c_str(), "r");
-	bcf_hdr_t* sv_vcf_header = bcf_hdr_read(sv_vcf_file);
 	bcf1_t* bcf_entry = bcf_init();
-	while (bcf_read(sv_vcf_file, sv_vcf_header, bcf_entry) == 0) {
-		std::shared_ptr<sv_t> sv = bcf_to_sv(sv_vcf_header, bcf_entry);
-		if (sv == nullptr) {
-			throw std::runtime_error("Unexpected unsupported variant in internal VCF " + sv_vcf_fname + ": " + std::string(bcf_entry->d.id ? bcf_entry->d.id : "<no-id>"));
+	std::vector<std::string> read_sv_vcf_fnames = {
+		workdir + "/intermediate_results/read_svs.vcf.gz",
+		workdir + "/intermediate_results/hp.vcf.gz"
+	};
+	for (const std::string& sv_vcf_fname : read_sv_vcf_fnames) {
+		htsFile* sv_vcf_file = bcf_open(sv_vcf_fname.c_str(), "r");
+		bcf_hdr_t* sv_vcf_header = bcf_hdr_read(sv_vcf_file);
+		while (bcf_read(sv_vcf_file, sv_vcf_header, bcf_entry) == 0) {
+			std::shared_ptr<sv_t> sv = bcf_to_sv(sv_vcf_header, bcf_entry);
+			if (sv == nullptr) {
+				throw std::runtime_error("Unexpected unsupported variant in internal VCF " + sv_vcf_fname + ": " + std::string(bcf_entry->d.id ? bcf_entry->d.id : "<no-id>"));
+			}
+			read_svs_by_chr[sv->chr].push_back(sv);
 		}
-		read_svs_by_chr[sv->chr].push_back(sv);
+		bcf_hdr_destroy(sv_vcf_header);
+		bcf_close(sv_vcf_file);
 	}
-	bcf_hdr_destroy(sv_vcf_header);
-	bcf_close(sv_vcf_file);
 
     // create VCF out files
 	bcf_hdr_t* out_vcf_header = generate_vcf_header(chr_seqs, sample_name, config, full_cmd_str);
@@ -891,12 +896,12 @@ int main(int argc, char* argv[]) {
 	for (const std::string& contig_name : chr_seqs.ordered_contigs) {
 		std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
 
-		// merge with read_svs
-		auto& read_svs = read_svs_by_chr[contig_name];
+		// merge with read_svs and hp_svs
 		std::unordered_set<std::string> svs_unique_keys;
 		for (std::shared_ptr<sv_t> sv : svs) {
 			svs_unique_keys.insert(sv->unique_key(false));
 		}
+		auto& read_svs = read_svs_by_chr[contig_name];
 		for (std::shared_ptr<sv_t> sv : read_svs) {
 			if (svs_unique_keys.count(sv->unique_key(false)) == 0) {
 				svs.push_back(sv);
