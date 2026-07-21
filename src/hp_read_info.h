@@ -14,6 +14,7 @@
 struct hp_read_info_t {
     int hp_len;
     int tail_5p_len, tail_3p_len;
+    int aligned_5p_tail_len = 0;
     int tail_5p_mismatches, tail_3p_mismatches;
     bp_support_read_t read;
     bool original_alignment_has_indel_outside_hp = true;
@@ -229,6 +230,13 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         return hp_read_info_t();
     }
 
+    int aligned_left_tail_len = 0, aligned_right_tail_len = 0;
+    for (hts_pos_t rpos : qpos_to_rpos) {
+        if (rpos != -1 && rpos < ref_hp_range.beg) aligned_left_tail_len++;
+        if (rpos >= ref_hp_range.end) aligned_right_tail_len++;
+    }
+    int aligned_5p_tail_len = is_rev ? aligned_right_tail_len : aligned_left_tail_len;
+
     // If no query base lands inside the reference HP, derive the run from the
     // query gap between the nearest mapped flanks.
     if (anchors.empty()) {
@@ -254,11 +262,11 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
             contig_seq, contig_len, read_seq.length() - right_tail_len, read_seq.length(), false,
             left_clipped, right_clipped, tail_align_leeway, ref_hp_range.end);
 
-        if (!is_rev) {
-            return hp_read_info_t(hp_len, left_tail_len, right_tail_len, left_mismatches, right_mismatches, read);
-        } else {
-            return hp_read_info_t(hp_len, right_tail_len, left_tail_len, right_mismatches, left_mismatches, read);
-        }
+        hp_read_info_t hp_read_info = !is_rev ?
+            hp_read_info_t(hp_len, left_tail_len, right_tail_len, left_mismatches, right_mismatches, read) :
+            hp_read_info_t(hp_len, right_tail_len, left_tail_len, right_mismatches, left_mismatches, read);
+        hp_read_info.aligned_5p_tail_len = aligned_5p_tail_len;
+        return hp_read_info;
     }
 
     // Start from the aligned bases inside the reference HP and expand through
@@ -298,6 +306,7 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         hp_read_info.tail_3p_mismatches = right_mismatches;
     }
     hp_read_info.read = read;
+    hp_read_info.aligned_5p_tail_len = aligned_5p_tail_len;
 
     return hp_read_info;
 }

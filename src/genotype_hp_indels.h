@@ -23,7 +23,9 @@ std::vector<bool> get_valid_reads_mask(const std::vector<hp_read_info_t>& hp_rea
     std::vector<bool> valid_reads_mask;
     valid_reads_mask.reserve(hp_read_infos.size());
     for (const hp_read_info_t& hp_read_info : hp_read_infos) {
-        if (hp_read_info.hp_len <= 5) {
+        if (hp_read_info.aligned_5p_tail_len < min_tail_len) {
+            valid_reads_mask.push_back(false);
+        } else if (hp_read_info.hp_len <= 5) {
             valid_reads_mask.push_back(hp_read_info.is_good_read(min_tail_len, max_mismatch_rate));
         } else {
             valid_reads_mask.push_back(true);
