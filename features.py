@@ -28,7 +28,7 @@ class Features:
                             'AR1HPMODE', 'AR1CHPMODE', 'AR1CHPIQR', 'AR1HPMODE_AR1CHPMODE_DIFF', 'AR1HPMODE_ALTLEN_DIFF', 'AR1CHPMODE_ALTLEN_DIFF',
                             'AR1CHPmQ', 'AR1CHPMQ', 'AR1CHPAQ', 'AR1CHPSQ', 'AR1HP5PMR', 'AR1HP3PMR',
                             'MAXARCD', 'MAXARED',
-                            'RR1', 'RR1C', 'RR1CmQ', 'RR1CMQ', 'RR1C_HQ_RATIO', 'RR1E', 'RR1E_RATIO',
+                            'RR1', 'RR1C', 'RR1CmQ', 'RR1CMQ', 'RR1C_HQ_RATIO', 'RR1E', 'RR1EmQ', 'RR1EMQ', 'RR1E_HQ_RATIO', 'RR1E_RATIO',
                             'RR1HPMODE', 'RR1CHPMODE', 'RR1CHPIQR', 'RR1HPMODE_RR1CHPMODE_DIFF', 'RR1HPMODE_REFLEN_DIFF', 'RR1CHPMODE_REFLEN_DIFF',
                             'RR1CHPmQ', 'RR1CHPMQ', 'RR1CHPAQ', 'RR1CHPSQ', 'RR1HP5PMR', 'RR1HP3PMR',
                             'RR2', 'RR2C', 'RR2CmQ', 'RR2CMQ', 'RR2C_HQ_RATIO', 'RR2E', 'RR2E_RATIO', 'MAXRRCD', 'MAXRRED',
@@ -471,6 +471,7 @@ class Features:
         rr1c = Features.get_number_value(sample, 'RR1C', 0)
         rr1chq = Features.get_number_value(sample, 'RR1CHQ', 0)
         rr1e = Features.get_number_value(sample, 'RR1E', 0)
+        rr1ehq = Features.get_number_value(sample, 'RR1EHQ', 0)
         rr2 = Features.get_number_value(sample, 'RR2', 0)
         rr2c = Features.get_number_value(sample, 'RR2C', 0)
         rr2chq = Features.get_number_value(sample, 'RR2CHQ', 0)
@@ -484,6 +485,9 @@ class Features:
         features['RR1CMQ'] = Features.get_number_value(sample, 'RR1CMQ', Features.NAN)
         features['RR1C_HQ_RATIO'] = rr1chq/max(1, rr1c)
         features['RR1E'] = Features.piecewise_normalise(rr1e, min_depth, max_depth)
+        features['RR1EmQ'] = Features.get_number_value(sample, 'RR1EmQ', Features.NAN)
+        features['RR1EMQ'] = Features.get_number_value(sample, 'RR1EMQ', Features.NAN)
+        features['RR1E_HQ_RATIO'] = rr1ehq/max(1, rr1e)
         features['RR1E_RATIO'] = rr1e/max(1, rr1c)
         features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.get_number_value(sample, 'RR1CMSPAN', [0, 0], max_is)
         features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2'] = Features.get_number_value(sample, 'RR1CMHQSPAN', [0, 0], max_is)

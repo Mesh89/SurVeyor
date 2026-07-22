@@ -81,6 +81,18 @@ void add_read_support_headers(bcf_hdr_t* hdr, const char prefix, int bp_n, const
             "Number of consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
         },
         {
+            "%cR%dEHQ", 1, "Integer",
+            "Number of high-quality consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
+        },
+        {
+            "%cR%dEmQ", 1, "Integer",
+            "Minimum mate mapping quality of consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
+        },
+        {
+            "%cR%dEMQ", 1, "Integer",
+            "Maximum mate mapping quality of consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
+        },
+        {
             "%cR%dEF", 1, "Integer",
             "Number of consistent exact (i.e., perfectly matching) forward reads supporting %s in the %s allele."
         },

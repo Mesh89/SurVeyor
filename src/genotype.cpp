@@ -91,6 +91,9 @@ void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_i
         int exact_reads = bp_reads_info.exact_fwd + bp_reads_info.exact_rev;
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), &exact_reads, 1);
         if (exact_reads) {
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), &(bp_reads_info.exact_high_mq), 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EmQ").c_str(), &(bp_reads_info.exact_min_mq), 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EMQ").c_str(), &(bp_reads_info.exact_max_mq), 1);
             bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), &(bp_reads_info.exact_fwd), 1);
             bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), &(bp_reads_info.exact_rev), 1);
         }
@@ -106,6 +109,9 @@ void reset_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, std::string prefi
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CF").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CR").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EmQ").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EMQ").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), NULL, 0);
     bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CAS").c_str(), NULL, 0);
@@ -607,6 +613,13 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, int n_reads, st
         bp_reads_info.consistent_max_mq = std::max(bp_reads_info.consistent_max_mq, mq);
         if (mq >= config.high_confidence_mapq) {
             bp_reads_info.consistent_high_mq++;
+        }
+        if (is_exact_read[i]) {
+            bp_reads_info.exact_min_mq = std::min(bp_reads_info.exact_min_mq, mq);
+            bp_reads_info.exact_max_mq = std::max(bp_reads_info.exact_max_mq, mq);
+            if (mq >= config.high_confidence_mapq) {
+                bp_reads_info.exact_high_mq++;
+            }
         }
 
         sum_mq += mq;
