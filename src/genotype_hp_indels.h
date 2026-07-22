@@ -705,7 +705,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         if (!hp_read_info.rescued) ref_good_reads_non_rescued[allele_idx].push_back(hp_read_info.read);
         ref_is_exact_match[allele_idx].push_back(hp_read_info.hp_len == hp_run_lens.back() &&
             !hp_read_info.original_alignment_has_indel_outside_hp && !hp_read_info.hp_deletion_extends_outside_hp &&
-            !hp_read_info.hp_insertion_has_non_hp_bases);
+            !hp_read_info.hp_insertion_has_non_hp_bases && !hp_read_info.hp_run_extends_into_3p_tail);
     };
 
     // Reads assigned outside this HP group are classified against each candidate's ALT and REF alleles.
@@ -766,7 +766,8 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
                 bool hp_len_match = hp_read_info.hp_len == hp_run_lens[best_allele_idx];
                 bool has_unexplained_outside_hp = has_unexplained_indel_outside_hp(
                     hp_read_info, allele_has_aux_indels, allele_seq, allele_len, allele_hp_range, aligner);
-                bool exact_match = hp_len_match && !has_unexplained_outside_hp;
+                bool exact_match = hp_len_match && !has_unexplained_outside_hp &&
+                    (!is_ref_allele || !hp_read_info.hp_run_extends_into_3p_tail);
                 is_exact_match.push_back(exact_match);
             }
 
