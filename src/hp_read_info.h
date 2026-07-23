@@ -21,6 +21,7 @@ struct hp_read_info_t {
     bool hp_deletion_extends_outside_hp = false;
     bool hp_insertion_has_non_hp_bases = false;
     bool hp_run_extends_into_3p_tail = false;
+    bool ref_hp_has_non_hp_read_base = false;
     bool rescued = false;
 
     hp_read_info_t(int hp_len = 0, int tail_5p_len = 0, int tail_3p_len = 0,
@@ -308,6 +309,13 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
     }
     hp_read_info.read = read;
     hp_read_info.aligned_5p_tail_len = aligned_5p_tail_len;
+
+    for (int anchor : anchors) {
+        if (std::toupper(read_seq[anchor]) != hp_base) {
+            hp_read_info.ref_hp_has_non_hp_read_base = true;
+            break;
+        }
+    }
 
     // The inferred run stops at an HP query base aligned just outside the
     // reference HP. If that reference base is non-HP, the query run really

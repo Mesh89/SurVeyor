@@ -281,6 +281,18 @@ bool hp_read_supports_alt_allele(const hp_read_info_t& hp_read_info, int alt_all
         hp_run_lens, aligner, &candidate_allele_idxs) == alt_allele_idx;
 }
 
+bool candidate_haplotypes_support_exact_ref(const std::string& read_seq,
+    const char* ref_haplotype, int ref_haplotype_len, hts_pair_pos_t ref_hp_range,
+    const char* alt_haplotype, int alt_haplotype_len, hts_pair_pos_t alt_hp_range) {
+
+    ungapped_aln_t ref_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), ref_haplotype, ref_haplotype_len, 0);
+    ungapped_aln_t alt_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), alt_haplotype, alt_haplotype_len, 0);
+
+    bool ref_spans_hp = ref_aln.ref_begin <= ref_hp_range.beg && ref_aln.ref_end >= ref_hp_range.end;
+    bool alt_spans_hp = alt_aln.ref_begin <= alt_hp_range.beg && alt_aln.ref_end >= alt_hp_range.end;
+    return ref_spans_hp && (!alt_spans_hp || ref_aln.score > alt_aln.score);
+}
+
 std::vector<hp_allele_cluster_t> cluster_reads_by_nearest_allele_len(const std::vector<hp_read_info_t>& hp_read_infos,
     std::vector<std::unique_ptr<char[]>>& alt_alleles, std::vector<int>& alt_allele_lens, std::vector<int>& hp_run_lens, StripedSmithWaterman::Aligner& aligner) {
 
@@ -507,16 +519,30 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     ref_allele[ref_allele_len] = '\0';
     hts_pair_pos_t ref_allele_hp_range = {left_flank_len, left_flank_len + ref_hp_len};
 
+    std::vector<std::unique_ptr<char[]>> candidate_ref_alleles;
+    std::vector<int> candidate_ref_allele_lens;
+    std::vector<hts_pair_pos_t> candidate_ref_allele_hp_ranges;
     std::vector<std::unique_ptr<char[]>> alt_alleles;
     std::vector<int> alt_allele_lens;
     std::vector<hts_pair_pos_t> alt_allele_hp_ranges;
     for (sv_t* hp_indel : hp_indels) {
-        char* lh_seq = generate_haplotype_left(contig_seq, ref_hp_range.beg - 1, extend,
-            hp_indel->aux_indels, hp_indel->aux_snps);
-        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, ref_hp_range.end, extend,
-            hp_indel->aux_indels, hp_indel->aux_snps);
+        char* lh_seq = generate_haplotype_left(contig_seq, ref_hp_range.beg - 1, extend, hp_indel->aux_indels, hp_indel->aux_snps);
+        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, ref_hp_range.end, extend, hp_indel->aux_indels, hp_indel->aux_snps);
         hts_pos_t alt_lh_len = strlen(lh_seq);
         hts_pos_t alt_rh_len = strlen(rh_seq);
+
+        // Exact-REF validation compares haplotypes with identical candidate AUX
+        // context, changing only the HP length between REF and ALT.
+        hts_pos_t candidate_ref_len = alt_lh_len + ref_hp_len + alt_rh_len;
+        std::unique_ptr<char[]> candidate_ref_seq(new char[candidate_ref_len + 1]);
+        strncpy(candidate_ref_seq.get(), lh_seq, alt_lh_len);
+        memset(candidate_ref_seq.get() + alt_lh_len, hp_base, ref_hp_len);
+        strncpy(candidate_ref_seq.get() + alt_lh_len + ref_hp_len, rh_seq, alt_rh_len);
+        candidate_ref_seq[candidate_ref_len] = '\0';
+        candidate_ref_alleles.push_back(std::move(candidate_ref_seq));
+        candidate_ref_allele_lens.push_back(candidate_ref_len);
+        candidate_ref_allele_hp_ranges.push_back({alt_lh_len, alt_lh_len + ref_hp_len});
+
         hts_pos_t alt_hp_len = ref_hp_len + hp_indel->svlen();
         hts_pos_t alt_len = alt_lh_len + alt_hp_len + alt_rh_len;
         std::unique_ptr<char[]> alt_seq(new char[alt_len + 1]);
@@ -697,15 +723,26 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     std::vector<std::vector<bp_support_read_t>> ref_good_reads(hp_indels.size()), ref_good_reads_non_rescued(hp_indels.size());
     std::vector<std::vector<bool>> ref_is_exact_match(hp_indels.size());
 
+    auto candidate_supports_exact_ref = [&](int allele_idx, const hp_read_info_t& hp_read_info) {
+        return candidate_haplotypes_support_exact_ref(hp_read_info.read.seq,
+            candidate_ref_alleles[allele_idx].get(), candidate_ref_allele_lens[allele_idx],
+            candidate_ref_allele_hp_ranges[allele_idx], alt_alleles[allele_idx].get(),
+            alt_allele_lens[allele_idx], alt_allele_hp_ranges[allele_idx]);
+    };
+
     auto add_ref_support = [&](int allele_idx, const hp_read_info_t& hp_read_info) {
         ref_reads[allele_idx]++;
         ref_assigned_hp_read_infos[allele_idx].push_back(hp_read_info);
         if (!hp_read_info.is_good_read(config.min_clip_len, MAX_TAIL_MISMATCH_RATE)) return;
         ref_good_reads[allele_idx].push_back(hp_read_info.read);
         if (!hp_read_info.rescued) ref_good_reads_non_rescued[allele_idx].push_back(hp_read_info.read);
-        ref_is_exact_match[allele_idx].push_back(hp_read_info.hp_len == hp_run_lens.back() &&
+        bool is_exact_match = hp_read_info.hp_len == hp_run_lens.back() &&
             !hp_read_info.original_alignment_has_indel_outside_hp && !hp_read_info.hp_deletion_extends_outside_hp &&
-            !hp_read_info.hp_insertion_has_non_hp_bases && !hp_read_info.hp_run_extends_into_3p_tail);
+            !hp_read_info.hp_insertion_has_non_hp_bases && !hp_read_info.hp_run_extends_into_3p_tail;
+        if (is_exact_match && hp_read_info.ref_hp_has_non_hp_read_base) {
+            is_exact_match = candidate_supports_exact_ref(allele_idx, hp_read_info);
+        }
+        ref_is_exact_match[allele_idx].push_back(is_exact_match);
     };
 
     // Reads assigned outside this HP group are classified against each candidate's ALT and REF alleles.
@@ -774,11 +811,17 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             if (is_ref_allele) {
                 // Cluster best matches the reference allele
                 for (int i = 0; i < hp_indels.size(); i++) {
+                    std::vector<bool> candidate_is_exact_match = is_exact_match;
+                    for (int j = 0; j < good_hp_read_infos.size(); j++) {
+                        if (candidate_is_exact_match[j] && good_hp_read_infos[j].ref_hp_has_non_hp_read_base) {
+                            candidate_is_exact_match[j] = candidate_supports_exact_ref(i, good_hp_read_infos[j]);
+                        }
+                    }
                     ref_reads[i] += cluster.size();
                     ref_assigned_hp_read_infos[i].insert(ref_assigned_hp_read_infos[i].end(), cluster.begin(), cluster.end());
                     ref_good_reads[i].insert(ref_good_reads[i].end(), good_reads.begin(), good_reads.end());
                     ref_good_reads_non_rescued[i].insert(ref_good_reads_non_rescued[i].end(), good_reads_non_rescued.begin(), good_reads_non_rescued.end());
-                    ref_is_exact_match[i].insert(ref_is_exact_match[i].end(), is_exact_match.begin(), is_exact_match.end());
+                    ref_is_exact_match[i].insert(ref_is_exact_match[i].end(), candidate_is_exact_match.begin(), candidate_is_exact_match.end());
                 }
             } else {
                 // Cluster best matches an indel allele, so assign its reads to that allele
