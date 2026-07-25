@@ -34,7 +34,9 @@ class Features:
                             'RR2', 'RR2C', 'RR2CmQ', 'RR2CMQ', 'RR2C_HQ_RATIO', 'RR2E', 'RR2E_RATIO', 'MAXRRCD', 'MAXRRED',
                             'OAR1', 'OAR2', 'OAR1MAX_RATIO', 'OAR2MAX_RATIO', 'OTHER1_OVERLAP_PRESENT', 'OTHER2_OVERLAP_PRESENT',
                             'OTHER1_OVERLAP_MAX_MIN_ARC_OVER_NARC', 'OTHER2_OVERLAP_MAX_MIN_ARC_OVER_NARC',
+                            'OTHER1_OVERLAP_MAX_MIN_ARCHQ', 'OTHER2_OVERLAP_MAX_MIN_ARCHQ',
                             'OTHER1_OVERLAP_MAX_MIN_AR_OVER_NAR', 'OTHER2_OVERLAP_MAX_MIN_AR_OVER_NAR',
+                            'OTHER1_OVERLAP_MAX_MIN_ARE_OVER_NARE', 'OTHER2_OVERLAP_MAX_MIN_ARE_OVER_NARE',
                             'OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN', 'OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN',
                             'OAR1C', 'OAR2C', 'OAR1CHQ', 'OAR2CHQ', 'OAR1C_HQ_RATIO', 'OAR2C_HQ_RATIO', 'OAR1E', 'OAR2E',
                             'NAR1', 'NAR2', 'NAR1C', 'NAR2C', 'NAR1CHQ', 'NAR2CHQ', 'NAR1C_HQ_RATIO', 'NAR2C_HQ_RATIO', 'NAR1E', 'NAR2E',
@@ -144,7 +146,7 @@ class Features:
     def other_hpid_overlap_present(record, other_hpid, intervals_by_hpid):
         if other_hpid is None or intervals_by_hpid is None:
             return 0
-        for chrom, start, stop, _, _, _, _ in intervals_by_hpid.get(other_hpid, []):
+        for chrom, start, stop, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, []):
             if record.chrom == chrom and record.start < stop and start < record.stop:
                 return 1
         return 0
@@ -182,7 +184,23 @@ class Features:
             return 0
         values = [
             min_arc_over_narc
-            for chrom, start, stop, min_arc_over_narc, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, min_arc_over_narc, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            if record.chrom == chrom and record.start < stop and start < record.stop
+        ]
+        return max(values, default=0)
+
+    def min_archq(record):
+        sample = record.samples[0]
+        ar1chq = Features.get_number_value(sample, 'AR1CHQ', 0)
+        ar2chq = Features.get_number_value(sample, 'AR2CHQ', ar1chq)
+        return min(ar1chq, ar2chq)
+
+    def other_hpid_overlap_max_min_archq(record, other_hpid, intervals_by_hpid):
+        if other_hpid is None or intervals_by_hpid is None:
+            return 0
+        values = [
+            min_archq
+            for chrom, start, stop, _, min_archq, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -192,7 +210,31 @@ class Features:
             return 0
         values = [
             min_ar_over_nar
-            for chrom, start, stop, _, min_ar_over_nar, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, min_ar_over_nar, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            if record.chrom == chrom and record.start < stop and start < record.stop
+        ]
+        return max(values, default=0)
+
+    def min_are_over_nare(record):
+        sample = record.samples[0]
+        ar1e = Features.get_number_value(sample, 'AR1E', 0)
+        oar1e = Features.get_number_value(sample, 'OAR1E', 0)
+        rr1e = Features.get_number_value(sample, 'RR1E', 0)
+
+        ar2e = Features.get_number_value(sample, 'AR2E', ar1e)
+        oar2e = Features.get_number_value(sample, 'OAR2E', oar1e)
+        rr2e = Features.get_number_value(sample, 'RR2E', rr1e)
+
+        ratio1 = ar1e/max(1, ar1e + oar1e + rr1e)
+        ratio2 = ar2e/max(1, ar2e + oar2e + rr2e)
+        return min(ratio1, ratio2)
+
+    def other_hpid_overlap_max_min_are_over_nare(record, other_hpid, intervals_by_hpid):
+        if other_hpid is None or intervals_by_hpid is None:
+            return 0
+        values = [
+            min_are_over_nare
+            for chrom, start, stop, _, _, _, min_are_over_nare, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -216,7 +258,7 @@ class Features:
             return Features.NAN
         values = [
             exas_exrs_diff_to_len
-            for chrom, start, stop, _, _, exas_exrs_diff_to_len, has_extension_evidence in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, _, _, exas_exrs_diff_to_len, has_extension_evidence in intervals_by_hpid.get(other_hpid, [])
             if has_extension_evidence and record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=Features.NAN)
@@ -541,7 +583,10 @@ class Features:
         features['OAR1MAX_RATIO'] = oar1max/max(1, oar1)
         features['OTHER1_OVERLAP_PRESENT'] = Features.other_hpid_overlap_present(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_MAX_MIN_ARC_OVER_NARC'] = Features.other_hpid_overlap_max_min_arc_over_narc(record, oar1hpid, intervals_by_hpid)
+        other1_overlap_max_min_archq = Features.other_hpid_overlap_max_min_archq(record, oar1hpid, intervals_by_hpid)
+        features['OTHER1_OVERLAP_MAX_MIN_ARCHQ'] = Features.piecewise_normalise(other1_overlap_max_min_archq, min_depth, max_depth)
         features['OTHER1_OVERLAP_MAX_MIN_AR_OVER_NAR'] = Features.other_hpid_overlap_max_min_ar_over_nar(record, oar1hpid, intervals_by_hpid)
+        features['OTHER1_OVERLAP_MAX_MIN_ARE_OVER_NARE'] = Features.other_hpid_overlap_max_min_are_over_nare(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_exas_exrs_diff_to_len(record, oar1hpid, intervals_by_hpid)
         features['OAR1C'] = Features.piecewise_normalise(oar1c, min_depth, max_depth)
         features['OAR1CHQ'] = Features.piecewise_normalise(oar1chq, min_depth, max_depth)
@@ -551,7 +596,10 @@ class Features:
         features['OAR2MAX_RATIO'] = oar2max/max(1, oar2)
         features['OTHER2_OVERLAP_PRESENT'] = Features.other_hpid_overlap_present(record, oar2hpid, intervals_by_hpid)
         features['OTHER2_OVERLAP_MAX_MIN_ARC_OVER_NARC'] = Features.other_hpid_overlap_max_min_arc_over_narc(record, oar2hpid, intervals_by_hpid)
+        other2_overlap_max_min_archq = Features.other_hpid_overlap_max_min_archq(record, oar2hpid, intervals_by_hpid)
+        features['OTHER2_OVERLAP_MAX_MIN_ARCHQ'] = Features.piecewise_normalise(other2_overlap_max_min_archq, min_depth, max_depth)
         features['OTHER2_OVERLAP_MAX_MIN_AR_OVER_NAR'] = Features.other_hpid_overlap_max_min_ar_over_nar(record, oar2hpid, intervals_by_hpid)
+        features['OTHER2_OVERLAP_MAX_MIN_ARE_OVER_NARE'] = Features.other_hpid_overlap_max_min_are_over_nare(record, oar2hpid, intervals_by_hpid)
         features['OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_exas_exrs_diff_to_len(record, oar2hpid, intervals_by_hpid)
         features['OAR2C'] = Features.piecewise_normalise(oar2c, min_depth, max_depth)
         features['OAR2CHQ'] = Features.piecewise_normalise(oar2chq, min_depth, max_depth)
@@ -1068,7 +1116,9 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, ignore_gts = False, feature_name
                 candidate.start,
                 candidate.stop,
                 Features.min_arc_over_narc(candidate),
+                Features.min_archq(candidate),
                 Features.min_ar_over_nar(candidate),
+                Features.min_are_over_nare(candidate),
                 Features.exas_exrs_diff_to_len(candidate),
                 Features.has_extension_evidence(candidate),
             ))
