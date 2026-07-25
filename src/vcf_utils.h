@@ -363,6 +363,14 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* oar1_tag = "##FORMAT=<ID=OAR1,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the ALT allele of this SV, but assigned to another variant.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1HPID");
+	const char* oar1hpid_tag = "##FORMAT=<ID=OAR1HPID,Number=1,Type=Integer,Description=\"HPID receiving the most reads counted in OAR1. Ties are resolved in favor of the smallest HPID.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1hpid_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1MAX");
+	const char* oar1max_tag = "##FORMAT=<ID=OAR1MAX,Number=1,Type=Integer,Description=\"Number of OAR1 reads assigned to the HPID reported in OAR1HPID.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1max_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1C");
 	const char* oar1c_tag = "##FORMAT=<ID=OAR1C,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the ALT allele of this SV that are assigned to another variant and are consistent with that variant.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1c_tag, &len));
@@ -378,6 +386,14 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2");
 	const char* oar2_tag = "##FORMAT=<ID=OAR2,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the ALT allele of this SV, but assigned to another variant.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2HPID");
+	const char* oar2hpid_tag = "##FORMAT=<ID=OAR2HPID,Number=1,Type=Integer,Description=\"HPID receiving the most reads counted in OAR2. Ties are resolved in favor of the smallest HPID.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2hpid_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2MAX");
+	const char* oar2max_tag = "##FORMAT=<ID=OAR2MAX,Number=1,Type=Integer,Description=\"Number of OAR2 reads assigned to the HPID reported in OAR2HPID.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2max_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2C");
 	const char* oar2c_tag = "##FORMAT=<ID=OAR2C,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the ALT allele of this SV that are assigned to another variant and are consistent with that variant.\">";

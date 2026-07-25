@@ -410,9 +410,11 @@ struct evidence_map_t {
         std::lock_guard<std::mutex> lock(other_read_support_mtx);
 
         auto existing_targets = oar_targets_by_read.find(read_name);
+        bool target_added = false;
         if (existing_targets == oar_targets_by_read.end()) {
             std::vector<std::pair<sv_t::sample_info_t*, int>> targets = {{&sample_info, bp_n}};
             oar_targets_by_read.emplace(read_name, targets);
+            target_added = true;
         } else {
             bool already_registered = false;
             for (const auto& target : existing_targets->second) {
@@ -421,7 +423,23 @@ struct evidence_map_t {
                     break;
                 }
             }
-            if (!already_registered) existing_targets->second.push_back({&sample_info, bp_n});
+            if (!already_registered) {
+                existing_targets->second.push_back({&sample_info, bp_n});
+                target_added = true;
+            }
+        }
+
+        if (target_added) {
+            auto assigned_hpid_it = read_to_hpid_map.find(read_name);
+            if (assigned_hpid_it != read_to_hpid_map.end()) {
+                if (bp_n == 1) {
+                    sample_info.oar_bp1_reads_by_hpid[assigned_hpid_it->second]++;
+                } else if (bp_n == 2) {
+                    sample_info.oar_bp2_reads_by_hpid[assigned_hpid_it->second]++;
+                } else {
+                    throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
+                }
+            }
         }
 
         auto assigned_read_it = assigned_consistent_reads.find(read_name);
@@ -515,6 +533,8 @@ struct evidence_map_t {
         sample_info.oar_bp2_reads = 0;
         sample_info.orr_bp1_reads = 0;
         sample_info.orr_bp2_reads = 0;
+        sample_info.oar_bp1_reads_by_hpid.clear();
+        sample_info.oar_bp2_reads_by_hpid.clear();
         sample_info.oar_bp1_consistent_reads.clear();
         sample_info.oar_bp2_consistent_reads.clear();
         sample_info.orr_bp1_consistent_reads.clear();
