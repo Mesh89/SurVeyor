@@ -193,40 +193,12 @@ std::shared_ptr<sv_t> atomize(int id, std::shared_ptr<sv_t> sv) {
 	}
 }
 
-std::shared_ptr<sv_t> promote_largest_indel(std::shared_ptr<sv_t> sv) {
-	if (sv->aux_indels.empty()) return sv;
-
-	int promoted_idx = 0;
-	for (int i = 1; i < sv->aux_indels.size(); i++) {
-		if (sv->aux_indels[i]->svsize() > sv->aux_indels[promoted_idx]->svsize()) {
-			promoted_idx = i;
-		}
+hts_pos_t max_indel_size(const std::shared_ptr<sv_t>& sv) {
+	hts_pos_t max_size = sv->svsize();
+	for (const auto& aux_indel : sv->aux_indels) {
+		max_size = std::max(max_size, aux_indel->svsize());
 	}
-	if (sv->aux_indels[promoted_idx]->svsize() <= sv->svsize()) return sv;
-
-	std::shared_ptr<sv_t> promoted = sv->aux_indels[promoted_idx];
-	std::vector<std::shared_ptr<sv_t>> aux_indels;
-	for (int i = 0; i < sv->aux_indels.size(); i++) {
-		if (i != promoted_idx) aux_indels.push_back(sv->aux_indels[i]);
-	}
-
-	promoted->id = sv->id;
-	promoted->source = sv->source;
-	promoted->sample_info = sv->sample_info;
-	promoted->imprecise = sv->imprecise;
-	promoted->inferred_ins_seq = sv->inferred_ins_seq;
-	promoted->vcf_entry = sv->vcf_entry;
-	sv->vcf_entry = nullptr;
-
-	promoted->aux_snps.insert(promoted->aux_snps.end(), sv->aux_snps.begin(), sv->aux_snps.end());
-	promoted->aux_indels = aux_indels;
-	if (sv->svsize() > 0) {
-		sv->aux_snps.clear();
-		sv->aux_indels.clear();
-		promoted->aux_indels.push_back(sv);
-	}
-
-	return promoted;
+	return max_size;
 }
 
 std::shared_ptr<sv_t> simplify_del(std::shared_ptr<sv_t> sv) {
@@ -581,9 +553,7 @@ int main(int argc, char* argv[]) {
 		sv = atomize(0, sv);
 		if (sv == nullptr) continue;
 
-		sv = promote_largest_indel(sv);
-		
-		if ((sv->svtype() == "DEL" || sv->svtype() == "INS") && sv->svsize() < min_indel_size) continue;
+		if ((sv->svtype() == "DEL" || sv->svtype() == "INS") && max_indel_size(sv) < min_indel_size) continue;
 		
 		left_align(sv);
 		canonicalize_aux(sv);

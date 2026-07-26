@@ -26,9 +26,9 @@ std::shared_ptr<sv_t> copy_indel_atom(std::shared_ptr<sv_t> sv) {
 }
 
 void append_indel_atoms(std::vector<std::shared_ptr<sv_t>>& dest, std::shared_ptr<sv_t> sv) {
-    
+
     if (sv->svtype() != "DEL" && sv->svtype() != "INS") return;
-    
+
     if (sv->start != sv->end && !sv->ins_seq.empty()) {
         std::shared_ptr<sv_t> del = std::make_shared<deletion_t>(sv->chr, sv->start, sv->end, "", nullptr, nullptr, nullptr, nullptr);
         del->id = sv->id;
@@ -53,6 +53,8 @@ std::shared_ptr<sv_t> make_aux_indel_record(std::shared_ptr<sv_t> parent, size_t
     aux_record->source = parent->source;
     aux_record->sample_info = parent->sample_info;
     aux_record->hpid = parent->hpid;
+    aux_record->junction_remap_ref_beg = parent->junction_remap_ref_beg;
+    aux_record->junction_remap_ref_end = parent->junction_remap_ref_end;
     aux_record->aux_snps = parent->aux_snps;
     append_indel_atoms(aux_record->aux_indels, parent);
     for (size_t i = 0; i < parent->aux_indels.size(); i++) {
