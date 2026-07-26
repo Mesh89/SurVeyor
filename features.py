@@ -23,8 +23,8 @@ class Features:
                             'INS_SUFFIX_A_RATIO', 'INS_SUFFIX_C_RATIO', 'INS_SUFFIX_G_RATIO', 'INS_SUFFIX_T_RATIO', 'MAX_INS_SUFFIX_BASE_COUNT_RATIO',
                             'INS_SEQ_COV_PREFIX_LEN', 'INS_SEQ_COV_SUFFIX_LEN', 'EXP_ALT_READS_FREQ1', 'EXP_ALT_READS_FREQ2', 'HP_REF_LEN', 'HP_ALT_LEN' ]
 
-    reads_features_names = ['AR1', 'AR1_ADJ', 'AR1C', 'AR1C_ADJ', 'AR1CmQ', 'AR1CMQ', 'AR1CHQ', 'AR1C_HQ_RATIO', 'AR1E', 'AR1E_RATIO',
-                            'AR2', 'AR2_ADJ', 'AR2C', 'AR2C_ADJ', 'AR2CmQ', 'AR2CMQ', 'AR2CHQ', 'AR2C_HQ_RATIO', 'AR2E', 'AR2E_RATIO',
+    reads_features_names = ['AR1', 'AR1_ADJ', 'AR1C', 'AR1C_ADJ', 'AR1C_RATIO', 'AR1CmQ', 'AR1CMQ', 'AR1CHQ', 'AR1C_HQ_RATIO', 'AR1E', 'AR1E_RATIO',
+                            'AR2', 'AR2_ADJ', 'AR2C', 'AR2C_ADJ', 'AR2C_RATIO', 'AR2CmQ', 'AR2CMQ', 'AR2CHQ', 'AR2C_HQ_RATIO', 'AR2E', 'AR2E_RATIO',
                             'AR1HPMODE', 'AR1CHPMODE', 'AR1CHPIQR', 'AR1HPMODE_AR1CHPMODE_DIFF', 'AR1HPMODE_ALTLEN_DIFF', 'AR1CHPMODE_ALTLEN_DIFF',
                             'AR1CHPmQ', 'AR1CHPMQ', 'AR1CHPAQ', 'AR1CHPSQ', 'AR1HP5PMR', 'AR1HP3PMR',
                             'MAXARCD', 'MAXARED',
@@ -480,6 +480,7 @@ class Features:
         features['AR1C'] = Features.piecewise_normalise(ar1c, min_depth, max_depth)
         features['AR1_ADJ'] = Features.piecewise_normalise(ar1_adj, min_depth, max_depth)
         features['AR1C_ADJ'] = Features.piecewise_normalise(ar1c_adj, min_depth, max_depth)
+        features['AR1C_RATIO'] = ar1c/max(1, ar1)
         features['AR1CmQ'] = Features.get_number_value(sample, 'AR1CmQ', Features.NAN)
         features['AR1CMQ'] = Features.get_number_value(sample, 'AR1CMQ', Features.NAN)
         features['AR1CHQ'] = Features.piecewise_normalise(arc1hq, min_depth, max_depth)
@@ -528,6 +529,7 @@ class Features:
         features['AR2C'] = Features.piecewise_normalise(ar2c, min_depth, max_depth)
         features['AR2_ADJ'] = Features.piecewise_normalise(ar2_adj, min_depth, max_depth)
         features['AR2C_ADJ'] = Features.piecewise_normalise(ar2c_adj, min_depth, max_depth)
+        features['AR2C_RATIO'] = ar2c/max(1, ar2)
         features['AR2CmQ'] = Features.get_number_value(sample, 'AR2CmQ', Features.NAN)
         features['AR2CMQ'] = Features.get_number_value(sample, 'AR2CMQ', Features.NAN)
         features['AR2CHQ'] = Features.piecewise_normalise(arc2hq, min_depth, max_depth)
