@@ -429,8 +429,8 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     normalise_cmd = SURVEYOR_PATH + "/bin/normalise %s/intermediate_results/sr.vcf.gz %s/intermediate_results/sr.norm.vcf.gz %s %d %d %d" % (workdir, workdir, reference_fname, cmd_args.threads, cmd_args.min_sv_size, max_is)
     run_cmd(normalise_cmd)
 
-    merge_identical_calls_cmd = SURVEYOR_PATH + "/bin/merge_identical_calls %s/intermediate_results/sr.norm.vcf.gz %s/intermediate_results/sr.norm.dedup.vcf.gz %s" % (workdir, workdir, reference_fname)
-    run_cmd(merge_identical_calls_cmd)
+    merge_compatible_haplotypes_cmd = SURVEYOR_PATH + "/bin/merge_compatible_haplotypes %s/intermediate_results/sr.norm.vcf.gz %s/intermediate_results/sr.norm.dedup.vcf.gz %s" % (workdir, workdir, reference_fname)
+    run_cmd(merge_compatible_haplotypes_cmd)
 
     dp_clusterer = SURVEYOR_PATH + "/bin/dp_clusterer %s %s %s %s" % (bam_fname, workdir, reference_fname, sample_name)
     run_cmd(dp_clusterer)
@@ -444,11 +444,11 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     normalise_cmd = SURVEYOR_PATH + "/bin/normalise %s/intermediate_results/out.vcf.gz %s/intermediate_results/out.norm.vcf.gz %s %d %d %d" % (workdir, workdir, reference_fname, cmd_args.threads, cmd_args.min_sv_size, max_is)
     run_cmd(normalise_cmd)
     
-    expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/out.norm.hap.vcf.gz %s" % (workdir, workdir, reference_fname)
-    run_cmd(expand_aux_haplotypes_cmd)
+    merge_compatible_haplotypes_cmd = SURVEYOR_PATH + "/bin/merge_compatible_haplotypes %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/out.norm.merged.vcf.gz %s" % (workdir, workdir, reference_fname)
+    run_cmd(merge_compatible_haplotypes_cmd)
 
-    merge_identical_calls_cmd = SURVEYOR_PATH + "/bin/merge_identical_calls %s/intermediate_results/out.norm.hap.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s" % (workdir, workdir, reference_fname)
-    run_cmd(merge_identical_calls_cmd)
+    expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.merged.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s" % (workdir, workdir, reference_fname)
+    run_cmd(expand_aux_haplotypes_cmd)
 
 
 def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model, n_iters, generate_training_data):

@@ -909,7 +909,7 @@ int main(int argc, char* argv[]) {
 		}
 
 		for (std::shared_ptr<sv_t> sv : svs) {
-			// do some light filtering here - it helps merge_identical_calls not merge good calls with calls that will get filtered
+			// do some light filtering here - it helps merge_compatible_haplotypes not merge good calls with calls that will get filtered
 			if (sv->svtype() == "DEL") {
 				if (sv->start < sv->start_bp_lower_boundary() || sv->start > sv->start_bp_upper_boundary()) {
 					sv->sample_info.filters.push_back("REMAP_BOUNDARY_FILTER");
