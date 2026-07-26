@@ -789,8 +789,10 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
     for (int idx : chosen_seqs_idxs) {
         chosen_seqs.push_back(seqs[idx]);
     }
+    std::string evidence_consensus_seq;
     if (start_positions.size() >= 2) {
         correct_contig(consensus_seq, chosen_seqs, config, true);
+        evidence_consensus_seq = consensus_seq;
 
         consensus_seq = consensus_seq.substr(start_positions[1], end_positions[1]-start_positions[1]);
 
@@ -806,6 +808,35 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
     } else {
         consensus_seq = "";
     }
+
+    // Correction and trimming can change which reads are consistent with the consensus, as well as which of those reads match it exactly.  
+    // Recompute the returned evidence against the corrected consensus sequence.
+    consistent_reads.clear();
+    is_exact_match.clear();
+    aln_scores.clear();
+    cum_score = 0;
+    if (!evidence_consensus_seq.empty()) {
+        for (int i = 0; i < reads.size(); i++) {
+            const std::string& read_seq = seqs[i];
+            ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
+                evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1));
+
+            if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+                consistent_reads.push_back(reads[i]);
+                is_exact_match.push_back(ungapped_aln.mismatches == 0);
+                double aln_score = double(ungapped_aln.score) / read_seq.length();
+                cum_score += aln_score;
+                aln_scores.push_back(aln_score);
+            }
+        }
+    }
+
+    if (!consistent_reads.empty()) {
+        avg_score = cum_score / log(evidence_consensus_seq.length()) / consistent_reads.size();
+    } else {
+        avg_score = 0;
+    }
+    stddev_score = stddev(aln_scores);
 
     return consistent_reads;
 }
