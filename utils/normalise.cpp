@@ -557,6 +557,10 @@ int main(int argc, char* argv[]) {
 		
 		left_align(sv);
 		canonicalize_aux(sv);
+		if (sv->source == "READ") {
+			sv->junction_remap_ref_beg = sv->start;
+			sv->junction_remap_ref_end = sv->end + 1;
+		}
 		svs.push_back(sv);
 	}
 

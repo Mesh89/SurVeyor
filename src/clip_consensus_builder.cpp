@@ -816,10 +816,14 @@ int main(int argc, char* argv[]) {
             if (svtype == "DEL") {
                 std::shared_ptr<deletion_t> del = std::make_shared<deletion_t>(chr, start, end, "", nullptr, nullptr, nullptr, nullptr);
                 del->source = "READ";
+                del->junction_remap_ref_beg = start;
+                del->junction_remap_ref_end = end + 1;
                 svs_by_chr[chr].push_back(del);
             } else if (svtype == "INS") {
                 std::shared_ptr<insertion_t> ins = std::make_shared<insertion_t>(chr, start, end, insseq, nullptr, nullptr, nullptr, nullptr);
                 ins->source = "READ";
+                ins->junction_remap_ref_beg = start;
+                ins->junction_remap_ref_end = end + 1;
                 svs_by_chr[chr].push_back(ins);
             }
         }
