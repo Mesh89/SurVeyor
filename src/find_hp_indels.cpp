@@ -260,6 +260,8 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                         anchor_pos - hp_len_diff, "", nullptr, nullptr, nullptr, nullptr);
                 }
                 hp_indel->source = "HP";
+                hp_indel->junction_remap_ref_beg = hp_indel->start;
+                hp_indel->junction_remap_ref_end = hp_indel->end + 1;
                 hp_indel->hp_ref_beg = hp_run.beg;
                 hp_indel->hp_ref_end = hp_run.end;
                 hp_indels.push_back(hp_indel);
