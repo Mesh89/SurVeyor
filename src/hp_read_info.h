@@ -20,6 +20,7 @@ struct hp_read_info_t {
     bool original_alignment_has_indel_outside_hp = true;
     bool hp_deletion_extends_outside_hp = false;
     bool hp_insertion_has_non_hp_bases = false;
+    bool hp_run_extends_into_5p_tail = false;
     bool hp_run_extends_into_3p_tail = false;
     bool ref_hp_has_non_hp_read_base = false;
     bool rescued = false;
@@ -315,6 +316,18 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
             hp_read_info.ref_hp_has_non_hp_read_base = true;
             break;
         }
+    }
+
+    // The inferred run stops at an HP query base aligned just outside the
+    // reference HP. If that reference base is non-HP, the query run really
+    // extends into the 5' tail.
+    int adjacent_5p_qpos = is_rev ? right : left - 1;
+    if (adjacent_5p_qpos >= 0 && adjacent_5p_qpos < (int) read_seq.length() &&
+        read_seq[adjacent_5p_qpos] == hp_base) {
+        hts_pos_t mapped_rpos = qpos_to_rpos[adjacent_5p_qpos];
+        bool maps_outside_ref_hp = mapped_rpos < ref_hp_range.beg || mapped_rpos >= ref_hp_range.end;
+        bool maps_to_valid_ref_base = mapped_rpos >= 0 && mapped_rpos < contig_len;
+        hp_read_info.hp_run_extends_into_5p_tail = maps_outside_ref_hp && maps_to_valid_ref_base && toupper(contig_seq[mapped_rpos]) != hp_base;
     }
 
     // The inferred run stops at an HP query base aligned just outside the
