@@ -272,15 +272,6 @@ int nearest_hp_allele_idx(int hp_len, const std::string& read_seq,
     return best_idx;
 }
 
-bool hp_read_supports_alt_allele(const hp_read_info_t& hp_read_info, int alt_allele_idx,
-    std::vector<std::unique_ptr<char[]>>& alt_alleles, std::vector<int>& alt_allele_lens,
-    std::vector<int>& hp_run_lens, StripedSmithWaterman::Aligner& aligner) {
-
-    std::vector<int> candidate_allele_idxs = {alt_allele_idx, int(hp_run_lens.size()) - 1};
-    return nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens,
-        hp_run_lens, aligner, &candidate_allele_idxs) == alt_allele_idx;
-}
-
 bool candidate_haplotypes_support_exact_ref(const std::string& read_seq,
     const char* ref_haplotype, int ref_haplotype_len, hts_pair_pos_t ref_hp_range,
     const char* alt_haplotype, int alt_haplotype_len, hts_pair_pos_t alt_hp_range) {
@@ -730,10 +721,11 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             alt_allele_lens[allele_idx], alt_allele_hp_ranges[allele_idx]);
     };
 
-    auto read_supports_ref = [&](int allele_idx, const hp_read_info_t& hp_read_info) {
+    auto read_supports_ref = [&](const hp_read_info_t& hp_read_info) {
         if (hp_read_info.hp_run_extends_into_3p_tail) return false;
-        if (hp_read_info.hp_run_extends_into_5p_tail) {
-            return candidate_supports_exact_ref(allele_idx, hp_read_info);
+        if (!hp_read_info.hp_run_extends_into_5p_tail) return true;
+        for (int i = 0; i < hp_indels.size(); i++) {
+            if (!candidate_supports_exact_ref(i, hp_read_info)) return false;
         }
         return true;
     };
@@ -753,16 +745,30 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         ref_is_exact_match[allele_idx].push_back(is_exact_match);
     };
 
-    // Reads assigned outside this HP group are classified against each candidate's ALT and REF alleles.
+    std::vector<int> cluster_allele_idxs;
+    for (const hp_allele_cluster_t& cluster : clusters) {
+        cluster_allele_idxs.push_back(cluster.allele_idx);
+    }
+
+    // For each read assigned outside this HP group, check which cluster it would belong to. 
+    // If it belongs to the reference allele, incremenet RR and ORR counts for all indels in this group.
+    // If it belongs to an indel allele, incrememt OAR counts for all indels in this group.
     for (const hp_read_info_t& hp_read_info : hp_read_infos_assigned_outside_group) {
-        for (int i = 0; i < hp_indels.size(); i++) {
-            if (hp_read_supports_alt_allele(hp_read_info, i, alt_alleles, alt_allele_lens, hp_run_lens, aligner)) {
-                hp_indels[i]->sample_info.oar_bp1_reads++;
-                evidence_map->register_oar_support(hp_indels[i]->sample_info, 1, hp_read_info.read);
-            } else if (read_supports_ref(i, hp_read_info)) {
+        int allele_idx = nearest_hp_allele_idx(hp_read_info.hp_len, hp_read_info.read.seq, alt_alleles, alt_allele_lens, hp_run_lens, aligner, &cluster_allele_idxs);
+        if (allele_idx == -1) continue;
+
+        bool is_ref_allele = allele_idx == hp_run_lens.size() - 1;
+        if (is_ref_allele) {
+            if (!read_supports_ref(hp_read_info)) continue;
+            for (int i = 0; i < hp_indels.size(); i++) {
                 hp_indels[i]->sample_info.orr_bp1_reads++;
                 evidence_map->register_orr_support(hp_indels[i]->sample_info, 1, hp_read_info.read);
                 add_ref_support(i, hp_read_info);
+            }
+        } else {
+            for (int i = 0; i < hp_indels.size(); i++) {
+                hp_indels[i]->sample_info.oar_bp1_reads++;
+                evidence_map->register_oar_support(hp_indels[i]->sample_info, 1, hp_read_info.read);
             }
         }
     }
@@ -776,6 +782,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     for (const hp_allele_cluster_t& allele_cluster : clusters) {
         const std::vector<hp_read_info_t>& cluster = allele_cluster.reads;
 
+        // Mark good reads
         std::vector<hp_read_info_t> good_hp_read_infos;
         std::vector<bp_support_read_t> all_reads, good_reads, good_reads_non_rescued;
         for (const hp_read_info_t& hp_read_info : cluster) {
@@ -799,8 +806,10 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             }
         }
 
+        int ref_allele_idx = hp_run_lens.size() - 1;
+        bool is_ref_allele = allele_cluster.allele_idx == ref_allele_idx;
+
         for (int best_allele_idx : best_allele_idxs) {
-            bool is_ref_allele = best_allele_idx == hp_run_lens.size() - 1;
             const char* allele_seq = is_ref_allele ? ref_allele.get() : alt_alleles[best_allele_idx].get();
             hts_pos_t allele_len = is_ref_allele ? ref_allele_len : alt_allele_lens[best_allele_idx];
             hts_pair_pos_t allele_hp_range = is_ref_allele ? ref_allele_hp_range : alt_allele_hp_ranges[best_allele_idx];
@@ -818,14 +827,14 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
             if (is_ref_allele) {
                 // Cluster best matches the reference allele
-                for (int i = 0; i < hp_indels.size(); i++) {
-                    std::vector<hp_read_info_t> ref_cluster;
-                    ref_cluster.reserve(cluster.size());
-                    for (const hp_read_info_t& hp_read_info : cluster) {
-                        if (read_supports_ref(i, hp_read_info)) {
-                            ref_cluster.push_back(hp_read_info);
-                        }
+                std::vector<hp_read_info_t> ref_cluster;
+                ref_cluster.reserve(cluster.size());
+                for (const hp_read_info_t& hp_read_info : cluster) {
+                    if (read_supports_ref(hp_read_info)) {
+                        ref_cluster.push_back(hp_read_info);
                     }
+                }
+                for (int i = 0; i < hp_indels.size(); i++) {
                     for (const hp_read_info_t& hp_read_info : ref_cluster) {
                         add_ref_support(i, hp_read_info);
                     }
@@ -842,33 +851,27 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
                 if (evidence_logger) evidence_logger->log_reads_associations(hp_indels[best_allele_idx]->id, 1, all_reads, alt_scores);
             }
         }
-    }
 
-    if (reassign_evidence) {
-        // Classify reads assigned to one HP allele against every other HP candidate's ALT and REF alleles.
-        for (int assigned_allele_idx = 0; assigned_allele_idx < hp_indels.size(); assigned_allele_idx++) {
-            for (const hp_read_info_t& hp_read_info : alt_assigned_hp_read_infos[assigned_allele_idx]) {
-                for (int target_allele_idx = 0; target_allele_idx < hp_indels.size(); target_allele_idx++) {
-                    if (target_allele_idx == assigned_allele_idx || !evidence_map->is_read_assigned_to_different_sv(hp_read_info.read, hp_indels[target_allele_idx])) continue;
-                    if (hp_read_supports_alt_allele(hp_read_info, target_allele_idx, alt_alleles, alt_allele_lens, hp_run_lens, aligner)) {
-                        hp_indels[target_allele_idx]->sample_info.oar_bp1_reads++;
-                        evidence_map->register_oar_support(hp_indels[target_allele_idx]->sample_info, 1, hp_read_info.read);
-                    } else if (read_supports_ref(target_allele_idx, hp_read_info)) {
-                        hp_indels[target_allele_idx]->sample_info.orr_bp1_reads++;
-                        evidence_map->register_orr_support(hp_indels[target_allele_idx]->sample_info, 1, hp_read_info.read);
-                        add_ref_support(target_allele_idx, hp_read_info);
-                    }
+        // We incremenet OAR counts for indels that are not the best match for this cluster
+        if (!is_ref_allele) {
+            int supporting_hpid = hp_indels[allele_cluster.allele_idx]->hpid;
+            for (int target_allele_idx = 0; target_allele_idx < hp_indels.size(); target_allele_idx++) {
+                if (std::find(best_allele_idxs.begin(), best_allele_idxs.end(), target_allele_idx) != best_allele_idxs.end()) {
+                    continue;
+                }
+                for (const hp_read_info_t& hp_read_info : cluster) {
+                    hp_indels[target_allele_idx]->sample_info.oar_bp1_reads++;
+                    evidence_map->register_oar_support(hp_indels[target_allele_idx]->sample_info, 1,
+                        hp_read_info.read, supporting_hpid);
                 }
             }
         }
     }
 
     for (int i = 0; i < hp_indels.size(); i++) {
-        if (reassign_evidence) {
-            for (int j = 0; j < alt_good_reads[i].size(); j++) {
-                const bp_support_read_t& read = alt_good_reads[i][j];
-                evidence_map->record_assigned_read_consistency(read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
-            }
+        for (int j = 0; j < alt_good_reads[i].size(); j++) {
+            const bp_support_read_t& read = alt_good_reads[i][j];
+            evidence_map->record_assigned_read_consistency(read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
         }
 
         set_bp_consensus_info(hp_indels[i]->sample_info.alt_bp1.reads_info, alt_reads[i], alt_good_reads[i], alt_is_exact_match[i], 0.0, 0.0);

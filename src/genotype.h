@@ -406,7 +406,8 @@ struct evidence_map_t {
 
     // Remember that an assigned-away read supports this variant's ALT breakpoint. If the assigned
     // variant has already reported consistency, populate OAR*C immediately; otherwise record_assigned_read_consistency does it later.
-    void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name) {
+    void register_oar_support_core(sv_t::sample_info_t& sample_info, int bp_n,
+        const std::string& read_name, const int* supporting_hpid) {
         std::lock_guard<std::mutex> lock(other_read_support_mtx);
 
         auto existing_targets = oar_targets_by_read.find(read_name);
@@ -429,21 +430,29 @@ struct evidence_map_t {
             }
         }
 
-        if (target_added) {
-            auto assigned_hpid_it = read_to_hpid_map.find(read_name);
-            if (assigned_hpid_it != read_to_hpid_map.end()) {
-                if (bp_n == 1) {
-                    sample_info.oar_bp1_reads_by_hpid[assigned_hpid_it->second]++;
-                } else if (bp_n == 2) {
-                    sample_info.oar_bp2_reads_by_hpid[assigned_hpid_it->second]++;
-                } else {
-                    throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
-                }
+        if (target_added && supporting_hpid) {
+            if (bp_n == 1) {
+                sample_info.oar_bp1_reads_by_hpid[*supporting_hpid]++;
+            } else if (bp_n == 2) {
+                sample_info.oar_bp2_reads_by_hpid[*supporting_hpid]++;
+            } else {
+                throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
             }
         }
 
         auto assigned_read_it = assigned_consistent_reads.find(read_name);
         if (assigned_read_it != assigned_consistent_reads.end()) insert_or_update_oar_consistent_read(sample_info, bp_n, read_name, assigned_read_it->second);
+    }
+
+    void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name) {
+        auto assigned_hpid_it = read_to_hpid_map.find(read_name);
+        const int* supporting_hpid = assigned_hpid_it == read_to_hpid_map.end() ? NULL : &assigned_hpid_it->second;
+        register_oar_support_core(sample_info, bp_n, read_name, supporting_hpid);
+    }
+
+    void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n,
+        const std::string& read_name, int supporting_hpid) {
+        register_oar_support_core(sample_info, bp_n, read_name, &supporting_hpid);
     }
 
     // Convenience overloads preserve the /1 or /2 suffix used as the read key.
@@ -453,6 +462,11 @@ struct evidence_map_t {
 
     void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, const bp_support_read_t& read) {
         register_oar_support(sample_info, bp_n, read_name_with_suffix(read));
+    }
+
+    void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n,
+        const bp_support_read_t& read, int supporting_hpid) {
+        register_oar_support(sample_info, bp_n, read_name_with_suffix(read), supporting_hpid);
     }
 
     // Remember that an assigned-away read supports this variant's REF breakpoint. If the assigned
