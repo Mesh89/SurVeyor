@@ -731,6 +731,12 @@ bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name,
 	const char* inv_alt_tag = "##ALT=<ID=INV,Description=\"Invertion\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, inv_alt_tag, &len));
 
+	const char* rpl_alt_tag = "##ALT=<ID=RPL,Description=\"Sequence replacement\">";
+	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, rpl_alt_tag, &len));
+
+	const char* snp_alt_tag = "##ALT=<ID=SNP,Description=\"Single nucleotide polymorphism\">";
+	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, snp_alt_tag, &len));
+
 	add_fmt_tags(header);
 
 	std::string cmd_tag = "##SurVeyorCommand=" + command;
@@ -1208,6 +1214,8 @@ std::shared_ptr<sv_t> bcf_to_sv(bcf_hdr_t* hdr, bcf1_t* b) {
 		sv = dup;
 	} else if (svtype == "INS") {
 		sv = std::make_shared<insertion_t>(bcf_seqname_safe(hdr, b), b->pos, end, get_ins_seq(hdr, b), rc_consensus, lc_consensus, left_anchor_aln, right_anchor_aln);
+	} else if (svtype == "RPL") {
+		sv = std::make_shared<replacement_t>(bcf_seqname_safe(hdr, b), b->pos, end, get_ins_seq(hdr, b), rc_consensus, lc_consensus, left_anchor_aln, right_anchor_aln);
 	} else if (svtype == "INV") {
 		auto lbp_left_anchor_aln = left_anchor_aln, lbp_right_anchor_aln = right_anchor_aln;
 		hts_pos_t rbp_left_split_mapping_start, rbp_left_split_mapping_end, rbp_right_split_mapping_start, rbp_right_split_mapping_end;

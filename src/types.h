@@ -511,6 +511,14 @@ struct insertion_t : sv_t {
     hts_pos_t svsize() { return ins_seq.length(); }
 };
 
+struct replacement_t : sv_t {
+    using sv_t::sv_t;
+
+    std::string svtype() { return "RPL"; }
+    hts_pos_t svlen() { return 0; }
+    hts_pos_t svsize() { return end - start; }
+};
+
 struct breakend_t : sv_t {
     bool left_facing;
     std::shared_ptr<consensus_t> leftmost_consensus, rightmost_consensus;

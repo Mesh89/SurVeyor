@@ -955,8 +955,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 					  right_part.substr(0, get_left_clip_size(right_part_aln));
 	}
 
-    if (svs.empty()) { // we haven't already called a duplication
-		if (right_bp - left_bp > middle_part.length()) { // length of ALT < REF, deletion
+	if (svs.empty()) { // we haven't already called a duplication
+		hts_pos_t ref_span_len = right_bp - left_bp;
+		hts_pos_t alt_span_len = static_cast<hts_pos_t>(middle_part.length());
+		if (ref_span_len > alt_span_len) { // length of ALT < REF, deletion
 			// // For small deletions with non empty middle part, we may be able to obtain a simpler representation by realigning the whole junction sequence
 			if (right_bp - left_bp <= 50 && !middle_part.empty() && overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) > 0) {
 				hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
@@ -974,7 +976,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 
 			std::shared_ptr<sv_t> sv = std::make_shared<deletion_t>(contig_name, left_bp, right_bp, middle_part, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
 			svs.push_back(sv);
-		} else { // length of ALT > REF, insertion
+		} else if (alt_span_len > ref_span_len) { // length of ALT > REF, insertion
 			// If we are detecting a small insertion with a microhomology, we try to realign the whole junction sequence
 			// This is because split alignments that support duplications have an unfair advantage compared to regular insertions,
 			// since the inserted sequence is also aligned to the sequence. This can lead to suboptimal duplications being called instead of correct insertions
@@ -994,6 +996,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 			}
 
 			std::shared_ptr<sv_t> sv = std::make_shared<insertion_t>(contig_name, left_bp, right_bp, middle_part, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
+			svs.push_back(sv);
+		} else { // length of ALT == REF, length-preserving replacement
+			std::shared_ptr<sv_t> sv = std::make_shared<replacement_t>(contig_name, left_bp, right_bp, middle_part, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
 			svs.push_back(sv);
 		}
 		svs[0]->mh_len = prefix_mh_len;

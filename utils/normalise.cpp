@@ -414,25 +414,7 @@ std::vector<std::shared_ptr<sv_t>> vars_from_alignment(StripedSmithWaterman::Ali
 	return vars;
 }
 
-std::shared_ptr<sv_t> update_main_var_from_realigned_vars(std::shared_ptr<sv_t> var, std::vector<std::shared_ptr<sv_t>>& vars, std::vector<snp_t>& snps) {
-	if (vars.empty()) return nullptr;
-
-	if (vars[0]->svtype() != var->svtype()) return var;
-
-	var->start = vars[0]->start;
-	var->end = vars[0]->end;
-	var->ins_seq = vars[0]->ins_seq;
-	var->aux_indels.clear();
-	for (int i = 1; i < vars.size(); i++) var->aux_indels.push_back(vars[i]);
-	var->aux_snps = snps;
-	return var;
-}
-
-std::shared_ptr<sv_t> realign_indel_haplotype(std::shared_ptr<sv_t> sv) {
-	bool has_replaced_ref = sv->start != sv->end && !sv->ins_seq.empty();
-	bool has_aux_indels = !sv->aux_indels.empty();
-	if (sv->incomplete_ins_seq() || (!has_replaced_ref && !has_aux_indels) || sv->svsize() > 100) return sv;
-
+bool realign_haplotype_atoms(std::shared_ptr<sv_t> sv, std::vector<std::shared_ptr<sv_t>>& indels, std::vector<snp_t>& snps) {
 	char* chr_seq = chr_seqs.get_seq(sv->chr);
 	hts_pos_t chr_len = chr_seqs.get_len(sv->chr);
 	hts_pos_t ins_start = sv->start, ins_end = sv->end;
@@ -473,25 +455,69 @@ std::shared_ptr<sv_t> realign_indel_haplotype(std::shared_ptr<sv_t> sv) {
 		if (!changed) break;
 	}
 
-	if (!is_left_clipped(aln) && !is_right_clipped(aln)) {
-		std::vector<snp_t> snps;
-		std::vector<std::shared_ptr<sv_t>> realigned_svs = vars_from_alignment(aln, sv->chr, ref_start, putative_alt_allele, snps);
-		sv = update_main_var_from_realigned_vars(sv, realigned_svs, snps);
-	}
+	bool success = !is_left_clipped(aln) && !is_right_clipped(aln);
+	if (success) indels = vars_from_alignment(aln, sv->chr, ref_start, putative_alt_allele, snps);
 
 	delete[] lf_seq;
 	delete[] rf_seq;
-
 	delete[] putative_alt_allele;
 
+	return success;
+}
+
+std::shared_ptr<sv_t> update_main_var_from_realigned_vars(std::shared_ptr<sv_t> var, std::vector<std::shared_ptr<sv_t>>& vars, std::vector<snp_t>& snps) {
+	if (vars.empty()) return nullptr;
+
+	std::shared_ptr<sv_t> primary = vars.front();
+	std::string aligned_chr = primary->chr;
+	hts_pos_t aligned_start = primary->start;
+	hts_pos_t aligned_end = primary->end;
+	std::string aligned_ins_seq = primary->ins_seq;
+
+	// Preserve type-specific deletion state when realignment keeps a deletion as
+	// the primary variant. There is no corresponding state on insertion_t or RPL.
+	std::shared_ptr<deletion_t> original_del = std::dynamic_pointer_cast<deletion_t>(var);
+	std::shared_ptr<deletion_t> primary_del = std::dynamic_pointer_cast<deletion_t>(primary);
+	if (original_del && primary_del) {
+		primary_del->remapped = original_del->remapped;
+		primary_del->original_range = original_del->original_range;
+	}
+
+	// Copy all common evidence and annotations without changing the dynamic type
+	// selected by the alignment. vcf_entry ownership must be transferred because
+	// sv_t destroys it in its destructor.
+	bcf1_t* original_vcf_entry = var->vcf_entry;
+	var->vcf_entry = nullptr;
+	static_cast<sv_t&>(*primary) = static_cast<const sv_t&>(*var);
+	primary->vcf_entry = original_vcf_entry;
+
+	primary->chr = aligned_chr;
+	primary->start = aligned_start;
+	primary->end = aligned_end;
+	primary->ins_seq = std::move(aligned_ins_seq);
+	primary->aux_indels.assign(vars.begin() + 1, vars.end());
+	primary->aux_snps = std::move(snps);
+	for (const auto& aux_indel : primary->aux_indels) aux_indel->hpid = primary->hpid;
+
+	return primary;
+}
+
+std::shared_ptr<sv_t> realign_indel_haplotype(std::shared_ptr<sv_t> sv) {
+	bool has_replaced_ref = sv->start != sv->end && !sv->ins_seq.empty();
+	bool has_aux_indels = !sv->aux_indels.empty();
+	if (sv->incomplete_ins_seq() || (!has_replaced_ref && !has_aux_indels) || sv->svsize() > 100) return sv;
+
+	std::vector<std::shared_ptr<sv_t>> realigned_svs;
+	std::vector<snp_t> snps;
+	if (realign_haplotype_atoms(sv, realigned_svs, snps)) {
+		sv = update_main_var_from_realigned_vars(sv, realigned_svs, snps);
+	}
 	return sv;
 }
 
 std::shared_ptr<sv_t> realign(std::shared_ptr<sv_t> sv) {
 	std::string svtype = sv->svtype();
-	if (svtype == "INS") {
-		return realign_indel_haplotype(sv);
-	} else if (svtype == "DEL") {
+	if (svtype == "INS" || svtype == "DEL" || svtype == "RPL") {
 		return realign_indel_haplotype(sv);
 	} else {
 		return sv;

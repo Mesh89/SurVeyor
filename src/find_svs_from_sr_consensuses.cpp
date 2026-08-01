@@ -836,7 +836,7 @@ int main(int argc, char* argv[]) {
 		for (int i = 0; i < svs.size(); i++) {
 			std::shared_ptr<sv_t> sv = svs[i];
 			if (!sv->imprecise && sv->end-sv->start >= config.min_sv_size && abs(sv->svlen()) < config.min_sv_size && sv->ins_seq.length() >= config.min_sv_size
-			&& (sv->svtype() == "DEL" || sv->svtype() == "INS") && double(sv->ins_seq.length())/(sv->end-sv->start) >= 0.75) { // SV is a complex inversion
+			&& (sv->svtype() == "DEL" || sv->svtype() == "INS" || sv->svtype() == "RPL") && double(sv->ins_seq.length())/(sv->end-sv->start) >= 0.75) { // SV is a complex inversion
 				char* contig_seq = chr_seqs.get_seq(contig_name);
 				std::string inv_seq = svs[i]->ins_seq;
 				rc(inv_seq);
