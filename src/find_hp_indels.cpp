@@ -73,6 +73,7 @@ double get_max_3p_error_rate(const max_3p_error_rates_t& max_3p_error_rates, int
 bool is_usable_hp_read(const hp_read_info_t& hp_read_info, int min_clip_len, double max_seq_error,
     const max_3p_error_rates_t& max_3p_error_rates) {
 
+    if (hp_read_info.hp_len == UNDEFINED_HP_LEN) return false;
     if (hp_read_info.hp_deletion_extends_outside_hp || hp_read_info.hp_insertion_has_non_hp_bases) return false;
     if (hp_read_info.tail_5p_len < min_clip_len || hp_read_info.tail_3p_len < min_clip_len) return false;
     if (double(hp_read_info.tail_5p_mismatches) / hp_read_info.tail_5p_len > max_seq_error) return false;

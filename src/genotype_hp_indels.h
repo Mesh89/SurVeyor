@@ -23,7 +23,9 @@ std::vector<bool> get_valid_reads_mask(const std::vector<hp_read_info_t>& hp_rea
     std::vector<bool> valid_reads_mask;
     valid_reads_mask.reserve(hp_read_infos.size());
     for (const hp_read_info_t& hp_read_info : hp_read_infos) {
-        if (hp_read_info.aligned_5p_tail_len < min_tail_len) {
+        if (hp_read_info.hp_len == UNDEFINED_HP_LEN) {
+            valid_reads_mask.push_back(false);
+        } else if (hp_read_info.aligned_5p_tail_len < min_tail_len) {
             valid_reads_mask.push_back(false);
         } else if (hp_read_info.hp_len <= 5) {
             valid_reads_mask.push_back(hp_read_info.is_good_read(min_tail_len, max_mismatch_rate));
@@ -722,7 +724,6 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     };
 
     auto read_supports_ref = [&](const hp_read_info_t& hp_read_info) {
-        if (hp_read_info.hp_run_extends_into_3p_tail) return false;
         if (!hp_read_info.hp_run_extends_into_5p_tail) return true;
         for (int i = 0; i < hp_indels.size(); i++) {
             if (!candidate_supports_exact_ref(i, hp_read_info)) return false;

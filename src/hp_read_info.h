@@ -10,6 +10,9 @@
 
 #include "../libs/ssw_cpp.h"
 #include "genotype.h"
+#include "sw_utils.h"
+
+constexpr int UNDEFINED_HP_LEN = -1;
 
 struct hp_read_info_t {
     int hp_len;
@@ -62,6 +65,30 @@ int best_ungapped_mismatch_count(const std::string& query, char* ref, hts_pos_t 
         }
     }
     return best_mismatches;
+}
+
+int resolve_3p_overflow_hp_len(const std::string& read_seq, int observed_hp_len,
+    hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len) {
+
+    int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
+    int insertion_len = observed_hp_len - ref_hp_len;
+    if (insertion_len <= 0) return ref_hp_len;
+
+    hts_pos_t extend = read_seq.length() - 1;
+    hts_pos_t haplotype_beg = std::max(hts_pos_t(0), ref_hp_range.beg - extend);
+    hts_pos_t haplotype_end = std::min(contig_len, ref_hp_range.end + extend);
+    std::string ref_haplotype(contig_seq + haplotype_beg, haplotype_end - haplotype_beg);
+    hts_pos_t hp_end = ref_hp_range.end - haplotype_beg;
+
+    std::string insertion_haplotype = ref_haplotype;
+    insertion_haplotype.insert(hp_end, insertion_len, hp_base);
+
+    ungapped_aln_t ref_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), ref_haplotype.c_str(), ref_haplotype.length(), 0);
+    ungapped_aln_t insertion_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), insertion_haplotype.c_str(), insertion_haplotype.length(), 0);
+
+    if (insertion_aln.score > ref_aln.score) return observed_hp_len;
+    if (ref_aln.score > insertion_aln.score) return ref_hp_len;
+    return UNDEFINED_HP_LEN;
 }
 
 // If the tail is unclipped, calculate mismatches by simply counting mismatches in its alignment
@@ -288,11 +315,52 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         right++;
     }
 
+    int adjacent_5p_qpos = is_rev ? right : left - 1;
+    bool hp_run_extends_into_5p_tail = false;
+    if (adjacent_5p_qpos >= 0 && adjacent_5p_qpos < (int) read_seq.length() &&
+        read_seq[adjacent_5p_qpos] == hp_base) {
+        hts_pos_t mapped_rpos = qpos_to_rpos[adjacent_5p_qpos];
+        bool maps_outside_ref_hp = mapped_rpos < ref_hp_range.beg || mapped_rpos >= ref_hp_range.end;
+        bool maps_to_valid_ref_base = mapped_rpos >= 0 && mapped_rpos < contig_len;
+        hp_run_extends_into_5p_tail = maps_outside_ref_hp && maps_to_valid_ref_base && toupper(contig_seq[mapped_rpos]) != hp_base;
+    }
+
+    int adjacent_3p_qpos = is_rev ? left - 1 : right;
+    bool hp_run_extends_into_3p_tail = false;
+    if (adjacent_3p_qpos >= 0 && adjacent_3p_qpos < (int) read_seq.length() &&
+        read_seq[adjacent_3p_qpos] == hp_base) {
+        hts_pos_t mapped_rpos = qpos_to_rpos[adjacent_3p_qpos];
+        bool maps_outside_ref_hp = mapped_rpos < ref_hp_range.beg || mapped_rpos >= ref_hp_range.end;
+        bool maps_to_valid_ref_base = mapped_rpos >= 0 && mapped_rpos < contig_len;
+        hp_run_extends_into_3p_tail = maps_outside_ref_hp && maps_to_valid_ref_base && toupper(contig_seq[mapped_rpos]) != hp_base;
+    }
+
+    int resolved_hp_len = right - left;
+    if (hp_run_extends_into_3p_tail) {
+        if (is_rev) {
+            while (left > 0 && read_seq[left-1] == hp_base) left--;
+        } else {
+            while (right < (int) read_seq.length() && read_seq[right] == hp_base) right++;
+        }
+
+        resolved_hp_len = resolve_3p_overflow_hp_len(read_seq, right - left, ref_hp_range, hp_base, contig_seq, contig_len);
+        int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
+        if (resolved_hp_len == ref_hp_len) {
+            if (is_rev) {
+                left = right - ref_hp_len;
+            } else {
+                right = left + ref_hp_len;
+            }
+        }
+    }
+
     int left_len = left;
     int right_len = read_seq.length() - right;
 
     hp_read_info_t hp_read_info;
-    hp_read_info.hp_len = right - left;
+    hp_read_info.hp_len = resolved_hp_len;
+    hp_read_info.hp_run_extends_into_5p_tail = hp_run_extends_into_5p_tail;
+    hp_read_info.hp_run_extends_into_3p_tail = hp_run_extends_into_3p_tail;
     int left_mismatches = tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos,
         contig_seq, contig_len, 0, left, true, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.beg);
     int right_mismatches = tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos,
@@ -316,30 +384,6 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
             hp_read_info.ref_hp_has_non_hp_read_base = true;
             break;
         }
-    }
-
-    // The inferred run stops at an HP query base aligned just outside the
-    // reference HP. If that reference base is non-HP, the query run really
-    // extends into the 5' tail.
-    int adjacent_5p_qpos = is_rev ? right : left - 1;
-    if (adjacent_5p_qpos >= 0 && adjacent_5p_qpos < (int) read_seq.length() &&
-        read_seq[adjacent_5p_qpos] == hp_base) {
-        hts_pos_t mapped_rpos = qpos_to_rpos[adjacent_5p_qpos];
-        bool maps_outside_ref_hp = mapped_rpos < ref_hp_range.beg || mapped_rpos >= ref_hp_range.end;
-        bool maps_to_valid_ref_base = mapped_rpos >= 0 && mapped_rpos < contig_len;
-        hp_read_info.hp_run_extends_into_5p_tail = maps_outside_ref_hp && maps_to_valid_ref_base && toupper(contig_seq[mapped_rpos]) != hp_base;
-    }
-
-    // The inferred run stops at an HP query base aligned just outside the
-    // reference HP. If that reference base is non-HP, the query run really
-    // extends into the 3' tail and must not count as exact REF support.
-    int adjacent_3p_qpos = is_rev ? left - 1 : right;
-    if (adjacent_3p_qpos >= 0 && adjacent_3p_qpos < (int) read_seq.length() &&
-        read_seq[adjacent_3p_qpos] == hp_base) {
-        hts_pos_t mapped_rpos = qpos_to_rpos[adjacent_3p_qpos];
-        bool maps_outside_ref_hp = mapped_rpos < ref_hp_range.beg || mapped_rpos >= ref_hp_range.end;
-        bool maps_to_valid_ref_base = mapped_rpos >= 0 && mapped_rpos < contig_len;
-        hp_read_info.hp_run_extends_into_3p_tail = maps_outside_ref_hp && maps_to_valid_ref_base && toupper(contig_seq[mapped_rpos]) != hp_base;
     }
 
     return hp_read_info;
