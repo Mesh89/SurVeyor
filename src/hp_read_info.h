@@ -67,7 +67,14 @@ int best_ungapped_mismatch_count(const std::string& query, char* ref, hts_pos_t 
     return best_mismatches;
 }
 
-int resolve_hp_overflow_hp_len(const std::string& read_seq, int observed_hp_len,
+struct hp_overflow_resolution_t {
+    int hp_len, left, right;
+
+    hp_overflow_resolution_t(int hp_len = UNDEFINED_HP_LEN, int left = 0, int right = 0) :
+        hp_len(hp_len), left(left), right(right) {}
+};
+
+hp_overflow_resolution_t resolve_hp_overflow(const std::string& read_seq, int observed_hp_len,
     hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len) {
 
     int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
@@ -80,21 +87,29 @@ int resolve_hp_overflow_hp_len(const std::string& read_seq, int observed_hp_len,
 
     std::string left_flank = ref_haplotype.substr(0, hp_beg);
     std::string right_flank = ref_haplotype.substr(hp_end);
-    int best_hp_len = UNDEFINED_HP_LEN;
+    hp_overflow_resolution_t best_resolution;
     int best_score = 0;
     bool best_score_is_tied = false;
     for (int hp_len = 0; hp_len <= std::max(ref_hp_len, observed_hp_len); hp_len++) {
         std::string haplotype = left_flank + std::string(hp_len, hp_base) + right_flank;
         ungapped_aln_t aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), haplotype.c_str(), haplotype.length(), 0);
-        if (best_hp_len == UNDEFINED_HP_LEN || aln.score > best_score) {
-            best_hp_len = hp_len;
+        int candidate_hp_beg = left_flank.length();
+        int candidate_hp_end = candidate_hp_beg + hp_len;
+        if (aln.ref_begin > candidate_hp_beg || aln.ref_end < candidate_hp_end) continue;
+
+        int query_hp_beg = aln.query_begin + candidate_hp_beg - aln.ref_begin;
+        int query_hp_end = query_hp_beg + hp_len;
+        if (query_hp_beg < 0 || query_hp_end > (int) read_seq.length()) continue;
+
+        if (best_resolution.hp_len == UNDEFINED_HP_LEN || aln.score > best_score) {
+            best_resolution = hp_overflow_resolution_t(hp_len, query_hp_beg, query_hp_end);
             best_score = aln.score;
             best_score_is_tied = false;
         } else if (aln.score == best_score) {
             best_score_is_tied = true;
         }
     }
-    return best_score_is_tied ? UNDEFINED_HP_LEN : best_hp_len;
+    return best_score_is_tied ? hp_overflow_resolution_t() : best_resolution;
 }
 
 // If the tail is unclipped, calculate mismatches by simply counting mismatches in its alignment
@@ -348,17 +363,6 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         } else {
             while (left > 0 && read_seq[left-1] == hp_base) left--;
         }
-
-        resolved_hp_len = resolve_hp_overflow_hp_len(read_seq, right - left, ref_hp_range, hp_base, contig_seq, contig_len);
-        if (resolved_hp_len != UNDEFINED_HP_LEN) {
-            if (is_rev && left + resolved_hp_len <= (int) read_seq.length()) {
-                right = left + resolved_hp_len;
-            } else if (!is_rev && resolved_hp_len <= right) {
-                left = right - resolved_hp_len;
-            } else {
-                resolved_hp_len = UNDEFINED_HP_LEN;
-            }
-        }
     }
 
     if (hp_run_extends_into_3p_tail) {
@@ -367,16 +371,14 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         } else {
             while (right < (int) read_seq.length() && read_seq[right] == hp_base) right++;
         }
+    }
 
-        resolved_hp_len = resolve_hp_overflow_hp_len(read_seq, right - left, ref_hp_range, hp_base, contig_seq, contig_len);
+    if (hp_run_extends_into_5p_tail || hp_run_extends_into_3p_tail) {
+        hp_overflow_resolution_t resolution = resolve_hp_overflow(read_seq, right - left, ref_hp_range, hp_base, contig_seq, contig_len);
+        resolved_hp_len = resolution.hp_len;
         if (resolved_hp_len != UNDEFINED_HP_LEN) {
-            if (is_rev && resolved_hp_len <= right) {
-                left = right - resolved_hp_len;
-            } else if (!is_rev && left + resolved_hp_len <= (int) read_seq.length()) {
-                right = left + resolved_hp_len;
-            } else {
-                resolved_hp_len = UNDEFINED_HP_LEN;
-            }
+            left = resolution.left;
+            right = resolution.right;
         }
     }
 
