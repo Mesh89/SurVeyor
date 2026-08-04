@@ -566,10 +566,33 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     StripedSmithWaterman::Filter filter_default;
 
     bam1_t* read = bam_init1();
+    std::vector<std::shared_ptr<bam1_t>> collected_reads;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (!is_proper_pair(read, stats.min_is, stats.max_is)) continue;
 
+        collected_reads.emplace_back(bam_dup1(read), bam_destroy1);
+    }
+    hts_itr_destroy(iter);
+
+    bool left_side_has_5p_read = false, right_side_has_5p_read = false;
+    bool left_side_has_5p_deletion = false, right_side_has_5p_deletion = false;
+    for (const std::shared_ptr<bam1_t>& collected_read : collected_reads) {
+        hp_adjacent_indel_info_t indel_info = get_adjacent_indel_info(collected_read.get(), ref_hp_range);
+        bool is_reverse = bam_is_rev(collected_read.get());
+        const hp_side_indel_info_t& five_p_info = is_reverse ? indel_info.right : indel_info.left;
+        bool& side_has_5p_read = is_reverse ? right_side_has_5p_read : left_side_has_5p_read;
+        bool& side_has_5p_deletion = is_reverse ? right_side_has_5p_deletion : left_side_has_5p_deletion;
+        if (five_p_info.aligned_len >= config.min_clip_len) {
+            side_has_5p_read = true;
+            if (five_p_info.indel_len < 0) side_has_5p_deletion = true;
+        }
+    }
+    bool has_no_left_deletion = left_side_has_5p_read && !left_side_has_5p_deletion;
+    bool has_no_right_deletion = right_side_has_5p_read && !right_side_has_5p_deletion;
+
+    for (const std::shared_ptr<bam1_t>& collected_read : collected_reads) {
+        bam1_t* read = collected_read.get();
         bool assigned_outside_group = reassign_evidence;
         for (int i = 0; i < hp_indels.size(); i++) {
              if (!reassign_evidence || !evidence_map->is_read_assigned_to_different_sv(read, hp_indels[i])) {
@@ -578,21 +601,8 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             }
         }
 
-        // If a read is clipped, try and realign it using a more permissive aligner, due to the very noisy nature of HP reads tails
-        // The realignment succeeds if the read is no longer clipped; otherwise, we fall back to the bam original alignment
-        hp_read_info_t hp_read_info;
-        // if (is_clipped(read, config.min_clip_len)) {
-        //     StripedSmithWaterman::Alignment aln;
-        //     std::string seq = get_sequence(read);
-        //     permissive_aligner.Align(seq.c_str(), ref_allele.get(), ref_allele_len, filter_default, &aln, 0);
-        //     if (!is_clipped(aln, config.min_clip_len)) {
-        //         hp_read_info = calculate_hp_read_info(aln, seq, ref_allele_hp_range, hp_base, contig_seq, contig_len, false, bp_support_read_t(read));
-        //     } else {
-        //         hp_read_info = calculate_hp_read_info(read, ref_hp_range, hp_base, contig_seq, contig_len);
-        //     }
-        // } else {
-            hp_read_info = calculate_hp_read_info(read, ref_hp_range, hp_base, contig_seq, contig_len);
-        // }
+        hp_read_info_t hp_read_info = calculate_hp_read_info(
+            read, ref_hp_range, hp_base, contig_seq, contig_len, has_no_left_deletion, has_no_right_deletion);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
             // Even if we are discarding this reads because the tails are too short, we still want to prevent it from being used as evidence for non-HP indels
@@ -614,7 +624,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             hp_read_infos.push_back(hp_read_info);
         }
     }
-    hts_itr_destroy(iter);
+    collected_reads.clear();
 
     // Realign reads that "escaped" to a different locus, but their mate betrays them
     StripedSmithWaterman::Alignment ref_aln;

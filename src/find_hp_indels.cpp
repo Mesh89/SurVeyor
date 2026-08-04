@@ -209,7 +209,7 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 hp_run_t& hp_run = hp_runs[hp_idx];
 
                 hts_pair_pos_t hp_range = {hp_run.beg, hp_run.end};
-                hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base, contig_seq, contig_len, 0);
+                hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base, contig_seq, contig_len, false, false, 0);
                 if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error, max_3p_error_rates)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
