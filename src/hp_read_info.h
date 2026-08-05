@@ -196,7 +196,7 @@ struct hp_adjacent_indel_info_t {
     hp_side_indel_info_t right;
 };
 
-hp_adjacent_indel_info_t get_adjacent_indel_info(bam1_t* read, hts_pair_pos_t hp_range, int adjacency_window = 3) {
+hp_adjacent_indel_info_t get_adjacent_indel_info(bam1_t* read, hts_pair_pos_t hp_range, int adjacency_window = 5) {
 
     hp_adjacent_indel_info_t info;
     if (read == NULL) return info;
@@ -471,7 +471,7 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
 }
 
 hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len,
-    bool has_no_left_deletion = false, bool has_no_right_deletion = false, int tail_align_leeway = 10) {
+    bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10) {
     if (read == NULL || is_unmapped(read) || !is_primary(read) || read->core.l_qseq <= 0) {
         return hp_read_info_t();
     }
@@ -520,12 +520,13 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
     }
     int force_resolution_max_hp_len = UNDEFINED_HP_LEN;
     bool is_reverse = bam_is_rev(read);
-    bool can_resolve_3p_deletion = is_reverse ? has_no_left_deletion : has_no_right_deletion;
-    if (can_resolve_3p_deletion) {
+    bool can_resolve_3p_indel = is_reverse ? has_no_left_indel : has_no_right_indel;
+    if (can_resolve_3p_indel) {
         hp_adjacent_indel_info_t adjacent_indel_info = get_adjacent_indel_info(read, ref_hp_range);
         const hp_side_indel_info_t& three_p_info = is_reverse ? adjacent_indel_info.left : adjacent_indel_info.right;
-        if (three_p_info.indel_len < 0) {
-            force_resolution_max_hp_len = ref_hp_range.end - ref_hp_range.beg;
+        if (three_p_info.indel_len != 0) {
+            int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
+            force_resolution_max_hp_len = ref_hp_len + std::max(0, three_p_info.indel_len);
         }
     }
     hp_read_info_t hp_read_info = calculate_hp_read_info_core(read_seq, qpos_to_rpos, anchors, last_qpos_before_ref_hp, first_qpos_after_ref_hp,

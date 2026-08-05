@@ -576,20 +576,20 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     hts_itr_destroy(iter);
 
     bool left_side_has_5p_read = false, right_side_has_5p_read = false;
-    bool left_side_has_5p_deletion = false, right_side_has_5p_deletion = false;
+    bool left_side_has_5p_indel = false, right_side_has_5p_indel = false;
     for (const std::shared_ptr<bam1_t>& collected_read : collected_reads) {
         hp_adjacent_indel_info_t indel_info = get_adjacent_indel_info(collected_read.get(), ref_hp_range);
         bool is_reverse = bam_is_rev(collected_read.get());
         const hp_side_indel_info_t& five_p_info = is_reverse ? indel_info.right : indel_info.left;
         bool& side_has_5p_read = is_reverse ? right_side_has_5p_read : left_side_has_5p_read;
-        bool& side_has_5p_deletion = is_reverse ? right_side_has_5p_deletion : left_side_has_5p_deletion;
+        bool& side_has_5p_indel = is_reverse ? right_side_has_5p_indel : left_side_has_5p_indel;
         if (five_p_info.aligned_len >= config.min_clip_len) {
             side_has_5p_read = true;
-            if (five_p_info.indel_len < 0) side_has_5p_deletion = true;
+            if (five_p_info.indel_len != 0) side_has_5p_indel = true;
         }
     }
-    bool has_no_left_deletion = left_side_has_5p_read && !left_side_has_5p_deletion;
-    bool has_no_right_deletion = right_side_has_5p_read && !right_side_has_5p_deletion;
+    bool has_no_left_indel = left_side_has_5p_read && !left_side_has_5p_indel;
+    bool has_no_right_indel = right_side_has_5p_read && !right_side_has_5p_indel;
 
     for (const std::shared_ptr<bam1_t>& collected_read : collected_reads) {
         bam1_t* read = collected_read.get();
@@ -602,7 +602,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         }
 
         hp_read_info_t hp_read_info = calculate_hp_read_info(
-            read, ref_hp_range, hp_base, contig_seq, contig_len, has_no_left_deletion, has_no_right_deletion);
+            read, ref_hp_range, hp_base, contig_seq, contig_len, has_no_left_indel, has_no_right_indel);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
             // Even if we are discarding this reads because the tails are too short, we still want to prevent it from being used as evidence for non-HP indels
