@@ -602,7 +602,8 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         }
 
         hp_read_info_t hp_read_info = calculate_hp_read_info(
-            read, ref_hp_range, hp_base, contig_seq, contig_len, has_no_left_indel, has_no_right_indel);
+            read, ref_hp_range, hp_base, contig_seq, contig_len, ref_allele.get(), ref_allele_len,
+            ref_allele_hp_range, permissive_aligner, has_no_left_indel, has_no_right_indel);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
             // Even if we are discarding this reads because the tails are too short, we still want to prevent it from being used as evidence for non-HP indels

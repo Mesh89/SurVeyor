@@ -598,4 +598,25 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
     return hp_read_info;
 }
 
+hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range, char hp_base,
+    char* contig_seq, hts_pos_t contig_len, char* ref_allele, hts_pos_t ref_allele_len,
+    hts_pair_pos_t ref_allele_hp_range, StripedSmithWaterman::Aligner& permissive_aligner,
+    bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10) {
+
+    if (read != NULL && is_clipped(read, 1)) {
+        std::string read_seq = get_sequence(read);
+        StripedSmithWaterman::Alignment ref_aln;
+        StripedSmithWaterman::Filter filter_default;
+        if (permissive_aligner.Align(read_seq.c_str(), ref_allele, ref_allele_len, filter_default, &ref_aln, 0) && !ref_aln.cigar.empty() && !is_clipped(ref_aln)) {
+            hp_read_info_t hp_read_info = calculate_hp_read_info(ref_aln, read_seq, ref_allele_hp_range,
+                hp_base, ref_allele, ref_allele_len, bam_is_rev(read), bp_support_read_t(read), tail_align_leeway);
+            std::vector<hp_cigar_op_t> normalized_read_cigar = normalized_cigar(read);
+            hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
+            return hp_read_info;
+        }
+    }
+
+    return calculate_hp_read_info(read, ref_hp_range, hp_base, contig_seq, contig_len, has_no_left_indel, has_no_right_indel, tail_align_leeway);
+}
+
 #endif
