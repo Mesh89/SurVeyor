@@ -673,7 +673,9 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         rescued_read.mate_pos = read->core.pos;
         rescued_read.mate_endpos = endpos;
         rescued_read.is_first_in_pair = !is_first_read(read);
-        hp_read_info_t hp_read_info = calculate_hp_read_info(ref_aln, mate_seq, ref_allele_hp_range, hp_base, ref_allele.get(), ref_allele_len, aln_as_rev, rescued_read);
+        hp_read_info_t hp_read_info = calculate_hp_read_info(ref_aln, mate_seq, ref_allele_hp_range,
+            hp_base, ref_allele.get(), ref_allele_len, aln_as_rev, rescued_read, 10,
+            has_no_left_indel, has_no_right_indel);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
             continue;

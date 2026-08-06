@@ -178,6 +178,25 @@ struct hp_cigar_op_t {
     hp_cigar_op_t(char op, hts_pos_t len) : op(op), len(len) {}
 };
 
+std::vector<hp_cigar_op_t> normalized_cigar(const StripedSmithWaterman::Alignment& aln) {
+    std::vector<hp_cigar_op_t> cigar;
+    cigar.reserve(aln.cigar.size());
+    for (uint32_t cigar_op : aln.cigar) {
+        cigar.emplace_back(cigar_int_to_op(cigar_op), cigar_int_to_len(cigar_op));
+    }
+    return cigar;
+}
+
+std::vector<hp_cigar_op_t> normalized_cigar(bam1_t* read) {
+    std::vector<hp_cigar_op_t> cigar;
+    cigar.reserve(read->core.n_cigar);
+    uint32_t* bam_cigar = bam_get_cigar(read);
+    for (uint32_t i = 0; i < read->core.n_cigar; i++) {
+        cigar.emplace_back(bam_cigar_opchr(bam_cigar[i]), bam_cigar_oplen(bam_cigar[i]));
+    }
+    return cigar;
+}
+
 bool insertion_has_non_hp_bases(const std::string& read_seq, int qpos, int len, char hp_base) {
     if (qpos < 0 || qpos + len > (int) read_seq.length()) return true;
     for (int i = 0; i < len; i++) {
@@ -196,35 +215,36 @@ struct hp_adjacent_indel_info_t {
     hp_side_indel_info_t right;
 };
 
-hp_adjacent_indel_info_t get_adjacent_indel_info(bam1_t* read, hts_pair_pos_t hp_range, int adjacency_window = 5) {
+hp_adjacent_indel_info_t get_adjacent_indel_info(const std::vector<hp_cigar_op_t>& cigar,
+    hts_pos_t ref_begin, hts_pair_pos_t hp_range, int adjacency_window = 5) {
 
     hp_adjacent_indel_info_t info;
-    if (read == NULL) return info;
-
-    hts_pos_t rpos = read->core.pos;
-    uint32_t* cigar = bam_get_cigar(read);
-    for (uint32_t i = 0; i < read->core.n_cigar; i++) {
-        char op = bam_cigar_opchr(cigar[i]);
-        int len = bam_cigar_oplen(cigar[i]);
-        if (op == 'I') {
-            if (rpos < hp_range.beg && rpos >= hp_range.beg - adjacency_window) info.left.indel_len = len;
-            if (rpos > hp_range.end && rpos <= hp_range.end + adjacency_window && info.right.indel_len == 0) info.right.indel_len = len;
-        } else if (op == 'D') {
-            hts_pos_t deletion_end = rpos + len;
-            if (deletion_end <= hp_range.beg && deletion_end >= hp_range.beg - adjacency_window) info.left.indel_len = -len;
-            if (rpos >= hp_range.end && rpos <= hp_range.end + adjacency_window && info.right.indel_len == 0) info.right.indel_len = -len;
+    hts_pos_t rpos = ref_begin;
+    for (const hp_cigar_op_t& cigar_op : cigar) {
+        if (cigar_op.op == 'I') {
+            if (rpos < hp_range.beg && rpos >= hp_range.beg - adjacency_window) info.left.indel_len = cigar_op.len;
+            if (rpos > hp_range.end && rpos <= hp_range.end + adjacency_window && info.right.indel_len == 0) info.right.indel_len = cigar_op.len;
+        } else if (cigar_op.op == 'D') {
+            hts_pos_t deletion_end = rpos + cigar_op.len;
+            if (deletion_end <= hp_range.beg && deletion_end >= hp_range.beg - adjacency_window) info.left.indel_len = -cigar_op.len;
+            if (rpos >= hp_range.end && rpos <= hp_range.end + adjacency_window && info.right.indel_len == 0) info.right.indel_len = -cigar_op.len;
             rpos = deletion_end;
-        } else if (op == 'N') {
-            rpos += len;
-        } else if (op == 'M' || op == '=' || op == 'X') {
-            info.left.aligned_len += std::max<hts_pos_t>(0, std::min(rpos + len, hp_range.beg) - rpos);
-            info.right.aligned_len += std::max<hts_pos_t>(0, rpos + len - std::max(rpos, hp_range.end));
-            rpos += len;
+        } else if (cigar_op.op == 'N') {
+            rpos += cigar_op.len;
+        } else if (cigar_op.op == 'M' || cigar_op.op == '=' || cigar_op.op == 'X') {
+            info.left.aligned_len += std::max<hts_pos_t>(0, std::min(rpos + cigar_op.len, hp_range.beg) - rpos);
+            info.right.aligned_len += std::max<hts_pos_t>(0, rpos + cigar_op.len - std::max(rpos, hp_range.end));
+            rpos += cigar_op.len;
         }
     }
-    if (bam_endpos(read) < hp_range.beg) info.left.aligned_len = 0;
-    if (read->core.pos > hp_range.end) info.right.aligned_len = 0;
+    if (rpos < hp_range.beg) info.left.aligned_len = 0;
+    if (ref_begin > hp_range.end) info.right.aligned_len = 0;
     return info;
+}
+
+hp_adjacent_indel_info_t get_adjacent_indel_info(bam1_t* read, hts_pair_pos_t hp_range, int adjacency_window = 5) {
+    if (read == NULL) return hp_adjacent_indel_info_t();
+    return get_adjacent_indel_info(normalized_cigar(read), read->core.pos, hp_range, adjacency_window);
 }
 
 bool cigar_has_indel_outside_hp(const std::vector<hp_cigar_op_t>& cigar, hts_pos_t ref_begin, hts_pair_pos_t hp_range) {
@@ -269,25 +289,6 @@ bool cigar_has_hp_deletion_extending_outside_hp(const std::vector<hp_cigar_op_t>
         }
     }
     return false;
-}
-
-std::vector<hp_cigar_op_t> normalized_cigar(const StripedSmithWaterman::Alignment& aln) {
-    std::vector<hp_cigar_op_t> cigar;
-    cigar.reserve(aln.cigar.size());
-    for (uint32_t cigar_op : aln.cigar) {
-        cigar.emplace_back(cigar_int_to_op(cigar_op), cigar_int_to_len(cigar_op));
-    }
-    return cigar;
-}
-
-std::vector<hp_cigar_op_t> normalized_cigar(bam1_t* read) {
-    std::vector<hp_cigar_op_t> cigar;
-    cigar.reserve(read->core.n_cigar);
-    uint32_t* bam_cigar = bam_get_cigar(read);
-    for (uint32_t i = 0; i < read->core.n_cigar; i++) {
-        cigar.emplace_back(bam_cigar_opchr(bam_cigar[i]), bam_cigar_oplen(bam_cigar[i]));
-    }
-    return cigar;
 }
 
 bool has_unexplained_indel_outside_hp(const hp_read_info_t& hp_read_info, bool allele_has_aux_indels,
@@ -542,7 +543,7 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
 
 hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, const std::string& read_seq,
     hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len, bool is_rev, bp_support_read_t read,
-    int tail_align_leeway = 10) {
+    int tail_align_leeway = 10, bool has_no_left_indel = false, bool has_no_right_indel = false) {
     
         if (read_seq.empty() || aln.cigar.empty()) {
         return hp_read_info_t();
@@ -592,6 +593,15 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
     std::vector<hp_cigar_op_t> normalized_aln_cigar = normalized_cigar(aln);
     bool hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
     int force_resolution_max_hp_len = hp_deletion_extends_outside_hp ? ref_hp_range.end - ref_hp_range.beg : UNDEFINED_HP_LEN;
+    bool can_resolve_3p_indel = is_rev ? has_no_left_indel : has_no_right_indel;
+    if (can_resolve_3p_indel) {
+        hp_adjacent_indel_info_t adjacent_indel_info = get_adjacent_indel_info(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
+        const hp_side_indel_info_t& three_p_info = is_rev ? adjacent_indel_info.left : adjacent_indel_info.right;
+        if (three_p_info.indel_len != 0) {
+            int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
+            force_resolution_max_hp_len = std::max(force_resolution_max_hp_len, ref_hp_len + std::max(0, three_p_info.indel_len));
+        }
+    }
     hp_read_info_t hp_read_info = calculate_hp_read_info_core(read_seq, qpos_to_rpos, anchors, last_qpos_before_ref_hp, first_qpos_after_ref_hp,
         ref_hp_range, hp_base, contig_seq, contig_len, is_rev, get_left_clip_size(aln) > 0, get_right_clip_size(aln) > 0,
         read, tail_align_leeway, force_resolution_max_hp_len);
@@ -612,7 +622,8 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
         StripedSmithWaterman::Filter filter_default;
         if (permissive_aligner.Align(read_seq.c_str(), ref_allele, ref_allele_len, filter_default, &ref_aln, 0) && !ref_aln.cigar.empty() && !is_clipped(ref_aln)) {
             hp_read_info_t hp_read_info = calculate_hp_read_info(ref_aln, read_seq, ref_allele_hp_range,
-                hp_base, ref_allele, ref_allele_len, bam_is_rev(read), bp_support_read_t(read), tail_align_leeway);
+                hp_base, ref_allele, ref_allele_len, bam_is_rev(read), bp_support_read_t(read), tail_align_leeway,
+                has_no_left_indel, has_no_right_indel);
             std::vector<hp_cigar_op_t> normalized_read_cigar = normalized_cigar(read);
             hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
             return hp_read_info;
