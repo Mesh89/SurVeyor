@@ -472,7 +472,8 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
 }
 
 hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len,
-    bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10) {
+    bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10,
+    int force_resolution_max_hp_len = UNDEFINED_HP_LEN) {
     if (read == NULL || is_unmapped(read) || !is_primary(read) || read->core.l_qseq <= 0) {
         return hp_read_info_t();
     }
@@ -521,7 +522,9 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
     }
     std::vector<hp_cigar_op_t> normalized_read_cigar = normalized_cigar(read);
     bool hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
-    int force_resolution_max_hp_len = hp_deletion_extends_outside_hp ? ref_hp_range.end - ref_hp_range.beg : UNDEFINED_HP_LEN;
+    if (hp_deletion_extends_outside_hp) {
+        force_resolution_max_hp_len = std::max<int>(force_resolution_max_hp_len, ref_hp_range.end - ref_hp_range.beg);
+    }
     bool is_reverse = bam_is_rev(read);
     bool can_resolve_3p_indel = is_reverse ? has_no_left_indel : has_no_right_indel;
     if (can_resolve_3p_indel) {
@@ -529,7 +532,7 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
         const hp_side_indel_info_t& three_p_info = is_reverse ? adjacent_indel_info.left : adjacent_indel_info.right;
         if (three_p_info.indel_len != 0) {
             int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
-            force_resolution_max_hp_len = ref_hp_len + std::max(0, three_p_info.indel_len);
+            force_resolution_max_hp_len = std::max(force_resolution_max_hp_len, ref_hp_len + std::max(0, three_p_info.indel_len));
         }
     }
     hp_read_info_t hp_read_info = calculate_hp_read_info_core(read_seq, qpos_to_rpos, anchors, last_qpos_before_ref_hp, first_qpos_after_ref_hp,
@@ -616,6 +619,7 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
     hts_pair_pos_t ref_allele_hp_range, StripedSmithWaterman::Aligner& permissive_aligner,
     bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10) {
 
+    int force_resolution_max_hp_len = UNDEFINED_HP_LEN;
     if (read != NULL && is_clipped(read, 1)) {
         std::string read_seq = get_sequence(read);
         StripedSmithWaterman::Alignment ref_aln;
@@ -628,9 +632,11 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
             hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
             return hp_read_info;
         }
+        force_resolution_max_hp_len = ref_hp_range.end - ref_hp_range.beg;
     }
 
-    return calculate_hp_read_info(read, ref_hp_range, hp_base, contig_seq, contig_len, has_no_left_indel, has_no_right_indel, tail_align_leeway);
+    return calculate_hp_read_info(read, ref_hp_range, hp_base, contig_seq, contig_len,
+        has_no_left_indel, has_no_right_indel, tail_align_leeway, force_resolution_max_hp_len);
 }
 
 #endif
