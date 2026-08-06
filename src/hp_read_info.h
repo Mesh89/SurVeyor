@@ -518,7 +518,9 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
             rpos += oplen;
         }
     }
-    int force_resolution_max_hp_len = UNDEFINED_HP_LEN;
+    std::vector<hp_cigar_op_t> normalized_read_cigar = normalized_cigar(read);
+    bool hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
+    int force_resolution_max_hp_len = hp_deletion_extends_outside_hp ? ref_hp_range.end - ref_hp_range.beg : UNDEFINED_HP_LEN;
     bool is_reverse = bam_is_rev(read);
     bool can_resolve_3p_indel = is_reverse ? has_no_left_indel : has_no_right_indel;
     if (can_resolve_3p_indel) {
@@ -532,9 +534,8 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
     hp_read_info_t hp_read_info = calculate_hp_read_info_core(read_seq, qpos_to_rpos, anchors, last_qpos_before_ref_hp, first_qpos_after_ref_hp,
         ref_hp_range, hp_base, contig_seq, contig_len, bam_is_rev(read), get_left_clip_size(read) > 0, get_right_clip_size(read) > 0,
         bp_support_read_t(read), tail_align_leeway, force_resolution_max_hp_len);
-    std::vector<hp_cigar_op_t> normalized_read_cigar = normalized_cigar(read);
     hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
-    hp_read_info.hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
+    hp_read_info.hp_deletion_extends_outside_hp = hp_deletion_extends_outside_hp;
     hp_read_info.hp_insertion_has_non_hp_bases = hp_insertion_has_non_hp_bases;
     return hp_read_info;
 }
@@ -588,12 +589,14 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
         }
     }
 
-    hp_read_info_t hp_read_info = calculate_hp_read_info_core(read_seq, qpos_to_rpos, anchors, last_qpos_before_ref_hp, first_qpos_after_ref_hp,
-        ref_hp_range, hp_base, contig_seq, contig_len, is_rev,
-        get_left_clip_size(aln) > 0, get_right_clip_size(aln) > 0, read, tail_align_leeway);
     std::vector<hp_cigar_op_t> normalized_aln_cigar = normalized_cigar(aln);
+    bool hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
+    int force_resolution_max_hp_len = hp_deletion_extends_outside_hp ? ref_hp_range.end - ref_hp_range.beg : UNDEFINED_HP_LEN;
+    hp_read_info_t hp_read_info = calculate_hp_read_info_core(read_seq, qpos_to_rpos, anchors, last_qpos_before_ref_hp, first_qpos_after_ref_hp,
+        ref_hp_range, hp_base, contig_seq, contig_len, is_rev, get_left_clip_size(aln) > 0, get_right_clip_size(aln) > 0,
+        read, tail_align_leeway, force_resolution_max_hp_len);
     hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
-    hp_read_info.hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
+    hp_read_info.hp_deletion_extends_outside_hp = hp_deletion_extends_outside_hp;
     hp_read_info.hp_insertion_has_non_hp_bases = hp_insertion_has_non_hp_bases;
     return hp_read_info;
 }
