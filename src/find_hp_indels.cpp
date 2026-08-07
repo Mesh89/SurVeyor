@@ -209,7 +209,13 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 hp_run_t& hp_run = hp_runs[hp_idx];
 
                 hts_pair_pos_t hp_range = {hp_run.beg, hp_run.end};
-                hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base, contig_seq, contig_len, false, false, 0);
+                hts_pos_t extend = read->core.l_qseq - 1;
+                hts_pos_t ref_allele_beg = std::max((hts_pos_t) 0, hp_run.beg - extend);
+                hts_pos_t ref_allele_end = std::min(contig_len, hp_run.end + extend);
+                hts_pair_pos_t ref_allele_hp_range = {hp_run.beg - ref_allele_beg, hp_run.end - ref_allele_beg};
+                hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base,
+                    contig_seq, contig_len, contig_seq + ref_allele_beg, ref_allele_end - ref_allele_beg,
+                    ref_allele_hp_range, false, false, 0);
                 if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error, max_3p_error_rates)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;

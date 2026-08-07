@@ -477,7 +477,7 @@ int choose_best_allele_idx_for_hp_len(int allele_len, std::vector<hp_read_info_t
 }
 
 void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_hp_range, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len,
-    stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& permissive_aligner,
+    stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner,
     std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, evidence_logger_t* evidence_logger,
     bool reassign_evidence, evidence_map_t* evidence_map) {
 
@@ -603,7 +603,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
         hp_read_info_t hp_read_info = calculate_hp_read_info(
             read, ref_hp_range, hp_base, contig_seq, contig_len, ref_allele.get(), ref_allele_len,
-            ref_allele_hp_range, permissive_aligner, has_no_left_indel, has_no_right_indel);
+            ref_allele_hp_range, has_no_left_indel, has_no_right_indel);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
             // Even if we are discarding this reads because the tails are too short, we still want to prevent it from being used as evidence for non-HP indels
@@ -657,6 +657,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
         aligner.Align(mate_seq.c_str(), ref_allele.get(), ref_allele_len, filter_default, &ref_aln, 0);
 
+        // reject 5p-clipped reads
         bool aln_as_rev = !bam_is_rev(read); // may seem confusing, but read is the *mate*, not the read we are realigning
         if ((!aln_as_rev && get_left_clip_size(ref_aln) > 0) ||
              (aln_as_rev && get_right_clip_size(ref_aln) > 0)) {
@@ -903,8 +904,6 @@ void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int c
     evidence_logger_t* evidence_logger, bool reassign_evidence, evidence_map_t* evidence_map) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
-    StripedSmithWaterman::Aligner permissive_aligner(2, 2, 6, 1, false);
-    
     int contig_id = contig_map.get_id(contig_name);
     read_mates(contig_id);
 
@@ -920,7 +919,7 @@ void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int c
     for (auto& kv : hp_indels_by_ref_hp_range) {
         std::vector<sv_t*>& hp_indels_in_range = kv.second;
         hts_pair_pos_t ref_hp_range = find_ref_hp_range_for_indel(hp_indels_in_range[0], contig_seq, contig_len);
-        genotype_hp_indels_group(hp_indels_in_range, ref_hp_range, bam_file, contig_seq, contig_len, stats, config, aligner, permissive_aligner,
+        genotype_hp_indels_group(hp_indels_in_range, ref_hp_range, bam_file, contig_seq, contig_len, stats, config, aligner,
             *mateseqs_w_mapq_chr, evidence_logger, reassign_evidence, evidence_map);
     }
 

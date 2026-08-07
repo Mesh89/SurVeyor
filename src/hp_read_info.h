@@ -55,7 +55,7 @@ int best_ungapped_mismatch_count(const std::string& query, char* ref, hts_pos_t 
     for (hts_pos_t i = 0; i + query.length() <= ref_len; i++) {
         int mismatches = 0;
         for (int j = 0; j < query.length(); j++) {
-            if (query[j] != std::toupper(ref[i + j])) {
+            if (query[j] != toupper(ref[i + j])) {
                 mismatches++;
             }
         }
@@ -68,10 +68,12 @@ int best_ungapped_mismatch_count(const std::string& query, char* ref, hts_pos_t 
 }
 
 struct hp_overflow_resolution_t {
-    int hp_len, left, right;
+    int hp_len, left, right, left_tail_mismatches, right_tail_mismatches;
 
-    hp_overflow_resolution_t(int hp_len = UNDEFINED_HP_LEN, int left = 0, int right = 0) :
-        hp_len(hp_len), left(left), right(right) {}
+    hp_overflow_resolution_t(int hp_len = UNDEFINED_HP_LEN, int left = 0, int right = 0,
+        int left_tail_mismatches = 0, int right_tail_mismatches = 0) :
+        hp_len(hp_len), left(left), right(right),
+        left_tail_mismatches(left_tail_mismatches), right_tail_mismatches(right_tail_mismatches) {}
 };
 
 hp_overflow_resolution_t resolve_hp_overflow(const std::string& read_seq, int observed_hp_len,
@@ -93,6 +95,7 @@ hp_overflow_resolution_t resolve_hp_overflow(const std::string& read_seq, int ob
     for (int hp_len = 0; hp_len <= std::max(ref_hp_len, observed_hp_len); hp_len++) {
         std::string haplotype = left_flank + std::string(hp_len, hp_base) + right_flank;
         ungapped_aln_t aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), haplotype.c_str(), haplotype.length(), 0);
+        if (aln.query_begin != 0 || aln.query_end != (int) read_seq.length()) continue;
         int candidate_hp_beg = left_flank.length();
         int candidate_hp_end = candidate_hp_beg + hp_len;
         if (aln.ref_begin > candidate_hp_beg || aln.ref_end < candidate_hp_end) continue;
@@ -102,7 +105,17 @@ hp_overflow_resolution_t resolve_hp_overflow(const std::string& read_seq, int ob
         if (query_hp_beg < 0 || query_hp_end > (int) read_seq.length()) continue;
 
         if (best_resolution.hp_len == UNDEFINED_HP_LEN || aln.score > best_score) {
-            best_resolution = hp_overflow_resolution_t(hp_len, query_hp_beg, query_hp_end);
+            int left_tail_mismatches = 0, right_tail_mismatches = 0;
+            for (int qpos = 0; qpos < query_hp_beg; qpos++) {
+                int ref_pos = aln.ref_begin + qpos;
+                if (toupper(read_seq[qpos]) != toupper(haplotype[ref_pos])) left_tail_mismatches++;
+            }
+            for (int qpos = query_hp_end; qpos < (int) read_seq.length(); qpos++) {
+                int ref_pos = aln.ref_begin + qpos;
+                if (toupper(read_seq[qpos]) != toupper(haplotype[ref_pos])) right_tail_mismatches++;
+            }
+            best_resolution = hp_overflow_resolution_t(hp_len, query_hp_beg, query_hp_end,
+                left_tail_mismatches, right_tail_mismatches);
             best_score = aln.score;
             best_score_is_tied = false;
         } else if (aln.score == best_score) {
@@ -135,7 +148,7 @@ int tail_mismatch_count_simple(bam1_t* read, const std::string& read_seq, const 
     for (int qpos = q_lo; qpos < q_hi; qpos++) {
         hts_pos_t rpos = qpos_to_rpos[qpos];
         if (rpos == -1 || rpos >= contig_len) continue;
-        if (std::toupper(read_seq[qpos]) != std::toupper(contig_seq[rpos])) {
+        if (toupper(read_seq[qpos]) != toupper(contig_seq[rpos])) {
             mismatches++;
         }
     }
@@ -164,7 +177,7 @@ int tail_mismatch_count_from_mapping(const std::string& read_seq, const std::vec
     for (int qpos = q_lo; qpos < q_hi; qpos++) {
         hts_pos_t rpos = qpos_to_rpos[qpos];
         if (rpos == -1 || rpos >= contig_len) continue;
-        if (std::toupper(read_seq[qpos]) != std::toupper(contig_seq[rpos])) {
+        if (toupper(read_seq[qpos]) != toupper(contig_seq[rpos])) {
             mismatches++;
         }
     }
@@ -200,7 +213,7 @@ std::vector<hp_cigar_op_t> normalized_cigar(bam1_t* read) {
 bool insertion_has_non_hp_bases(const std::string& read_seq, int qpos, int len, char hp_base) {
     if (qpos < 0 || qpos + len > (int) read_seq.length()) return true;
     for (int i = 0; i < len; i++) {
-        if (std::toupper(read_seq[qpos + i]) != hp_base) return true;
+        if (toupper(read_seq[qpos + i]) != hp_base) return true;
     }
     return false;
 }
@@ -336,6 +349,7 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
     if (anchors.empty()) {
         int hp_len = 0;
         int left_tail_len, right_tail_len;
+        hp_overflow_resolution_t resolution;
         if (last_qpos_before_ref_hp != -1 && first_qpos_after_ref_hp == -1) {
             left_tail_len = last_qpos_before_ref_hp + 1;
             right_tail_len = read_seq.length() - left_tail_len;
@@ -351,7 +365,7 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         }
 
         if (force_resolution_max_hp_len != UNDEFINED_HP_LEN) {
-            hp_overflow_resolution_t resolution = resolve_hp_overflow(read_seq,
+            resolution = resolve_hp_overflow(read_seq,
                 std::max(hp_len, force_resolution_max_hp_len), ref_hp_range, hp_base, contig_seq, contig_len);
             hp_len = resolution.hp_len;
             if (hp_len != UNDEFINED_HP_LEN) {
@@ -360,16 +374,28 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
             }
         }
 
-        int left_mismatches = tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos,
-            contig_seq, contig_len, 0, left_tail_len, true, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.beg);
-        int right_mismatches = tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos,
-            contig_seq, contig_len, read_seq.length() - right_tail_len, read_seq.length(), false,
-            left_clipped, right_clipped, tail_align_leeway, ref_hp_range.end);
+        bool resolved = resolution.hp_len != UNDEFINED_HP_LEN;
+        int left_mismatches = resolved ? resolution.left_tail_mismatches :
+            tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos, contig_seq, contig_len,
+                0, left_tail_len, true, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.beg);
+        int right_mismatches = resolved ? resolution.right_tail_mismatches :
+            tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos, contig_seq, contig_len,
+                read_seq.length() - right_tail_len, read_seq.length(), false,
+                left_clipped, right_clipped, tail_align_leeway, ref_hp_range.end);
 
         hp_read_info_t hp_read_info = !is_rev ?
             hp_read_info_t(hp_len, left_tail_len, right_tail_len, left_mismatches, right_mismatches, read) :
             hp_read_info_t(hp_len, right_tail_len, left_tail_len, right_mismatches, left_mismatches, read);
-        hp_read_info.aligned_5p_tail_len = aligned_5p_tail_len;
+        hp_read_info.aligned_5p_tail_len = resolved ?
+            (is_rev ? right_tail_len : left_tail_len) : aligned_5p_tail_len;
+        if (resolved) {
+            for (int qpos = resolution.left; qpos < resolution.right; qpos++) {
+                if (toupper(read_seq[qpos]) != hp_base) {
+                    hp_read_info.ref_hp_has_non_hp_read_base = true;
+                    break;
+                }
+            }
+        }
         return hp_read_info;
     }
 
@@ -426,9 +452,10 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         }
     }
 
+    hp_overflow_resolution_t resolution;
     if (hp_run_extends_into_5p_tail || hp_run_extends_into_3p_tail || force_resolution_max_hp_len != UNDEFINED_HP_LEN) {
         int observed_hp_len = std::max(right - left, force_resolution_max_hp_len);
-        hp_overflow_resolution_t resolution = resolve_hp_overflow(read_seq, observed_hp_len, ref_hp_range, hp_base, contig_seq, contig_len);
+        resolution = resolve_hp_overflow(read_seq, observed_hp_len, ref_hp_range, hp_base, contig_seq, contig_len);
         resolved_hp_len = resolution.hp_len;
         if (resolved_hp_len != UNDEFINED_HP_LEN) {
             left = resolution.left;
@@ -443,10 +470,13 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
     hp_read_info.hp_len = resolved_hp_len;
     hp_read_info.hp_run_extends_into_5p_tail = hp_run_extends_into_5p_tail;
     hp_read_info.hp_run_extends_into_3p_tail = hp_run_extends_into_3p_tail;
-    int left_mismatches = tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos,
-        contig_seq, contig_len, 0, left, true, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.beg);
-    int right_mismatches = tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos,
-        contig_seq, contig_len, right, read_seq.length(), false, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.end);
+    bool resolved = resolution.hp_len != UNDEFINED_HP_LEN;
+    int left_mismatches = resolved ? resolution.left_tail_mismatches :
+        tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos, contig_seq, contig_len,
+            0, left, true, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.beg);
+    int right_mismatches = resolved ? resolution.right_tail_mismatches :
+        tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos, contig_seq, contig_len,
+            right, read_seq.length(), false, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.end);
     if (is_rev) {
         hp_read_info.tail_5p_len = right_len;
         hp_read_info.tail_3p_len = left_len;
@@ -459,12 +489,22 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
         hp_read_info.tail_3p_mismatches = right_mismatches;
     }
     hp_read_info.read = read;
-    hp_read_info.aligned_5p_tail_len = aligned_5p_tail_len;
+    hp_read_info.aligned_5p_tail_len = resolved ?
+        (is_rev ? right_len : left_len) : aligned_5p_tail_len;
 
-    for (int anchor : anchors) {
-        if (std::toupper(read_seq[anchor]) != hp_base) {
-            hp_read_info.ref_hp_has_non_hp_read_base = true;
-            break;
+    if (resolved) {
+        for (int qpos = left; qpos < right; qpos++) {
+            if (toupper(read_seq[qpos]) != hp_base) {
+                hp_read_info.ref_hp_has_non_hp_read_base = true;
+                break;
+            }
+        }
+    } else {
+        for (int anchor : anchors) {
+            if (toupper(read_seq[anchor]) != hp_base) {
+                hp_read_info.ref_hp_has_non_hp_read_base = true;
+                break;
+            }
         }
     }
 
@@ -616,9 +656,9 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
 
 hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range, char hp_base,
     char* contig_seq, hts_pos_t contig_len, char* ref_allele, hts_pos_t ref_allele_len,
-    hts_pair_pos_t ref_allele_hp_range, StripedSmithWaterman::Aligner& permissive_aligner,
-    bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10) {
+    hts_pair_pos_t ref_allele_hp_range, bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10) {
 
+    static const StripedSmithWaterman::Aligner permissive_aligner(2, 2, 6, 1, false);
     int force_resolution_max_hp_len = UNDEFINED_HP_LEN;
     if (read != NULL && is_clipped(read, 1)) {
         std::string read_seq = get_sequence(read);
