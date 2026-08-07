@@ -38,6 +38,8 @@ struct hp_run_t {
     char base;
     int usable_reads = 0;
     std::unordered_map<int, int> hp_len_counts;
+    bool left_side_has_5p_read = false, right_side_has_5p_read = false;
+    bool left_side_has_5p_indel = false, right_side_has_5p_indel = false;
 
     hp_run_t(hts_pos_t beg, hts_pos_t end, char base) : beg(beg), end(end), base(base) {}
 };
@@ -154,8 +156,11 @@ void add_rescued_hp_read(hp_run_t& hp_run,
         return;
     }
 
+    bool has_no_left_indel = hp_run.left_side_has_5p_read && !hp_run.left_side_has_5p_indel;
+    bool has_no_right_indel = hp_run.right_side_has_5p_read && !hp_run.right_side_has_5p_indel;
     hp_read_info_t hp_read_info = calculate_hp_read_info(aln, mate_seq,
-        allele_hp_range, hp_run.base, &ref_allele[0], ref_allele.length(), aln_as_rev, bp_support_read_t(), 0);
+        allele_hp_range, hp_run.base, &ref_allele[0], ref_allele.length(), aln_as_rev, bp_support_read_t(), 0,
+        has_no_left_indel, has_no_right_indel);
     if (!is_usable_hp_read(hp_read_info, min_clip_len, max_seq_error, max_3p_error_rates)) return;
     hp_run.usable_reads++;
     hp_run.hp_len_counts[hp_read_info.hp_len]++;
@@ -207,15 +212,40 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
             size_t hp_idx = std::upper_bound(hp_run_ends.begin(), hp_run_ends.end(), read_beg) - hp_run_ends.begin();
             for (; hp_idx < hp_runs.size() && hp_runs[hp_idx].beg < read_end; hp_idx++) {
                 hp_run_t& hp_run = hp_runs[hp_idx];
+                hp_adjacent_indel_info_t indel_info = get_adjacent_indel_info(read.get(), {hp_run.beg, hp_run.end});
+                bool is_reverse = bam_is_rev(read.get());
+                const hp_side_indel_info_t& five_p_info = is_reverse ? indel_info.right : indel_info.left;
+                bool& side_has_5p_read = is_reverse ? hp_run.right_side_has_5p_read : hp_run.left_side_has_5p_read;
+                bool& side_has_5p_indel = is_reverse ? hp_run.right_side_has_5p_indel : hp_run.left_side_has_5p_indel;
+                if (five_p_info.aligned_len >= config->min_clip_len) {
+                    side_has_5p_read = true;
+                    if (five_p_info.indel_len != 0) side_has_5p_indel = true;
+                }
+            }
+        }
+        if (read_status < -1) throw std::runtime_error("Error while reading alignments for " + contig_name + ".");
+
+        iter.reset(sam_itr_querys(alignment_file->idx, alignment_file->header, region_ss.str().c_str()));
+        if (!iter) throw std::runtime_error("Unable to query alignments for " + contig_name + ".");
+        while ((read_status = sam_itr_next(alignment_file->file, iter.get(), read.get())) >= 0) {
+            if (is_unmapped(read.get()) || !is_primary(read.get()) || read->core.l_qseq <= 0) continue;
+
+            hts_pos_t read_beg = read->core.pos;
+            hts_pos_t read_end = bam_endpos(read.get());
+            size_t hp_idx = std::upper_bound(hp_run_ends.begin(), hp_run_ends.end(), read_beg) - hp_run_ends.begin();
+            for (; hp_idx < hp_runs.size() && hp_runs[hp_idx].beg < read_end; hp_idx++) {
+                hp_run_t& hp_run = hp_runs[hp_idx];
 
                 hts_pair_pos_t hp_range = {hp_run.beg, hp_run.end};
                 hts_pos_t extend = read->core.l_qseq - 1;
                 hts_pos_t ref_allele_beg = std::max((hts_pos_t) 0, hp_run.beg - extend);
                 hts_pos_t ref_allele_end = std::min(contig_len, hp_run.end + extend);
                 hts_pair_pos_t ref_allele_hp_range = {hp_run.beg - ref_allele_beg, hp_run.end - ref_allele_beg};
+                bool has_no_left_indel = hp_run.left_side_has_5p_read && !hp_run.left_side_has_5p_indel;
+                bool has_no_right_indel = hp_run.right_side_has_5p_read && !hp_run.right_side_has_5p_indel;
                 hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base,
                     contig_seq, contig_len, contig_seq + ref_allele_beg, ref_allele_end - ref_allele_beg,
-                    ref_allele_hp_range, false, false, 0);
+                    ref_allele_hp_range, has_no_left_indel, has_no_right_indel, 0);
                 if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error, max_3p_error_rates)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
