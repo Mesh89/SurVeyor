@@ -736,6 +736,31 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 		main_sv = nullptr; // reset main_sv to pick the next largest SV in the next iteration
 	}
 
+	// Collapse an adjacent insertion/deletion pair only after auxiliary haplotypes have been built.
+	for (auto& sv : main_svs) {
+		if (sv->svtype() != "DEL" && sv->svtype() != "INS") continue;
+		if (!sv->ins_seq.empty() && sv->start != sv->end) continue; // already complex
+		for (auto it = sv->aux_indels.begin(); it != sv->aux_indels.end(); ++it) {
+			if ((*it)->svtype() == sv->svtype()) continue;
+			auto del = sv->svtype() == "DEL" ? sv : *it;
+			auto ins = sv->svtype() == "INS" ? sv : *it;
+			if (ins->start != del->start && ins->start != del->end) continue;
+			bool ins_first = ins->start == del->start;
+			auto left_anchor_aln = ins_first ? ins->left_anchor_aln : del->left_anchor_aln;
+			auto right_anchor_aln = ins_first ? del->right_anchor_aln : ins->right_anchor_aln;
+			std::shared_ptr<sv_t> replacement;
+			if (del->svsize() > ins->svsize()) replacement = std::make_shared<deletion_t>(del->chr, del->start, del->end, ins->ins_seq, sv->rc_consensus, sv->lc_consensus, left_anchor_aln, right_anchor_aln);
+			else if (ins->svsize() > del->svsize()) replacement = std::make_shared<insertion_t>(del->chr, del->start, del->end, ins->ins_seq, sv->rc_consensus, sv->lc_consensus, left_anchor_aln, right_anchor_aln);
+			else replacement = std::make_shared<replacement_t>(del->chr, del->start, del->end, ins->ins_seq, sv->rc_consensus, sv->lc_consensus, left_anchor_aln, right_anchor_aln);
+			sv->aux_indels.erase(it);
+			replacement->aux_indels = std::move(sv->aux_indels);
+			replacement->aux_snps = std::move(sv->aux_snps);
+			replacement->mh_len = sv->mh_len;
+			sv = replacement;
+			break;
+		}
+	}
+
 	// associate SNPs to the closest main SV within readlen-2*min_clip_len bp
 	for (snp_t& snp : snps) {
 		for (auto& sv : main_svs) {
@@ -1006,6 +1031,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 
 	std::vector<std::shared_ptr<sv_t>> extra_svs = detect_svs_from_aln(left_part_aln, contig_name, ref_remap_lh_start,
 		left_part, svs[0], lowq_junction_prefix, 0, stats, config, true);
+	svs[0] = extra_svs[0];
 	for (const auto& sv : extra_svs) {
 		if (sv != svs[0] && sv->end <= svs[0]->start) {
 			svs.push_back(sv);
@@ -1032,6 +1058,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 
 	extra_svs = detect_svs_from_aln(right_part_aln, contig_name, ref_remap_rh_start, right_part, svs[0],
 		0, lowq_junction_suffix, stats, config, true);
+	svs[0] = extra_svs[0];
 	for (const auto& sv : extra_svs) {
 		if (sv != svs[0] && sv->start >= svs[0]->end) {
 			svs.push_back(sv);
