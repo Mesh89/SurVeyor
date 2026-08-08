@@ -38,8 +38,8 @@ struct hp_run_t {
     char base;
     int usable_reads = 0;
     std::unordered_map<int, int> hp_len_counts;
-    bool left_side_has_5p_read = false, right_side_has_5p_read = false;
-    bool left_side_has_5p_indel = false, right_side_has_5p_indel = false;
+    int left_side_5p_reads = 0, right_side_5p_reads = 0;
+    int left_side_5p_indel_reads = 0, right_side_5p_indel_reads = 0;
 
     hp_run_t(hts_pos_t beg, hts_pos_t end, char base) : beg(beg), end(end), base(base) {}
 };
@@ -156,8 +156,8 @@ void add_rescued_hp_read(hp_run_t& hp_run,
         return;
     }
 
-    bool has_no_left_indel = hp_run.left_side_has_5p_read && !hp_run.left_side_has_5p_indel;
-    bool has_no_right_indel = hp_run.right_side_has_5p_read && !hp_run.right_side_has_5p_indel;
+    bool has_no_left_indel = five_p_evidence_permits_iterative_hp_len_estimation(hp_run.left_side_5p_reads, hp_run.left_side_5p_indel_reads);
+    bool has_no_right_indel = five_p_evidence_permits_iterative_hp_len_estimation(hp_run.right_side_5p_reads, hp_run.right_side_5p_indel_reads);
     hp_read_info_t hp_read_info = calculate_hp_read_info(aln, mate_seq,
         allele_hp_range, hp_run.base, &ref_allele[0], ref_allele.length(), aln_as_rev, bp_support_read_t(), 0,
         has_no_left_indel, has_no_right_indel);
@@ -215,11 +215,11 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 hp_adjacent_indel_info_t indel_info = get_adjacent_indel_info(read.get(), {hp_run.beg, hp_run.end});
                 bool is_reverse = bam_is_rev(read.get());
                 const hp_side_indel_info_t& five_p_info = is_reverse ? indel_info.right : indel_info.left;
-                bool& side_has_5p_read = is_reverse ? hp_run.right_side_has_5p_read : hp_run.left_side_has_5p_read;
-                bool& side_has_5p_indel = is_reverse ? hp_run.right_side_has_5p_indel : hp_run.left_side_has_5p_indel;
+                int& side_5p_reads = is_reverse ? hp_run.right_side_5p_reads : hp_run.left_side_5p_reads;
+                int& side_5p_indel_reads = is_reverse ? hp_run.right_side_5p_indel_reads : hp_run.left_side_5p_indel_reads;
                 if (five_p_info.aligned_len >= config->min_clip_len) {
-                    side_has_5p_read = true;
-                    if (five_p_info.indel_len != 0) side_has_5p_indel = true;
+                    side_5p_reads++;
+                    if (five_p_info.indel_len != 0) side_5p_indel_reads++;
                 }
             }
         }
@@ -241,8 +241,8 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 hts_pos_t ref_allele_beg = std::max((hts_pos_t) 0, hp_run.beg - extend);
                 hts_pos_t ref_allele_end = std::min(contig_len, hp_run.end + extend);
                 hts_pair_pos_t ref_allele_hp_range = {hp_run.beg - ref_allele_beg, hp_run.end - ref_allele_beg};
-                bool has_no_left_indel = hp_run.left_side_has_5p_read && !hp_run.left_side_has_5p_indel;
-                bool has_no_right_indel = hp_run.right_side_has_5p_read && !hp_run.right_side_has_5p_indel;
+                bool has_no_left_indel = five_p_evidence_permits_iterative_hp_len_estimation(hp_run.left_side_5p_reads, hp_run.left_side_5p_indel_reads);
+                bool has_no_right_indel = five_p_evidence_permits_iterative_hp_len_estimation(hp_run.right_side_5p_reads, hp_run.right_side_5p_indel_reads);
                 hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base,
                     contig_seq, contig_len, contig_seq + ref_allele_beg, ref_allele_end - ref_allele_beg,
                     ref_allele_hp_range, has_no_left_indel, has_no_right_indel, 0);

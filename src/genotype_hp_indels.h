@@ -575,21 +575,21 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     }
     hts_itr_destroy(iter);
 
-    bool left_side_has_5p_read = false, right_side_has_5p_read = false;
-    bool left_side_has_5p_indel = false, right_side_has_5p_indel = false;
+    int left_side_5p_reads = 0, right_side_5p_reads = 0;
+    int left_side_5p_indel_reads = 0, right_side_5p_indel_reads = 0;
     for (const std::shared_ptr<bam1_t>& collected_read : collected_reads) {
         hp_adjacent_indel_info_t indel_info = get_adjacent_indel_info(collected_read.get(), ref_hp_range);
         bool is_reverse = bam_is_rev(collected_read.get());
         const hp_side_indel_info_t& five_p_info = is_reverse ? indel_info.right : indel_info.left;
-        bool& side_has_5p_read = is_reverse ? right_side_has_5p_read : left_side_has_5p_read;
-        bool& side_has_5p_indel = is_reverse ? right_side_has_5p_indel : left_side_has_5p_indel;
+        int& side_5p_reads = is_reverse ? right_side_5p_reads : left_side_5p_reads;
+        int& side_5p_indel_reads = is_reverse ? right_side_5p_indel_reads : left_side_5p_indel_reads;
         if (five_p_info.aligned_len >= config.min_clip_len) {
-            side_has_5p_read = true;
-            if (five_p_info.indel_len != 0) side_has_5p_indel = true;
+            side_5p_reads++;
+            if (five_p_info.indel_len != 0) side_5p_indel_reads++;
         }
     }
-    bool has_no_left_indel = left_side_has_5p_read && !left_side_has_5p_indel;
-    bool has_no_right_indel = right_side_has_5p_read && !right_side_has_5p_indel;
+    bool has_no_left_indel = five_p_evidence_permits_iterative_hp_len_estimation(left_side_5p_reads, left_side_5p_indel_reads);
+    bool has_no_right_indel = five_p_evidence_permits_iterative_hp_len_estimation(right_side_5p_reads, right_side_5p_indel_reads);
 
     for (const std::shared_ptr<bam1_t>& collected_read : collected_reads) {
         bam1_t* read = collected_read.get();

@@ -279,6 +279,10 @@ struct hp_adjacent_indel_info_t {
     hp_side_indel_info_t right;
 };
 
+bool five_p_evidence_permits_iterative_hp_len_estimation(int reads, int indel_reads) {
+    return reads > 0 && 10 * indel_reads < reads;
+}
+
 hp_adjacent_indel_info_t get_adjacent_indel_info(const std::vector<hp_cigar_op_t>& cigar,
     hts_pos_t ref_begin, hts_pair_pos_t hp_range, int adjacency_window = 5) {
 
