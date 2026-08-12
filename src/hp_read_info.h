@@ -77,7 +77,8 @@ struct hp_overflow_resolution_t {
 };
 
 hp_overflow_resolution_t resolve_hp_overflow(const std::string& read_seq, int observed_hp_len,
-    hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len) {
+    hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len,
+    bool is_rev, double max_5p_mismatch_rate) {
 
     int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
     hts_pos_t extend = read_seq.length() - 1;
@@ -122,7 +123,11 @@ hp_overflow_resolution_t resolve_hp_overflow(const std::string& read_seq, int ob
             best_score_is_tied = true;
         }
     }
-    return best_score_is_tied ? hp_overflow_resolution_t() : best_resolution;
+    if (best_score_is_tied || best_resolution.hp_len == UNDEFINED_HP_LEN) return hp_overflow_resolution_t();
+    int tail_5p_len = is_rev ? read_seq.length() - best_resolution.right : best_resolution.left;
+    int tail_5p_mismatches = is_rev ? best_resolution.right_tail_mismatches : best_resolution.left_tail_mismatches;
+    return tail_5p_len > 0 && double(tail_5p_mismatches) / tail_5p_len > max_5p_mismatch_rate ?
+        hp_overflow_resolution_t() : best_resolution;
 }
 
 // If the tail is unclipped, calculate mismatches by simply counting mismatches in its alignment
@@ -284,7 +289,7 @@ bool five_p_evidence_permits_iterative_hp_len_estimation(int reads, int indel_re
 }
 
 hp_adjacent_indel_info_t get_adjacent_indel_info(const std::vector<hp_cigar_op_t>& cigar,
-    hts_pos_t ref_begin, hts_pair_pos_t hp_range, int adjacency_window = 5) {
+    hts_pos_t ref_begin, hts_pair_pos_t hp_range, int adjacency_window) {
 
     hp_adjacent_indel_info_t info;
     hts_pos_t rpos = ref_begin;
@@ -310,7 +315,7 @@ hp_adjacent_indel_info_t get_adjacent_indel_info(const std::vector<hp_cigar_op_t
     return info;
 }
 
-hp_adjacent_indel_info_t get_adjacent_indel_info(bam1_t* read, hts_pair_pos_t hp_range, int adjacency_window = 5) {
+hp_adjacent_indel_info_t get_adjacent_indel_info(bam1_t* read, hts_pair_pos_t hp_range, int adjacency_window) {
     if (read == NULL) return hp_adjacent_indel_info_t();
     return get_adjacent_indel_info(normalized_cigar(read), read->core.pos, hp_range, adjacency_window);
 }
@@ -386,7 +391,8 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
     const std::vector<int>& anchors, hts_pos_t last_qpos_before_ref_hp, hts_pos_t first_qpos_after_ref_hp,
     hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len,
     bool is_rev, bool left_clipped, bool right_clipped, bp_support_read_t read, int tail_align_leeway,
-    int force_resolution_max_hp_len = UNDEFINED_HP_LEN, bool can_use_iterative_hp_len_estimation = false) {
+    int force_resolution_max_hp_len = UNDEFINED_HP_LEN, bool can_use_iterative_hp_len_estimation = false,
+    double max_5p_mismatch_rate = 1) {
 
     if (read_seq.empty()) {
         return hp_read_info_t();
@@ -460,7 +466,7 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
     hp_overflow_resolution_t resolution;
     if (can_use_iterative_hp_len_estimation && (hp_run_extends_into_5p_tail || hp_run_extends_into_3p_tail || force_resolution_max_hp_len != UNDEFINED_HP_LEN)) {
         int observed_hp_len = std::max(right - left, force_resolution_max_hp_len);
-        resolution = resolve_hp_overflow(read_seq, observed_hp_len, ref_hp_range, hp_base, contig_seq, contig_len);
+        resolution = resolve_hp_overflow(read_seq, observed_hp_len, ref_hp_range, hp_base, contig_seq, contig_len, is_rev, max_5p_mismatch_rate);
         resolved_hp_len = resolution.hp_len;
         if (resolved_hp_len != UNDEFINED_HP_LEN) {
             left = resolution.left;
@@ -513,7 +519,8 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
 
 hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, const std::string& read_seq,
     hts_pair_pos_t ref_hp_range, char hp_base, char* contig_seq, hts_pos_t contig_len, bool is_rev, bp_support_read_t read,
-    int tail_align_leeway = 10, bool has_no_left_indel = false, bool has_no_right_indel = false) {
+    int tail_align_leeway = 10, bool has_no_left_indel = false, bool has_no_right_indel = false,
+    double max_5p_mismatch_rate = 1) {
 
     if (read_seq.empty() || aln.cigar.empty()) {
         return hp_read_info_t();
@@ -524,9 +531,10 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
 
     bool hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
     int force_resolution_max_hp_len = hp_deletion_extends_outside_hp ? ref_hp_range.end - ref_hp_range.beg : UNDEFINED_HP_LEN;
-    bool can_resolve_3p_indel = is_rev ? has_no_left_indel : has_no_right_indel;
-    if (can_resolve_3p_indel) {
-        hp_adjacent_indel_info_t adjacent_indel_info = get_adjacent_indel_info(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
+    bool can_use_iterative_hp_len_estimation = has_no_left_indel && has_no_right_indel;
+    if (hp_deletion_extends_outside_hp && !can_use_iterative_hp_len_estimation) return hp_read_info_t(UNDEFINED_HP_LEN);
+    if (can_use_iterative_hp_len_estimation) {
+        hp_adjacent_indel_info_t adjacent_indel_info = get_adjacent_indel_info(normalized_aln_cigar, aln.ref_begin, ref_hp_range, read_seq.length()/2);
         const hp_side_indel_info_t& three_p_info = is_rev ? adjacent_indel_info.left : adjacent_indel_info.right;
         if (three_p_info.indel_len != 0) {
             int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
@@ -538,7 +546,7 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
         alignment_summary.last_qpos_before_ref_hp, alignment_summary.first_qpos_after_ref_hp,
         ref_hp_range, hp_base, contig_seq, contig_len, is_rev,
         get_left_clip_size(aln) > 0, get_right_clip_size(aln) > 0,
-        read, tail_align_leeway, force_resolution_max_hp_len, can_resolve_3p_indel);
+        read, tail_align_leeway, force_resolution_max_hp_len, can_use_iterative_hp_len_estimation, max_5p_mismatch_rate);
     hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
     hp_read_info.hp_deletion_extends_outside_hp = hp_deletion_extends_outside_hp;
     hp_read_info.hp_insertion_has_non_hp_bases = alignment_summary.hp_insertion_has_non_hp_bases;
@@ -547,7 +555,8 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
 
 hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range, char hp_base,
     char* contig_seq, hts_pos_t contig_len, char* ref_allele, hts_pos_t ref_allele_len,
-    hts_pair_pos_t ref_allele_hp_range, bool has_no_left_indel = false, bool has_no_right_indel = false, int tail_align_leeway = 10) {
+    hts_pair_pos_t ref_allele_hp_range, bool has_no_left_indel = false, bool has_no_right_indel = false,
+    int tail_align_leeway = 10, double max_5p_mismatch_rate = 1) {
 
     if (read == NULL || is_unmapped(read) || !is_primary(read) || read->core.l_qseq <= 0) {
         return hp_read_info_t();
@@ -564,7 +573,7 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
             filter_default, &ref_aln, 0) && !ref_aln.cigar.empty() && !is_clipped(ref_aln)) {
             hp_read_info_t hp_read_info = calculate_hp_read_info(ref_aln, read_seq, ref_allele_hp_range,
                 hp_base, ref_allele, ref_allele_len, bam_is_rev(read), bp_support_read_t(read), tail_align_leeway,
-                has_no_left_indel, has_no_right_indel);
+                has_no_left_indel, has_no_right_indel, max_5p_mismatch_rate);
             hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
             return hp_read_info;
         }
@@ -578,9 +587,10 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
         force_resolution_max_hp_len = std::max<int>(force_resolution_max_hp_len, ref_hp_range.end - ref_hp_range.beg);
     }
     bool is_reverse = bam_is_rev(read);
-    bool can_resolve_3p_indel = is_reverse ? has_no_left_indel : has_no_right_indel;
-    if (can_resolve_3p_indel) {
-        hp_adjacent_indel_info_t adjacent_indel_info = get_adjacent_indel_info(normalized_read_cigar, read->core.pos, ref_hp_range);
+    bool can_use_iterative_hp_len_estimation = has_no_left_indel && has_no_right_indel;
+    if (hp_deletion_extends_outside_hp && !can_use_iterative_hp_len_estimation) return hp_read_info_t(UNDEFINED_HP_LEN);
+    if (can_use_iterative_hp_len_estimation) {
+        hp_adjacent_indel_info_t adjacent_indel_info = get_adjacent_indel_info(normalized_read_cigar, read->core.pos, ref_hp_range, read->core.l_qseq/2);
         const hp_side_indel_info_t& three_p_info = is_reverse ? adjacent_indel_info.left : adjacent_indel_info.right;
         if (three_p_info.indel_len != 0) {
             int ref_hp_len = ref_hp_range.end - ref_hp_range.beg;
@@ -593,7 +603,7 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
         alignment_summary.last_qpos_before_ref_hp, alignment_summary.first_qpos_after_ref_hp,
         ref_hp_range, hp_base, contig_seq, contig_len, is_reverse,
         get_left_clip_size(read) > 0, get_right_clip_size(read) > 0,
-        bp_support_read_t(read), tail_align_leeway, force_resolution_max_hp_len, can_resolve_3p_indel);
+        bp_support_read_t(read), tail_align_leeway, force_resolution_max_hp_len, can_use_iterative_hp_len_estimation, max_5p_mismatch_rate);
     hp_read_info.original_alignment_has_indel_outside_hp = cigar_has_indel_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
     hp_read_info.hp_deletion_extends_outside_hp = hp_deletion_extends_outside_hp;
     hp_read_info.hp_insertion_has_non_hp_bases = alignment_summary.hp_insertion_has_non_hp_bases;

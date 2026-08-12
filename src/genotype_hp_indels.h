@@ -578,7 +578,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     int left_side_5p_reads = 0, right_side_5p_reads = 0;
     int left_side_5p_indel_reads = 0, right_side_5p_indel_reads = 0;
     for (const std::shared_ptr<bam1_t>& collected_read : collected_reads) {
-        hp_adjacent_indel_info_t indel_info = get_adjacent_indel_info(collected_read.get(), ref_hp_range);
+        hp_adjacent_indel_info_t indel_info = get_adjacent_indel_info(collected_read.get(), ref_hp_range, stats.read_len/2);
         bool is_reverse = bam_is_rev(collected_read.get());
         const hp_side_indel_info_t& five_p_info = is_reverse ? indel_info.right : indel_info.left;
         int& side_5p_reads = is_reverse ? right_side_5p_reads : left_side_5p_reads;
@@ -603,7 +603,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
         hp_read_info_t hp_read_info = calculate_hp_read_info(
             read, ref_hp_range, hp_base, contig_seq, contig_len, ref_allele.get(), ref_allele_len,
-            ref_allele_hp_range, has_no_left_indel, has_no_right_indel);
+            ref_allele_hp_range, has_no_left_indel, has_no_right_indel, 10, config.max_seq_error);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
             // Even if we are discarding this reads because the tails are too short, we still want to prevent it from being used as evidence for non-HP indels
@@ -676,7 +676,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         rescued_read.is_first_in_pair = !is_first_read(read);
         hp_read_info_t hp_read_info = calculate_hp_read_info(ref_aln, mate_seq, ref_allele_hp_range,
             hp_base, ref_allele.get(), ref_allele_len, aln_as_rev, rescued_read, 10,
-            has_no_left_indel, has_no_right_indel);
+            has_no_left_indel, has_no_right_indel, config.max_seq_error);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
             continue;
