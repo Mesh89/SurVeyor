@@ -176,21 +176,76 @@ std::shared_ptr<sv_t> atomize_ins(std::shared_ptr<sv_t> sv) {
 	}
 
 	delete[] deleted_seq;
-	return sv; 
+	return sv;
 }
 
-std::shared_ptr<sv_t> atomize(int id, std::shared_ptr<sv_t> sv) {
-	std::string svtype = sv->svtype();
-	if (svtype == "DEL" && sv->svsize() <= 70) { 
-		// only atomize small deletions
-		// splitting large deletions can create problems to the current genotyping algorithm
-		// especially when calculating features like discordant pairs or read depth
-		return atomize_del(sv);
-	} else if (svtype == "INS" && !sv->incomplete_ins_seq() && sv->ins_seq.length() <= 70) {
-		return atomize_ins(sv);
-	} else {
-		return sv;
+bool is_complex_indel(const std::shared_ptr<sv_t>& sv) {
+	return sv->svtype() == "RPL" || (sv->svtype() == "DEL" && !sv->ins_seq.empty()) ||
+		(sv->svtype() == "INS" && sv->start != sv->end);
+}
+
+std::shared_ptr<sv_t> replace_main_indel(std::shared_ptr<sv_t> old_main, std::shared_ptr<sv_t> new_main) {
+	auto old_del = std::dynamic_pointer_cast<deletion_t>(old_main);
+	auto new_del = std::dynamic_pointer_cast<deletion_t>(new_main);
+	if (old_del && new_del) {
+		new_del->remapped = old_del->remapped;
+		new_del->original_range = old_del->original_range;
 	}
+	std::string chr = new_main->chr, ins_seq = new_main->ins_seq;
+	hts_pos_t start = new_main->start, end = new_main->end;
+	bcf1_t* vcf_entry = old_main->vcf_entry;
+	old_main->vcf_entry = nullptr;
+	static_cast<sv_t&>(*new_main) = static_cast<const sv_t&>(*old_main);
+	new_main->chr = chr;
+	new_main->start = start;
+	new_main->end = end;
+	new_main->ins_seq = ins_seq;
+	new_main->vcf_entry = vcf_entry;
+	return new_main;
+}
+
+std::shared_ptr<sv_t> merge_adjacent_main_indel(std::shared_ptr<sv_t> main_sv) {
+	if (is_complex_indel(main_sv) || (main_sv->svtype() != "DEL" && main_sv->svtype() != "INS")) return main_sv;
+	for (auto it = main_sv->aux_indels.begin(); it != main_sv->aux_indels.end(); ++it) {
+		if ((*it)->svtype() == main_sv->svtype() || (*it)->incomplete_ins_seq()) continue;
+		auto del = main_sv->svtype() == "DEL" ? main_sv : *it;
+		auto ins = main_sv->svtype() == "INS" ? main_sv : *it;
+		if (del->svtype() != "DEL" || ins->svtype() != "INS") continue;
+		if (ins->start != del->start && ins->start != del->end) continue;
+
+		std::shared_ptr<sv_t> complex;
+		if (del->svsize() > ins->svsize()) complex = std::make_shared<deletion_t>(del->chr, del->start, del->end, ins->ins_seq, nullptr, nullptr, nullptr, nullptr);
+		else if (ins->svsize() > del->svsize()) complex = std::make_shared<insertion_t>(del->chr, del->start, del->end, ins->ins_seq, nullptr, nullptr, nullptr, nullptr);
+		else complex = std::make_shared<replacement_t>(del->chr, del->start, del->end, ins->ins_seq, nullptr, nullptr, nullptr, nullptr);
+		main_sv->aux_indels.erase(it);
+		return replace_main_indel(main_sv, complex);
+	}
+	return main_sv;
+}
+
+std::shared_ptr<sv_t> atomize_limited(std::shared_ptr<sv_t> sv) {
+	if (sv->svtype() == "DEL" && sv->svsize() <= 70) return atomize_del(sv);
+	if (sv->svtype() == "INS" && !sv->incomplete_ins_seq() && sv->ins_seq.length() <= 70) return atomize_ins(sv);
+	return sv;
+}
+
+std::shared_ptr<sv_t> atomize_haplotype(std::shared_ptr<sv_t> main_sv) {
+	main_sv = atomize_limited(main_sv);
+	if (main_sv == nullptr) return nullptr;
+	std::vector<std::shared_ptr<sv_t>> input_aux, output_aux;
+	input_aux.swap(main_sv->aux_indels);
+	for (auto& aux : input_aux) {
+		aux = atomize_limited(aux);
+		if (aux == nullptr) continue;
+		main_sv->aux_snps.insert(main_sv->aux_snps.end(), aux->aux_snps.begin(), aux->aux_snps.end());
+		output_aux.push_back(aux);
+		output_aux.insert(output_aux.end(), aux->aux_indels.begin(), aux->aux_indels.end());
+		aux->aux_indels.clear();
+		aux->aux_snps.clear();
+	}
+	main_sv->aux_indels = std::move(output_aux);
+	for (auto& aux : main_sv->aux_indels) aux->hpid = main_sv->hpid;
+	return main_sv;
 }
 
 hts_pos_t max_indel_size(const std::shared_ptr<sv_t>& sv) {
@@ -268,9 +323,11 @@ std::shared_ptr<sv_t> realign(std::shared_ptr<sv_t> sv);
 
 void simplify_and_realign_svs(int id, std::vector<std::shared_ptr<sv_t>>& svs, int start, int end) {
 	for (int i = start; i < end; i++) {
-		svs[i] = simplify(svs[i]);
+		svs[i] = merge_adjacent_main_indel(svs[i]);
+		if (svs[i] != nullptr) svs[i] = simplify(svs[i]);
 		if (svs[i] != nullptr) {
 			svs[i] = realign(svs[i]);
+			if (svs[i] != nullptr) svs[i] = atomize_haplotype(svs[i]);
 		}
 	}
 }
@@ -288,7 +345,7 @@ void left_align_del(std::shared_ptr<sv_t> sv) {
 	hts_pos_t limit = 0; // we cannot left-align past this position
 	for (std::shared_ptr<sv_t> indel : sv->aux_indels) {
 		if (indel->end <= sv->start) {
-			limit = std::max(limit, indel->end); 
+			limit = std::max(limit, indel->end);
 		}
 	}
 
@@ -396,6 +453,19 @@ std::vector<std::shared_ptr<sv_t>> vars_from_alignment(StripedSmithWaterman::Ali
 		uint32_t c = aln.cigar[i];
 		int op_length = cigar_int_to_len(c);
 		char op = cigar_int_to_op(c);
+		char next_op = i+1 < aln.cigar.size() ? cigar_int_to_op(aln.cigar[i+1]) : '\0';
+		if ((op == 'D' && next_op == 'I') || (op == 'I' && next_op == 'D')) {
+			int next_length = cigar_int_to_len(aln.cigar[++i]);
+			int del_length = op == 'D' ? op_length : next_length;
+			int ins_length = op == 'I' ? op_length : next_length;
+			std::string ins_seq(alt_seq+query_pos, ins_length);
+			if (del_length > ins_length) vars.push_back(std::make_shared<deletion_t>(chr, current_pos-1, current_pos+del_length-1, ins_seq, nullptr, nullptr, nullptr, nullptr));
+			else if (ins_length > del_length) vars.push_back(std::make_shared<insertion_t>(chr, current_pos-1, current_pos+del_length-1, ins_seq, nullptr, nullptr, nullptr, nullptr));
+			else vars.push_back(std::make_shared<replacement_t>(chr, current_pos-1, current_pos+del_length-1, ins_seq, nullptr, nullptr, nullptr, nullptr));
+			current_pos += del_length;
+			query_pos += ins_length;
+			continue;
+		}
 		if (op == 'D') {
 			vars.push_back(std::make_shared<deletion_t>(chr, current_pos-1, current_pos+op_length-1, "", nullptr, nullptr, nullptr, nullptr));
 		} else if (op == 'I') {
@@ -575,12 +645,8 @@ int main(int argc, char* argv[]) {
 	for (std::shared_ptr<sv_t> sv : input_svs) {
 		if (sv == nullptr) continue;
 
-		// TODO: it's possible that since we perform realignment, atomization is not really necessary. Verify
-		sv = atomize(0, sv);
-		if (sv == nullptr) continue;
-
 		if ((sv->svtype() == "DEL" || sv->svtype() == "INS") && max_indel_size(sv) < min_indel_size) continue;
-		
+
 		left_align(sv);
 		canonicalize_aux(sv);
 		if (sv->source == "READ" || sv->source == "HP") {
