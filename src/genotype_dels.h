@@ -157,7 +157,6 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
         bool add_ref_bp1_better_seq = false;
         bool add_ref_bp2_better_seq = false;
         if (alt_aln.sw_score > ref_aln_score && alt_spans_sv) {
-            if (is_clipped(alt_aln, config.min_clip_len)) continue;
             add_alt_better_read = true;
             alt_or_ref_read = true;
         } else if (ref_aln_score > alt_aln.sw_score) {
