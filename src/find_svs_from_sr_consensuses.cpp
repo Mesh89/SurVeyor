@@ -338,10 +338,15 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 
 		local_svs.insert(local_svs.end(), svs_by_pair[i].begin(), svs_by_pair[i].end());
 
-		if (ps.c1_lc) used_consensus_lc[ps.c1_idx] = true;
-		else used_consensus_rc[ps.c1_idx] = true;
-		if (ps.c2_lc) used_consensus_lc[ps.c2_idx] = true;
-		else used_consensus_rc[ps.c2_idx] = true;
+		auto mark_consensus_used = [&](bool is_lc, int consensus_idx) {
+			std::shared_ptr<consensus_t> consensus = is_lc ? lc_consensuses[consensus_idx] : rc_consensuses[consensus_idx];
+			// HSR consensuses are always also evaluated by one-sided discovery.
+			if (consensus->is_hsr) return;
+			if (is_lc) used_consensus_lc[consensus_idx] = true;
+			else used_consensus_rc[consensus_idx] = true;
+		};
+		mark_consensus_used(ps.c1_lc, ps.c1_idx);
+		mark_consensus_used(ps.c2_lc, ps.c2_idx);
 		if (ps.dp_cluster != nullptr) used_ss_clusters.insert(ps.dp_cluster.get());
 	}
 
@@ -835,8 +840,12 @@ int main(int argc, char* argv[]) {
 		auto& svs = svs_by_chr[contig_name];
 		for (int i = 0; i < svs.size(); i++) {
 			std::shared_ptr<sv_t> sv = svs[i];
-			if (!sv->imprecise && sv->end-sv->start >= config.min_sv_size && abs(sv->svlen()) < config.min_sv_size && sv->ins_seq.length() >= config.min_sv_size
-			&& (sv->svtype() == "DEL" || sv->svtype() == "INS" || sv->svtype() == "RPL") && double(sv->ins_seq.length())/(sv->end-sv->start) >= 0.75) { // SV is a complex inversion
+			bool size_gt_50 = sv->end-sv->start >= 50;
+			bool len_diff_lt_50 = std::abs(sv->svlen()) < 50;
+			bool inv_seq_size_gt_50 = sv->ins_seq.length() >= 50;
+			bool usable_sv_type = sv->svtype() == "DEL" || sv->svtype() == "INS" || sv->svtype() == "RPL";
+			bool inv_seq_covers_enough = double(sv->ins_seq.length())/(sv->end-sv->start) >= 0.75;
+			if (!sv->imprecise && size_gt_50 && len_diff_lt_50 && inv_seq_size_gt_50 && usable_sv_type && inv_seq_covers_enough) { // SV is represented as an inversion
 				char* contig_seq = chr_seqs.get_seq(contig_name);
 				std::string inv_seq = svs[i]->ins_seq;
 				rc(inv_seq);
@@ -847,6 +856,8 @@ int main(int argc, char* argv[]) {
 					if (sv->svlen() == 0 && aln.sw_score == inv_seq.length()) ins_seq = "";
 					std::shared_ptr<inversion_t> inv = std::make_shared<inversion_t>(contig_name, sv->start, sv->end, ins_seq, sv->rc_consensus, sv->lc_consensus, sv->left_anchor_aln, sv->left_anchor_aln, sv->right_anchor_aln, sv->right_anchor_aln);
 					inv->source = sv->source;
+					inv->aux_indels = sv->aux_indels;
+					inv->aux_snps = sv->aux_snps;
 					svs[i] = inv;
 				}
 			} else if (svs[i]->svsize() < config.min_sv_size) {

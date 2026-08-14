@@ -415,12 +415,19 @@ std::vector<int> find_accepted_reads(std::string& consensus_seq, std::deque<bam1
             }
         }
 
-        accepted[i] = -mm;
+        // Keep rejected reads strictly negative, including reads with zero
+        // mismatches to the consensus. Accepted reads store their mismatch count.
+        accepted[i] = -(mm + 1);
         if (mm <= std::ceil(config.max_seq_error * r->core.l_qseq)) {
-            // the read should be much better when mapped to the consensus than when mapped to the reference
+            // The read should either map much better to the consensus than to the reference,
+            // or contain an SV-sized net indel with respect to the reference.
             int orig_score = compute_read_score(r, 1, -4, -6, -1);
             int new_score = (r->core.l_qseq-mm)*1 - mm*4;
-            if (new_score - orig_score >= config.min_diff_hsr*5) { // each mismatch costs 5 points
+            indel_summary_t indels = get_indel_summary(r);
+            bool improved_alignment = new_score - orig_score >= config.min_diff_hsr*5; // each mismatch costs 5 points
+            bool has_sv_sized_indel = std::abs(indels.dels-indels.inss) >= config.min_sv_size;
+            bool indel_explained = has_sv_sized_indel && new_score > orig_score;
+            if (improved_alignment || indel_explained) {
                 accepted[i] = mm;
             }
         }
