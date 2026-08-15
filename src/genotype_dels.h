@@ -277,8 +277,8 @@ void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_re
 
         // length of the alt_consensus_seq covering left and right flanking regions of the deletion
         // note that this may be different from lf_aln_rlen and rf_aln_rlen, since the aln can include indels
-        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1);
-        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1);
+        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1, true);
+        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1, true);
         int split_query_covered = query_lh_aln_score.second + query_rh_aln_score.second;
 
         del->sample_info.alt_consensus1_split_size1 = query_lh_aln_score.second;

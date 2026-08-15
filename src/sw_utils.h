@@ -328,7 +328,7 @@ std::vector<int> compute_suffix_scores(std::vector<uint32_t> cigar, int query_le
 }
 
 std::pair<int, int> find_aln_prefix_score(std::vector<uint32_t>& cigar, int ref_prefix_len, int match_score, int mismatch_score,
-						int gap_open_score, int gap_extend_score) {
+						int gap_open_score, int gap_extend_score, bool allow_right_clip = false) {
 	
 	if (cigar.empty()) return {0, 0};
 
@@ -337,6 +337,8 @@ std::pair<int, int> find_aln_prefix_score(std::vector<uint32_t>& cigar, int ref_
 		query_prefix_len = cigar_int_to_len(cigar[0]);
 		i++;
 	}
+	int best_score = score;
+	int best_query_prefix_len = query_prefix_len;
 
 	for (int j = 0; i < cigar.size() && j < ref_prefix_len; i++) {
 		int op = cigar_int_to_op(cigar[i]);
@@ -361,14 +363,18 @@ std::pair<int, int> find_aln_prefix_score(std::vector<uint32_t>& cigar, int ref_
 		} else if (op == 'S') {
 			query_prefix_len += len;
 		}
+		if (score > best_score) {
+			best_score = score;
+			best_query_prefix_len = query_prefix_len;
+		}
 	}
-	return {score, query_prefix_len};
+	return allow_right_clip ? std::make_pair(best_score, best_query_prefix_len) : std::make_pair(score, query_prefix_len);
 }
 
 std::pair<int, int> find_aln_suffix_score(std::vector<uint32_t> cigar, int ref_suffix_len, int match_score, int mismatch_score,
-						  int gap_open_score, int gap_extend_score) {
+						  int gap_open_score, int gap_extend_score, bool allow_left_clip = false) {
 	std::vector<uint32_t> rev_cigar(cigar.rbegin(), cigar.rend());
-	return find_aln_prefix_score(rev_cigar, ref_suffix_len, match_score, mismatch_score, gap_open_score, gap_extend_score);
+	return find_aln_prefix_score(rev_cigar, ref_suffix_len, match_score, mismatch_score, gap_open_score, gap_extend_score, allow_left_clip);
 }
 
 
