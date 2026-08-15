@@ -205,8 +205,8 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         int rf_aln_rlen = std::max(0, alt_aln.ref_end-rf_seq_start);
 
         int temp;
-        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1);
-        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1);
+        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1, true);
+        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1, true);
         dup->sample_info.alt_consensus1_split_size1 = query_lh_aln_score.second;
         dup->sample_info.alt_consensus1_split_size2 = query_rh_aln_score.second;
         dup->sample_info.alt_consensus1_split_score1 = query_lh_aln_score.first;
@@ -480,8 +480,8 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         // length of the alt_consensus_seq covering left and right flanking regions of the deletion
         // note that this may be different from lf_aln_rlen and rf_aln_rlen, since the aln can include indels
         int temp;
-        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1);
-        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1);
+        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1, true);
+        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1, true);
         dup->sample_info.alt_consensus1_split_size1 = query_lh_aln_score.second;
         dup->sample_info.alt_consensus1_split_size2 = query_rh_aln_score.second;
         dup->sample_info.alt_consensus1_split_score1 = query_lh_aln_score.first;
