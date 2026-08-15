@@ -206,6 +206,7 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
         int read_status;
         while ((read_status = sam_itr_next(alignment_file->file, iter.get(), read.get())) >= 0) {
             if (is_unmapped(read.get()) || !is_primary(read.get()) || read->core.l_qseq <= 0) continue;
+            if (!is_proper_pair(read.get(), stats->min_is, stats->max_is)) continue;
 
             hts_pos_t read_beg = read->core.pos;
             hts_pos_t read_end = bam_endpos(read.get());
