@@ -32,7 +32,9 @@ class Features:
                             'RR1HPMODE', 'RR1CHPMODE', 'RR1CHPIQR', 'RR1HPMODE_RR1CHPMODE_DIFF', 'RR1HPMODE_REFLEN_DIFF', 'RR1CHPMODE_REFLEN_DIFF',
                             'RR1CHPmQ', 'RR1CHPMQ', 'RR1CHPAQ', 'RR1CHPSQ', 'RR1HP5PMR', 'RR1HP3PMR',
                             'RR2', 'RR2C', 'RR2CmQ', 'RR2CMQ', 'RR2C_HQ_RATIO', 'RR2E', 'RR2E_RATIO', 'MAXRRCD', 'MAXRRED',
-                            'OAR1', 'OAR2', 'OAR1MAX_RATIO', 'OAR2MAX_RATIO', 'OTHER1_OVERLAP_PRESENT', 'OTHER2_OVERLAP_PRESENT',
+                            'OAR1', 'OAR2', 'OAR1MAX_RATIO', 'OAR2MAX_RATIO', 
+                            'OTHER_HP_GENOTYPED',
+                            'OTHER1_OVERLAP_PRESENT', 'OTHER2_OVERLAP_PRESENT',
                             'OTHER1_OVERLAP_MAX_MIN_ARC_OVER_NARC', 'OTHER2_OVERLAP_MAX_MIN_ARC_OVER_NARC',
                             'OTHER1_OVERLAP_MAX_MIN_ARCHQ', 'OTHER2_OVERLAP_MAX_MIN_ARCHQ',
                             'OTHER1_OVERLAP_MAX_MIN_AR_OVER_NAR', 'OTHER2_OVERLAP_MAX_MIN_AR_OVER_NAR',
@@ -146,10 +148,19 @@ class Features:
     def other_hpid_overlap_present(record, other_hpid, intervals_by_hpid):
         if other_hpid is None or intervals_by_hpid is None:
             return 0
-        for chrom, start, stop, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, []):
+        for chrom, start, stop, _, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, []):
             if record.chrom == chrom and record.start < stop and start < record.stop:
                 return 1
         return 0
+
+    def other_hpid_overlap_hp_genotyped(record, other_hpid, intervals_by_hpid):
+        if other_hpid is None or intervals_by_hpid is None:
+            return 0
+        return int(any(
+            hp_genotyped
+            for chrom, start, stop, _, _, _, _, _, _, hp_genotyped in intervals_by_hpid.get(other_hpid, [])
+            if record.chrom == chrom and record.start < stop and start < record.stop
+        ))
 
     def min_arc_over_narc(record):
         sample = record.samples[0]
@@ -184,7 +195,7 @@ class Features:
             return 0
         values = [
             min_arc_over_narc
-            for chrom, start, stop, min_arc_over_narc, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, min_arc_over_narc, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -200,7 +211,7 @@ class Features:
             return 0
         values = [
             min_archq
-            for chrom, start, stop, _, min_archq, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, min_archq, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -210,7 +221,7 @@ class Features:
             return 0
         values = [
             min_ar_over_nar
-            for chrom, start, stop, _, _, min_ar_over_nar, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, min_ar_over_nar, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -234,7 +245,7 @@ class Features:
             return 0
         values = [
             min_are_over_nare
-            for chrom, start, stop, _, _, _, min_are_over_nare, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, _, min_are_over_nare, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -258,7 +269,7 @@ class Features:
             return Features.NAN
         values = [
             exas_exrs_diff_to_len
-            for chrom, start, stop, _, _, _, _, exas_exrs_diff_to_len, has_extension_evidence in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, _, _, exas_exrs_diff_to_len, has_extension_evidence, _ in intervals_by_hpid.get(other_hpid, [])
             if has_extension_evidence and record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=Features.NAN)
@@ -583,6 +594,10 @@ class Features:
 
         features['OAR1'] = Features.piecewise_normalise(oar1, min_depth, max_depth)
         features['OAR1MAX_RATIO'] = oar1max/max(1, oar1)
+        features['OTHER_HP_GENOTYPED'] = max(
+            Features.other_hpid_overlap_hp_genotyped(record, oar1hpid, intervals_by_hpid),
+            Features.other_hpid_overlap_hp_genotyped(record, oar2hpid, intervals_by_hpid),
+        )
         features['OTHER1_OVERLAP_PRESENT'] = Features.other_hpid_overlap_present(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_MAX_MIN_ARC_OVER_NARC'] = Features.other_hpid_overlap_max_min_arc_over_narc(record, oar1hpid, intervals_by_hpid)
         other1_overlap_max_min_archq = Features.other_hpid_overlap_max_min_archq(record, oar1hpid, intervals_by_hpid)
@@ -1123,6 +1138,7 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, ignore_gts = False, feature_name
                 Features.min_are_over_nare(candidate),
                 Features.exas_exrs_diff_to_len(candidate),
                 Features.has_extension_evidence(candidate),
+                Features.gt_as_homopolymer(candidate),
             ))
     vcf_reader.close()
     vcf_reader = pysam.VariantFile(vcf_fname)
