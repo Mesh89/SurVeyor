@@ -558,16 +558,18 @@ struct evidence_map_t {
 };
 
 std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs);
-std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subset(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads, 
+std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
     std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read);
-std::vector<std::shared_ptr<bam1_t>> find_seqs_consistent_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads, 
-    double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read);
+std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
+    const std::vector<bool>& is_eligible_read, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read);
 
-void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, int n_reads, std::vector<bp_support_read_t>& consistent_reads,
-    std::vector<bool>& is_exact_read, double consistent_avg_score, double consistent_stddev_score);
+void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<bp_support_read_t>& reads,
+    std::vector<bool>& is_consistent_read, std::vector<bool>& is_exact_read,
+    double consistent_avg_score, double consistent_stddev_score);
 
-void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, int n_reads, std::vector<std::shared_ptr<bam1_t>>& consistent_reads, 
-    std::vector<bool>& is_exact_read, double consistent_avg_score, double consistent_stddev_score);
+void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std::shared_ptr<bam1_t>>& reads,
+    std::vector<bool>& is_consistent_read, std::vector<bool>& is_exact_read,
+    double consistent_avg_score, double consistent_stddev_score);
 
 void read_mates(int contig_id);
 void release_mates(int contig_id);
@@ -604,16 +606,14 @@ std::vector<hts_pos_t> get_diff_reads_expected_positions(std::vector<char*>& ref
     return positions;
 }
 
-std::vector<int> get_consistent_reads_start_positions(std::vector<std::shared_ptr<bam1_t>>& consistent_reads,
-    std::vector<std::shared_ptr<bam1_t>>& reads, std::vector<int>& start_positions) {
+std::vector<int> get_consistent_reads_start_positions(const std::vector<bool>& is_consistent_read,
+    std::vector<int>& start_positions) {
     std::vector<int> consistent_positions;
-    std::unordered_set<bam1_t*> consistent_set;
-    for (auto& r : consistent_reads) {
-        consistent_set.insert(r.get());
+    if (is_consistent_read.size() != start_positions.size()) {
+        throw std::runtime_error("Read consistency and start-position vector size mismatch.");
     }
-
-    for (int i = 0; i < reads.size(); i++) {
-        if (consistent_set.count(reads[i].get())) {
+    for (int i = 0; i < is_consistent_read.size(); i++) {
+        if (is_consistent_read[i]) {
             consistent_positions.push_back(start_positions[i]);
         }
     }

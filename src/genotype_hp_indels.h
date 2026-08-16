@@ -725,9 +725,10 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         cluster_reads_by_nearest_allele_len_reassign(hp_read_infos, hp_run_lens, hp_indels, evidence_map, config.seed) :
         cluster_reads_by_nearest_allele_len(hp_read_infos, alt_alleles, alt_allele_lens, hp_run_lens, aligner);
 
-    std::vector<int> ref_reads(hp_indels.size(), 0);
     std::vector<std::vector<hp_read_info_t>> ref_assigned_hp_read_infos(hp_indels.size());
+    std::vector<std::vector<bp_support_read_t>> ref_all_reads(hp_indels.size());
     std::vector<std::vector<bp_support_read_t>> ref_good_reads(hp_indels.size()), ref_good_reads_non_rescued(hp_indels.size());
+    std::vector<std::vector<bool>> ref_is_consistent(hp_indels.size());
     std::vector<std::vector<bool>> ref_is_exact_match(hp_indels.size());
 
     auto candidate_supports_exact_ref = [&](int allele_idx, const hp_read_info_t& hp_read_info) {
@@ -738,11 +739,10 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     };
 
     auto add_ref_support = [&](int allele_idx, const hp_read_info_t& hp_read_info) {
-        ref_reads[allele_idx]++;
         ref_assigned_hp_read_infos[allele_idx].push_back(hp_read_info);
-        if (!hp_read_info.is_good_read(config.min_clip_len, MAX_TAIL_MISMATCH_RATE)) return;
-        ref_good_reads[allele_idx].push_back(hp_read_info.read);
-        if (!hp_read_info.rescued) ref_good_reads_non_rescued[allele_idx].push_back(hp_read_info.read);
+        ref_all_reads[allele_idx].push_back(hp_read_info.read);
+        bool is_consistent = hp_read_info.is_good_read(config.min_clip_len, MAX_TAIL_MISMATCH_RATE);
+        ref_is_consistent[allele_idx].push_back(is_consistent);
         bool is_exact_match = hp_read_info.hp_len == hp_run_lens.back() &&
             !hp_read_info.original_alignment_has_indel_outside_hp && !hp_read_info.hp_deletion_extends_outside_hp &&
             !hp_read_info.hp_insertion_has_non_hp_bases && !hp_read_info.hp_run_extends_into_3p_tail;
@@ -750,6 +750,9 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             is_exact_match = candidate_supports_exact_ref(allele_idx, hp_read_info);
         }
         ref_is_exact_match[allele_idx].push_back(is_exact_match);
+        if (!is_consistent) return;
+        ref_good_reads[allele_idx].push_back(hp_read_info.read);
+        if (!hp_read_info.rescued) ref_good_reads_non_rescued[allele_idx].push_back(hp_read_info.read);
     };
 
     std::vector<int> cluster_allele_idxs;
@@ -779,9 +782,10 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         }
     }
  
-    std::vector<int> alt_reads(hp_indels.size(), 0);
     std::vector<std::vector<hp_read_info_t>> alt_assigned_hp_read_infos(hp_indels.size());
+    std::vector<std::vector<bp_support_read_t>> alt_all_reads(hp_indels.size());
     std::vector<std::vector<bp_support_read_t>> alt_good_reads(hp_indels.size()),alt_good_reads_non_rescued(hp_indels.size());
+    std::vector<std::vector<bool>> alt_is_consistent(hp_indels.size());
     std::vector<std::vector<bool>> alt_is_exact_match(hp_indels.size());
 
     // Associate each allele-aware cluster to its selected allele
@@ -789,12 +793,13 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         const std::vector<hp_read_info_t>& cluster = allele_cluster.reads;
 
         // Mark good reads
-        std::vector<hp_read_info_t> good_hp_read_infos;
         std::vector<bp_support_read_t> all_reads, good_reads, good_reads_non_rescued;
+        std::vector<bool> is_consistent_read;
         for (const hp_read_info_t& hp_read_info : cluster) {
             all_reads.push_back(hp_read_info.read);
-            if (hp_read_info.is_good_read(config.min_clip_len, MAX_TAIL_MISMATCH_RATE)) {
-                good_hp_read_infos.push_back(hp_read_info);
+            bool is_consistent = hp_read_info.is_good_read(config.min_clip_len, MAX_TAIL_MISMATCH_RATE);
+            is_consistent_read.push_back(is_consistent);
+            if (is_consistent) {
                 good_reads.push_back(hp_read_info.read);
                 if (!hp_read_info.rescued) {
                     good_reads_non_rescued.push_back(hp_read_info.read);
@@ -822,7 +827,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             bool allele_has_aux_indels = is_ref_allele ? 0 : !hp_indels[best_allele_idx]->aux_indels.empty();
 
             std::vector<bool> is_exact_match;
-            for (const hp_read_info_t& hp_read_info : good_hp_read_infos) {
+            for (const hp_read_info_t& hp_read_info : cluster) {
                 bool hp_len_match = hp_read_info.hp_len == hp_run_lens[best_allele_idx];
                 bool has_unexplained_outside_hp = has_unexplained_indel_outside_hp(
                     hp_read_info, allele_has_aux_indels, allele_seq, allele_len, allele_hp_range, aligner);
@@ -840,10 +845,11 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
                 }
             } else {
                 // Cluster best matches an indel allele, so assign its reads to that allele
-                alt_reads[best_allele_idx] += cluster.size();
                 alt_assigned_hp_read_infos[best_allele_idx].insert(alt_assigned_hp_read_infos[best_allele_idx].end(), cluster.begin(), cluster.end());
+                alt_all_reads[best_allele_idx].insert(alt_all_reads[best_allele_idx].end(), all_reads.begin(), all_reads.end());
                 alt_good_reads[best_allele_idx].insert(alt_good_reads[best_allele_idx].end(), good_reads.begin(), good_reads.end());
                 alt_good_reads_non_rescued[best_allele_idx].insert(alt_good_reads_non_rescued[best_allele_idx].end(), good_reads_non_rescued.begin(), good_reads_non_rescued.end());
+                alt_is_consistent[best_allele_idx].insert(alt_is_consistent[best_allele_idx].end(), is_consistent_read.begin(), is_consistent_read.end());
                 alt_is_exact_match[best_allele_idx].insert(alt_is_exact_match[best_allele_idx].end(), is_exact_match.begin(), is_exact_match.end());
 
                 std::vector<int> alt_scores = calculate_aln_scores(cluster, alt_alleles[best_allele_idx].get(), alt_allele_lens[best_allele_idx], aligner);
@@ -868,12 +874,13 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     }
 
     for (int i = 0; i < hp_indels.size(); i++) {
-        for (int j = 0; j < alt_good_reads[i].size(); j++) {
-            const bp_support_read_t& read = alt_good_reads[i][j];
+        for (int j = 0; j < alt_all_reads[i].size(); j++) {
+            if (!alt_is_consistent[i][j]) continue;
+            const bp_support_read_t& read = alt_all_reads[i][j];
             evidence_map->record_assigned_read_consistency(read, read.mate_mapq >= config.high_confidence_mapq, alt_is_exact_match[i][j]);
         }
 
-        set_bp_consensus_info(hp_indels[i]->sample_info.alt_bp1.reads_info, alt_reads[i], alt_good_reads[i], alt_is_exact_match[i], 0.0, 0.0);
+        set_bp_consensus_info(hp_indels[i]->sample_info.alt_bp1.reads_info, alt_all_reads[i], alt_is_consistent[i], alt_is_exact_match[i], 0.0, 0.0);
         hp_indels[i]->sample_info.alt1_hp_len_mode = find_hp_len_mode(alt_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false);
         hp_indels[i]->sample_info.alt1_consistent_hp_len_mode = find_hp_len_mode(alt_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
         hp_indels[i]->sample_info.alt1_consistent_hp_len_iqr = find_hp_len_iqr(alt_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
@@ -885,7 +892,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         set_hp_read_mapq_stats(alt_good_reads_non_rescued[i], hp_indels[i]->sample_info.alt1_hp_min_mapq, hp_indels[i]->sample_info.alt1_hp_max_mapq, 
             hp_indels[i]->sample_info.alt1_hp_avg_mapq, hp_indels[i]->sample_info.alt1_hp_stddev_mapq);
 
-        set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_reads[i], ref_good_reads[i], ref_is_exact_match[i], 0.0, 0.0);
+        set_bp_consensus_info(hp_indels[i]->sample_info.ref_bp1.reads_info, ref_all_reads[i], ref_is_consistent[i], ref_is_exact_match[i], 0.0, 0.0);
         hp_indels[i]->sample_info.ref1_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, false);
         hp_indels[i]->sample_info.ref1_consistent_hp_len_mode = find_hp_len_mode(ref_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);
         hp_indels[i]->sample_info.ref1_consistent_hp_len_iqr = find_hp_len_iqr(ref_assigned_hp_read_infos[i], config.min_clip_len, MAX_TAIL_MISMATCH_RATE, true);

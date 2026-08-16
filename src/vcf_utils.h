@@ -77,28 +77,52 @@ void add_read_support_headers(bcf_hdr_t* hdr, const char prefix, int bp_n, const
             "Number of consistent reverse reads supporting %s in the %s allele."
         },
         {
+            "%cR%dCE", 1, "Integer",
+            "Number of reads that are both consistent and exact supporting %s in the %s allele."
+        },
+        {
+            "%cR%dCEHQ", 1, "Integer",
+            "Number of high-quality reads that are both consistent and exact supporting %s in the %s allele."
+        },
+        {
+            "%cR%dCEmQ", 1, "Integer",
+            "Minimum mate mapping quality of reads that are both consistent and exact supporting %s in the %s allele."
+        },
+        {
+            "%cR%dCEMQ", 1, "Integer",
+            "Maximum mate mapping quality of reads that are both consistent and exact supporting %s in the %s allele."
+        },
+        {
+            "%cR%dCEF", 1, "Integer",
+            "Number of forward reads that are both consistent and exact supporting %s in the %s allele."
+        },
+        {
+            "%cR%dCER", 1, "Integer",
+            "Number of reverse reads that are both consistent and exact supporting %s in the %s allele."
+        },
+        {
             "%cR%dE", 1, "Integer",
-            "Number of consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
+            "Number of exact (i.e., perfectly matching) reads supporting %s in the %s allele."
         },
         {
             "%cR%dEHQ", 1, "Integer",
-            "Number of high-quality consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
+            "Number of high-quality exact (i.e., perfectly matching) reads supporting %s in the %s allele."
         },
         {
             "%cR%dEmQ", 1, "Integer",
-            "Minimum mate mapping quality of consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
+            "Minimum mate mapping quality of exact (i.e., perfectly matching) reads supporting %s in the %s allele."
         },
         {
             "%cR%dEMQ", 1, "Integer",
-            "Maximum mate mapping quality of consistent exact (i.e., perfectly matching) reads supporting %s in the %s allele."
+            "Maximum mate mapping quality of exact (i.e., perfectly matching) reads supporting %s in the %s allele."
         },
         {
             "%cR%dEF", 1, "Integer",
-            "Number of consistent exact (i.e., perfectly matching) forward reads supporting %s in the %s allele."
+            "Number of exact (i.e., perfectly matching) forward reads supporting %s in the %s allele."
         },
         {
             "%cR%dER", 1, "Integer",
-            "Number of consistent exact (i.e., perfectly matching) reverse reads supporting %s in the %s allele."
+            "Number of exact (i.e., perfectly matching) reverse reads supporting %s in the %s allele."
         },
         {
             "%cR%dCAS", 1, "Float",

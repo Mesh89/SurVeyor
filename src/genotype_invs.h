@@ -111,8 +111,8 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     double alt_avg_score, ref_avg_score;
     double alt_stddev_score, ref_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_is_exact_read;
-    auto alt_better_reads_consistent = gen_consensus_and_find_consistent_seqs_subset(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read);
-    auto ref_better_reads_consistent = gen_consensus_and_find_consistent_seqs_subset(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read);
+    auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read);
 
     if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
         // all we care about is the consensus sequence
@@ -166,8 +166,8 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         inv->right_anchor_aln->seq_len = rf_aln_rlen;
     }
 
-    set_bp_consensus_info(inv->sample_info.alt_bp1.reads_info, alt_better_seqs.size(), alt_better_reads_consistent, alt_is_exact_read, alt_avg_score, alt_stddev_score);
-    set_bp_consensus_info(inv->sample_info.ref_bp1.reads_info, ref_better_seqs.size(), ref_better_reads_consistent, ref_is_exact_read, ref_avg_score, ref_stddev_score);
+    set_bp_consensus_info(inv->sample_info.alt_bp1.reads_info, alt_better_seqs, alt_is_consistent_read, alt_is_exact_read, alt_avg_score, alt_stddev_score);
+    set_bp_consensus_info(inv->sample_info.ref_bp1.reads_info, ref_better_seqs, ref_is_consistent_read, ref_is_exact_read, ref_avg_score, ref_stddev_score);
 
     delete[] alt_seq;
     delete[] ref_seq;
@@ -373,21 +373,21 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     double alt_bp1_avg_score, alt_bp2_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_bp1_stddev_score, alt_bp2_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_bp1_is_exact_read, alt_bp2_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_bp1_better_reads_consistent = gen_consensus_and_find_consistent_seqs_subset(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read);
+    auto alt_bp1_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read);
     delete[] alt_bp1_seq;
-    auto alt_bp2_better_reads_consistent = gen_consensus_and_find_consistent_seqs_subset(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read);
+    auto alt_bp2_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read);
     delete[] alt_bp2_seq;
 
     char* ref_bp1_seq = new char[ref_bp1_len+1];
     strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
     ref_bp1_seq[ref_bp1_len] = 0;
-    auto ref_bp1_better_reads_consistent = gen_consensus_and_find_consistent_seqs_subset(ref_bp1_seq, ref_bp1_better_reads, ref_bp1_better_reads_isrc, ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read);
+    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, ref_bp1_better_reads_isrc, ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read);
     delete[] ref_bp1_seq;
 
     char* ref_bp2_seq = new char[ref_bp2_len+1];
     strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
     ref_bp2_seq[ref_bp2_len] = 0;
-    auto ref_bp2_better_reads_consistent = gen_consensus_and_find_consistent_seqs_subset(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read);
+    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read);
     delete[] ref_bp2_seq;
 
     if (alt_bp1_consensus_seq.length() >= 2*config.min_clip_len) {
@@ -499,10 +499,10 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     inv->sample_info.ext_alt_consensus1_to_alt_score = alt1_aln.query_end - alt1_aln.query_begin - alt1_aln.mismatches;
     inv->sample_info.ext_alt_consensus2_to_alt_score = alt2_aln.query_end - alt2_aln.query_begin - alt2_aln.mismatches;
 
-    set_bp_consensus_info(inv->sample_info.alt_bp1.reads_info, alt_bp1_better_reads.size(), alt_bp1_better_reads_consistent, alt_bp1_is_exact_read, alt_bp1_avg_score, alt_bp1_stddev_score);
-    set_bp_consensus_info(inv->sample_info.alt_bp2.reads_info, alt_bp2_better_reads.size(), alt_bp2_better_reads_consistent, alt_bp2_is_exact_read, alt_bp2_avg_score, alt_bp2_stddev_score);
-    set_bp_consensus_info(inv->sample_info.ref_bp1.reads_info, ref_bp1_better_reads.size(), ref_bp1_better_reads_consistent, ref_bp1_is_exact_read, ref_bp1_avg_score, ref_bp1_stddev_score);
-    set_bp_consensus_info(inv->sample_info.ref_bp2.reads_info, ref_bp2_better_reads.size(), ref_bp2_better_reads_consistent, ref_bp2_is_exact_read, ref_bp2_avg_score, ref_bp2_stddev_score);
+    set_bp_consensus_info(inv->sample_info.alt_bp1.reads_info, alt_bp1_better_reads, alt_bp1_is_consistent_read, alt_bp1_is_exact_read, alt_bp1_avg_score, alt_bp1_stddev_score);
+    set_bp_consensus_info(inv->sample_info.alt_bp2.reads_info, alt_bp2_better_reads, alt_bp2_is_consistent_read, alt_bp2_is_exact_read, alt_bp2_avg_score, alt_bp2_stddev_score);
+    set_bp_consensus_info(inv->sample_info.ref_bp1.reads_info, ref_bp1_better_reads, ref_bp1_is_consistent_read, ref_bp1_is_exact_read, ref_bp1_avg_score, ref_bp1_stddev_score);
+    set_bp_consensus_info(inv->sample_info.ref_bp2.reads_info, ref_bp2_better_reads, ref_bp2_is_consistent_read, ref_bp2_is_exact_read, ref_bp2_avg_score, ref_bp2_stddev_score);
 }
 
 bool is_small_inv(inversion_t* inv, stats_t& stats, config_t& config) {

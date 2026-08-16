@@ -213,6 +213,9 @@ struct sv_t {
         double consistent_avg_mq = 0, consistent_stddev_mq = 0;
         int consistent_high_mq = 0;
         double consistent_avg_score = 0, consistent_stddev_score = 0;
+        int consistent_exact_fwd = 0, consistent_exact_rev = 0;
+        int consistent_exact_min_mq = INT32_MAX, consistent_exact_max_mq = 0;
+        int consistent_exact_high_mq = 0;
         int exact_fwd = 0, exact_rev = 0;
         int exact_min_mq = INT32_MAX, exact_max_mq = 0;
         int exact_high_mq = 0;
@@ -220,6 +223,7 @@ struct sv_t {
         int fwd_hq_mate_cov_bps = 0, rev_hq_mate_cov_bps = 0;
 
         int consistent_reads() { return consistent_fwd + consistent_rev; }
+        int consistent_exact_reads() { return consistent_exact_fwd + consistent_exact_rev; }
         int exact_reads() { return exact_fwd + exact_rev; }
     };
 

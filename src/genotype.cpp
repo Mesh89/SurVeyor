@@ -66,10 +66,14 @@ void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_i
     bcf_update_format_int32(out_hdr, b, read_fmt_prefix.c_str(), &(bp_reads_info.reads), 1);
 
     int consistent_reads = bp_reads_info.consistent_reads();
+    int consistent_exact_reads = bp_reads_info.consistent_exact_reads();
+    int exact_reads = bp_reads_info.exact_reads();
     if (bp_reads_info.reads) {
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "C").c_str(), &(consistent_reads), 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), &exact_reads, 1);
     }
     if (consistent_reads) {
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CE").c_str(), &consistent_exact_reads, 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CF").c_str(), &(bp_reads_info.consistent_fwd), 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CR").c_str(), &(bp_reads_info.consistent_rev), 1);
         float rcas = bp_reads_info.consistent_avg_score;
@@ -88,15 +92,20 @@ void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_i
         int hq_mate_cov_bps[] = {bp_reads_info.fwd_hq_mate_cov_bps, bp_reads_info.rev_hq_mate_cov_bps};
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CMHQSPAN").c_str(), hq_mate_cov_bps, 2);
 
-        int exact_reads = bp_reads_info.exact_fwd + bp_reads_info.exact_rev;
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), &exact_reads, 1);
-        if (exact_reads) {
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), &(bp_reads_info.exact_high_mq), 1);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EmQ").c_str(), &(bp_reads_info.exact_min_mq), 1);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EMQ").c_str(), &(bp_reads_info.exact_max_mq), 1);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), &(bp_reads_info.exact_fwd), 1);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), &(bp_reads_info.exact_rev), 1);
+        if (consistent_exact_reads) {
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEHQ").c_str(), &(bp_reads_info.consistent_exact_high_mq), 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEmQ").c_str(), &(bp_reads_info.consistent_exact_min_mq), 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEMQ").c_str(), &(bp_reads_info.consistent_exact_max_mq), 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEF").c_str(), &(bp_reads_info.consistent_exact_fwd), 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CER").c_str(), &(bp_reads_info.consistent_exact_rev), 1);
         }
+    }
+    if (exact_reads) {
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), &(bp_reads_info.exact_high_mq), 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EmQ").c_str(), &(bp_reads_info.exact_min_mq), 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EMQ").c_str(), &(bp_reads_info.exact_max_mq), 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), &(bp_reads_info.exact_fwd), 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), &(bp_reads_info.exact_rev), 1);
     }
 }
 
@@ -108,6 +117,12 @@ void reset_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, std::string prefi
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "C").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CF").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CR").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CE").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEHQ").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEmQ").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEMQ").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEF").c_str(), NULL, 0);
+    bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CER").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), NULL, 0);
     bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EmQ").c_str(), NULL, 0);
@@ -611,55 +626,80 @@ hts_pos_t get_covered_bps(std::vector<hts_pair_pos_t>& pos_pairs) {
     return total;
 }
 
-void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, int n_reads, std::vector<bp_support_read_t>& consistent_reads,
-    std::vector<bool>& is_exact_read, double consistent_avg_score, double consistent_stddev_score) {
+void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<bp_support_read_t>& reads,
+    std::vector<bool>& is_consistent_read, std::vector<bool>& is_exact_read,
+    double consistent_avg_score, double consistent_stddev_score) {
+
+    if (reads.size() != is_consistent_read.size() || reads.size() != is_exact_read.size()) {
+        throw std::runtime_error("Read classification vector size mismatch.");
+    }
 
     bp_reads_info.computed = true;
-    bp_reads_info.reads = n_reads;
+    bp_reads_info.reads = reads.size();
 
     std::vector<int> mqs;
     std::vector<hts_pair_pos_t> fwd_mate_positions, rev_mate_positions;
     std::vector<hts_pair_pos_t> fwd_hq_mate_positions, rev_hq_mate_positions;
 
     double sum_mq = 0;
-    for (size_t i = 0; i < consistent_reads.size(); ++i) {
-        const bp_support_read_t& read = consistent_reads[i];
+    int n_consistent_reads = 0;
+    for (size_t i = 0; i < reads.size(); ++i) {
+        const bp_support_read_t& read = reads[i];
         int mq = read.mate_mapq;
+        bool is_consistent = is_consistent_read[i];
+        bool is_exact = is_exact_read[i];
+
         if (read.mate_is_reverse) {
-            bp_reads_info.consistent_fwd++;
-            if (is_exact_read[i]) bp_reads_info.exact_fwd++;
-            rev_mate_positions.push_back({read.mate_pos, read.mate_endpos});
-            if (mq >= config.high_confidence_mapq) {
-                rev_hq_mate_positions.push_back({read.mate_pos, read.mate_endpos});
+            if (is_consistent) bp_reads_info.consistent_fwd++;
+            if (is_exact) bp_reads_info.exact_fwd++;
+            if (is_consistent && is_exact) bp_reads_info.consistent_exact_fwd++;
+            if (is_consistent) {
+                rev_mate_positions.push_back({read.mate_pos, read.mate_endpos});
+                if (mq >= config.high_confidence_mapq) {
+                    rev_hq_mate_positions.push_back({read.mate_pos, read.mate_endpos});
+                }
             }
         } else {
-            bp_reads_info.consistent_rev++;
-            if (is_exact_read[i]) bp_reads_info.exact_rev++;
-            fwd_mate_positions.push_back({read.mate_pos, read.mate_endpos});
-            if (mq >= config.high_confidence_mapq) {
-                fwd_hq_mate_positions.push_back({read.mate_pos, read.mate_endpos});
+            if (is_consistent) bp_reads_info.consistent_rev++;
+            if (is_exact) bp_reads_info.exact_rev++;
+            if (is_consistent && is_exact) bp_reads_info.consistent_exact_rev++;
+            if (is_consistent) {
+                fwd_mate_positions.push_back({read.mate_pos, read.mate_endpos});
+                if (mq >= config.high_confidence_mapq) {
+                    fwd_hq_mate_positions.push_back({read.mate_pos, read.mate_endpos});
+                }
             }
         }
-        bp_reads_info.consistent_min_mq = std::min(bp_reads_info.consistent_min_mq, mq);
-        bp_reads_info.consistent_max_mq = std::max(bp_reads_info.consistent_max_mq, mq);
-        if (mq >= config.high_confidence_mapq) {
-            bp_reads_info.consistent_high_mq++;
+
+        if (is_consistent) {
+            bp_reads_info.consistent_min_mq = std::min(bp_reads_info.consistent_min_mq, mq);
+            bp_reads_info.consistent_max_mq = std::max(bp_reads_info.consistent_max_mq, mq);
+            if (mq >= config.high_confidence_mapq) {
+                bp_reads_info.consistent_high_mq++;
+            }
+            sum_mq += mq;
+            mqs.push_back(mq);
+            n_consistent_reads++;
         }
-        if (is_exact_read[i]) {
+        if (is_consistent && is_exact) {
+            bp_reads_info.consistent_exact_min_mq = std::min(bp_reads_info.consistent_exact_min_mq, mq);
+            bp_reads_info.consistent_exact_max_mq = std::max(bp_reads_info.consistent_exact_max_mq, mq);
+            if (mq >= config.high_confidence_mapq) {
+                bp_reads_info.consistent_exact_high_mq++;
+            }
+        }
+        if (is_exact) {
             bp_reads_info.exact_min_mq = std::min(bp_reads_info.exact_min_mq, mq);
             bp_reads_info.exact_max_mq = std::max(bp_reads_info.exact_max_mq, mq);
             if (mq >= config.high_confidence_mapq) {
                 bp_reads_info.exact_high_mq++;
             }
         }
-
-        sum_mq += mq;
-        mqs.push_back(mq);
     }
     bp_reads_info.consistent_avg_score = consistent_avg_score;
     bp_reads_info.consistent_stddev_score = consistent_stddev_score;
 
-    bp_reads_info.consistent_avg_mq = sum_mq/std::max(1, (int) consistent_reads.size());
+    bp_reads_info.consistent_avg_mq = sum_mq/std::max(1, n_consistent_reads);
     bp_reads_info.consistent_stddev_mq = stddev(mqs);
 
     bp_reads_info.fwd_mate_cov_bps = get_covered_bps(fwd_mate_positions);
@@ -668,15 +708,17 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, int n_reads, st
     bp_reads_info.rev_hq_mate_cov_bps = get_covered_bps(rev_hq_mate_positions);
 }
 
-void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, int n_reads, std::vector<std::shared_ptr<bam1_t>>& consistent_reads,
-    std::vector<bool>& is_exact_read, double consistent_avg_score, double consistent_stddev_score) {
+void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std::shared_ptr<bam1_t>>& reads,
+    std::vector<bool>& is_consistent_read, std::vector<bool>& is_exact_read,
+    double consistent_avg_score, double consistent_stddev_score) {
 
-    std::vector<bp_support_read_t> bp_support_reads;
-    bp_support_reads.reserve(consistent_reads.size());
-    for (const std::shared_ptr<bam1_t>& read : consistent_reads) {
-        bp_support_reads.emplace_back(read.get());
+    std::vector<bp_support_read_t> bp_reads;
+    bp_reads.reserve(reads.size());
+    for (const std::shared_ptr<bam1_t>& read : reads) {
+        bp_reads.emplace_back(read.get());
     }
-    set_bp_consensus_info(bp_reads_info, n_reads, bp_support_reads, is_exact_read, consistent_avg_score, consistent_stddev_score);
+    set_bp_consensus_info(bp_reads_info, bp_reads, is_consistent_read, is_exact_read,
+        consistent_avg_score, consistent_stddev_score);
 }
 
 std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs) {
@@ -698,8 +740,8 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     return consensus_seqs;
 }
 
-// Returns a pair of (consistent reads, is_exact_match)
-std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subset(std::string ref_seq, 
+// Returns a consistency mask over reads; is_exact_match uses the same index space.
+std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<std::shared_ptr<bam1_t>>& reads, std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, 
     std::vector<bool>& is_exact_match) {
 
@@ -707,7 +749,7 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
         avg_score = 0;
         stddev_score = 0;
         consensus_seq = "";
-        is_exact_match.clear();
+        is_exact_match.assign(reads.size(), false);
         return {};
     }
 
@@ -727,7 +769,6 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
     std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs);
 
     std::vector<std::shared_ptr<bam1_t>> consistent_reads;
-    is_exact_match.clear();
     std::vector<int> start_positions, end_positions;
     std::vector<int> chosen_seqs_idxs;
     double cum_score = 0;
@@ -744,7 +785,6 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
 
         std::vector<std::shared_ptr<bam1_t>> curr_consistent_reads;
         std::vector<int> curr_start_positions, curr_end_positions;
-        std::vector<bool> curr_is_exact_match;
         std::vector<int> curr_seqs_idxs;
         double curr_cum_score = 0;
         std::vector<double> curr_aln_scores;
@@ -757,7 +797,6 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
             if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
                 curr_seqs_idxs.push_back(j);
                 curr_consistent_reads.push_back(read);
-                curr_is_exact_match.push_back(ungapped_aln.mismatches == 0);
                 curr_cum_score += double(ungapped_aln.score)/read_seq.length();
                 curr_aln_scores.push_back(double(ungapped_aln.score)/read_seq.length());
                 curr_start_positions.push_back(ungapped_aln.ref_begin);
@@ -774,7 +813,6 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
             start_positions = curr_start_positions;
             end_positions = curr_end_positions;
             consensus_seq = cseq;
-            is_exact_match = curr_is_exact_match;
             chosen_cseq_idx = i;
         }
     }
@@ -811,10 +849,11 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
 
     // Correction and trimming can change which reads are consistent with the consensus, as well as which of those reads match it exactly.  
     // Recompute the returned evidence against the corrected consensus sequence.
-    consistent_reads.clear();
-    is_exact_match.clear();
+    std::vector<bool> is_consistent_read(reads.size(), false);
+    is_exact_match.assign(reads.size(), false);
     aln_scores.clear();
     cum_score = 0;
+    int n_consistent_reads = 0;
     if (!evidence_consensus_seq.empty()) {
         for (int i = 0; i < reads.size(); i++) {
             const std::string& read_seq = seqs[i];
@@ -822,8 +861,9 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
                 evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1));
 
             if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
-                consistent_reads.push_back(reads[i]);
-                is_exact_match.push_back(ungapped_aln.mismatches == 0);
+                is_consistent_read[i] = true;
+                is_exact_match[i] = ungapped_aln.mismatches == 0;
+                n_consistent_reads++;
                 double aln_score = double(ungapped_aln.score) / read_seq.length();
                 cum_score += aln_score;
                 aln_scores.push_back(aln_score);
@@ -831,31 +871,37 @@ std::vector<std::shared_ptr<bam1_t>> gen_consensus_and_find_consistent_seqs_subs
         }
     }
 
-    if (!consistent_reads.empty()) {
-        avg_score = cum_score / log(evidence_consensus_seq.length()) / consistent_reads.size();
+    if (n_consistent_reads > 0) {
+        avg_score = cum_score / log(evidence_consensus_seq.length()) / n_consistent_reads;
     } else {
         avg_score = 0;
     }
     stddev_score = stddev(aln_scores);
 
-    return consistent_reads;
+    return is_consistent_read;
 }
 
-std::vector<std::shared_ptr<bam1_t>> find_seqs_consistent_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads, 
-    double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read) {
+std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
+    const std::vector<bool>& is_eligible_read, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read) {
+
+    if (reads.size() != is_eligible_read.size()) {
+        throw std::runtime_error("Read eligibility vector size mismatch.");
+    }
 
     if (reads.empty()) {
         avg_score = 0;
         stddev_score = 0;
-        is_exact_read.clear();
-        return reads;
+        is_exact_read.assign(reads.size(), false);
+        return {};
     }
 
-    std::vector<std::shared_ptr<bam1_t>> consistent_reads;
-    is_exact_read.clear();
+    std::vector<bool> is_consistent_read(reads.size(), false);
+    is_exact_read.assign(reads.size(), false);
 
     std::vector<double> aln_scores;
-    for (std::shared_ptr<bam1_t> read : reads) {
+    for (int i = 0; i < reads.size(); i++) {
+        if (!is_eligible_read[i]) continue;
+        std::shared_ptr<bam1_t> read = reads[i];
         std::string seq = get_sequence(read.get(), true);
         if (!bam_is_mrev(read)) rc(seq);
 
@@ -864,8 +910,8 @@ std::vector<std::shared_ptr<bam1_t>> find_seqs_consistent_with_ref_seq(std::stri
 
         double mismatch_rate = double(ungapped_aln.mismatches)/(ungapped_aln.query_end-ungapped_aln.query_begin);
         if (mismatch_rate <= config.max_seq_error) {
-            consistent_reads.push_back(read);
-            is_exact_read.push_back(mismatch_rate == 0);
+            is_consistent_read[i] = true;
+            is_exact_read[i] = mismatch_rate == 0;
             aln_scores.push_back(double(ungapped_aln.score)/seq.length());
         }
     }
@@ -873,7 +919,7 @@ std::vector<std::shared_ptr<bam1_t>> find_seqs_consistent_with_ref_seq(std::stri
     avg_score = mean(aln_scores);
     stddev_score = stddev(aln_scores);
 
-    return consistent_reads;
+    return is_consistent_read;
 }
 
 void read_mates(int contig_id) {

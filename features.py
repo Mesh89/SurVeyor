@@ -228,13 +228,13 @@ class Features:
 
     def min_are_over_nare(record):
         sample = record.samples[0]
-        ar1e = Features.get_number_value(sample, 'AR1E', 0)
+        ar1e = Features.get_number_value(sample, 'AR1CE', 0)
         oar1e = Features.get_number_value(sample, 'OAR1E', 0)
-        rr1e = Features.get_number_value(sample, 'RR1E', 0)
+        rr1e = Features.get_number_value(sample, 'RR1CE', 0)
 
-        ar2e = Features.get_number_value(sample, 'AR2E', ar1e)
+        ar2e = Features.get_number_value(sample, 'AR2CE', ar1e)
         oar2e = Features.get_number_value(sample, 'OAR2E', oar1e)
-        rr2e = Features.get_number_value(sample, 'RR2E', rr1e)
+        rr2e = Features.get_number_value(sample, 'RR2CE', rr1e)
 
         ratio1 = ar1e/max(1, ar1e + oar1e + rr1e)
         ratio2 = ar2e/max(1, ar2e + oar2e + rr2e)
@@ -479,7 +479,7 @@ class Features:
         ar1 = Features.get_number_value(sample, 'AR1', 0)
         ar1c = Features.get_number_value(sample, 'AR1C', 0)
         arc1hq = Features.get_number_value(sample, 'AR1CHQ', 0)
-        ar1e = Features.get_number_value(sample, 'AR1E', 0)
+        ar1e = Features.get_number_value(sample, 'AR1CE', 0)
         ar1_adj = ar1
         ar1c_adj = ar1c
         if exp_alt_reads_freq1 > 0:
@@ -517,7 +517,7 @@ class Features:
         ar2 = Features.get_number_value(sample, 'AR2', 0)
         ar2c = Features.get_number_value(sample, 'AR2C', 0)
         arc2hq = Features.get_number_value(sample, 'AR2CHQ', 0)
-        ar2e = Features.get_number_value(sample, 'AR2E', 0)
+        ar2e = Features.get_number_value(sample, 'AR2CE', 0)
         ar2cas = Features.get_number_value(sample, 'AR2CAS', Features.NAN)
         ar2css = Features.get_number_value(sample, 'AR2CSS', Features.NAN)
         has_ar2 = 'AR2' in sample
@@ -563,10 +563,10 @@ class Features:
         features['ARCR'] = ar1cr + ar2cr
         features['MAXARCD'] = max(features['ARCF'], features['ARCR'])
 
-        ar1ef = Features.get_number_value(sample, 'AR1EF', 0, max(1, ar1e))
-        ar1er = Features.get_number_value(sample, 'AR1ER', 0, max(1, ar1e))
-        ar2ef = Features.get_number_value(sample, 'AR2EF', 0, max(1, ar2e))
-        ar2er = Features.get_number_value(sample, 'AR2ER', 0, max(1, ar2e))
+        ar1ef = Features.get_number_value(sample, 'AR1CEF', 0, max(1, ar1e))
+        ar1er = Features.get_number_value(sample, 'AR1CER', 0, max(1, ar1e))
+        ar2ef = Features.get_number_value(sample, 'AR2CEF', 0, max(1, ar2e))
+        ar2er = Features.get_number_value(sample, 'AR2CER', 0, max(1, ar2e))
         if not has_ar2: ar2ef, ar2er = ar1ef, ar1er
         features['AREF'] = ar1ef + ar2ef
         features['ARER'] = ar1er + ar2er
@@ -637,12 +637,12 @@ class Features:
         rr1 = Features.get_number_value(sample, 'RR1', 0)
         rr1c = Features.get_number_value(sample, 'RR1C', 0)
         rr1chq = Features.get_number_value(sample, 'RR1CHQ', 0)
-        rr1e = Features.get_number_value(sample, 'RR1E', 0)
-        rr1ehq = Features.get_number_value(sample, 'RR1EHQ', 0)
+        rr1e = Features.get_number_value(sample, 'RR1CE', 0)
+        rr1ehq = Features.get_number_value(sample, 'RR1CEHQ', 0)
         rr2 = Features.get_number_value(sample, 'RR2', 0)
         rr2c = Features.get_number_value(sample, 'RR2C', 0)
         rr2chq = Features.get_number_value(sample, 'RR2CHQ', 0)
-        rr2e = Features.get_number_value(sample, 'RR2E', 0)
+        rr2e = Features.get_number_value(sample, 'RR2CE', 0)
 
         rr1cas = Features.get_number_value(sample, 'RR1CAS', Features.NAN)
         rr1css = Features.get_number_value(sample, 'RR1CSS', Features.NAN)
@@ -652,8 +652,8 @@ class Features:
         features['RR1CMQ'] = Features.get_number_value(sample, 'RR1CMQ', Features.NAN)
         features['RR1C_HQ_RATIO'] = rr1chq/max(1, rr1c)
         features['RR1E'] = Features.piecewise_normalise(rr1e, min_depth, max_depth)
-        features['RR1EmQ'] = Features.get_number_value(sample, 'RR1EmQ', Features.NAN)
-        features['RR1EMQ'] = Features.get_number_value(sample, 'RR1EMQ', Features.NAN)
+        features['RR1EmQ'] = Features.get_number_value(sample, 'RR1CEmQ', Features.NAN)
+        features['RR1EMQ'] = Features.get_number_value(sample, 'RR1CEMQ', Features.NAN)
         features['RR1E_HQ_RATIO'] = rr1ehq/max(1, rr1e)
         features['RR1E_RATIO'] = rr1e/max(1, rr1c)
         features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.get_number_value(sample, 'RR1CMSPAN', [0, 0], max_is)
@@ -709,10 +709,10 @@ class Features:
         features['RRCR'] = rr1cr_ratio + rr2cr_ratio
         features['MAXRRCD'] = max(features['RRCF'], features['RRCR'])
 
-        rr1ef = Features.get_number_value(sample, 'RR1EF', 0, max(1, rr1e))
-        rr1er = Features.get_number_value(sample, 'RR1ER', 0, max(1, rr1e))
-        rr2ef = Features.get_number_value(sample, 'RR2EF', 0, max(1, rr2e))
-        rr2er = Features.get_number_value(sample, 'RR2ER', 0, max(1, rr2e))
+        rr1ef = Features.get_number_value(sample, 'RR1CEF', 0, max(1, rr1e))
+        rr1er = Features.get_number_value(sample, 'RR1CER', 0, max(1, rr1e))
+        rr2ef = Features.get_number_value(sample, 'RR2CEF', 0, max(1, rr2e))
+        rr2er = Features.get_number_value(sample, 'RR2CER', 0, max(1, rr2e))
         if not has_rr2: rr2ef, rr2er = rr1ef, rr1er
         features['RREF'] = rr1ef + rr2ef
         features['RRER'] = rr1er + rr2er
