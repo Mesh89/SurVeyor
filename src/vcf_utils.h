@@ -387,12 +387,20 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* oar1_tag = "##FORMAT=<ID=OAR1,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the ALT allele of this SV, but assigned to another variant.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1ALL");
+	const char* oar1all_tag = "##FORMAT=<ID=OAR1ALL,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 1 of the ALT allele of this SV, but assigned to another variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1all_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1HPID");
 	const char* oar1hpid_tag = "##FORMAT=<ID=OAR1HPID,Number=1,Type=Integer,Description=\"HPID receiving the most reads counted in OAR1. Ties are resolved in favor of the smallest HPID.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1hpid_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1VID");
+	const char* oar1vid_tag = "##FORMAT=<ID=OAR1VID,Number=.,Type=String,Description=\"Variant IDs receiving the maximum number of reads attributed from OAR1. Multiple IDs indicate a tie.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1vid_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1MAX");
-	const char* oar1max_tag = "##FORMAT=<ID=OAR1MAX,Number=1,Type=Integer,Description=\"Number of OAR1 reads assigned to the HPID reported in OAR1HPID.\">";
+	const char* oar1max_tag = "##FORMAT=<ID=OAR1MAX,Number=1,Type=Integer,Description=\"Maximum number of OAR1 reads attributed to any variant ID reported in OAR1VID.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar1max_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR1C");
@@ -411,12 +419,20 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* oar2_tag = "##FORMAT=<ID=OAR2,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the ALT allele of this SV, but assigned to another variant.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2ALL");
+	const char* oar2all_tag = "##FORMAT=<ID=OAR2ALL,Number=1,Type=Integer,Description=\"Number of reads supporting breakpoint 2 of the ALT allele of this SV, but assigned to another variant.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2all_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2HPID");
 	const char* oar2hpid_tag = "##FORMAT=<ID=OAR2HPID,Number=1,Type=Integer,Description=\"HPID receiving the most reads counted in OAR2. Ties are resolved in favor of the smallest HPID.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2hpid_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2VID");
+	const char* oar2vid_tag = "##FORMAT=<ID=OAR2VID,Number=.,Type=String,Description=\"Variant IDs receiving the maximum number of reads attributed from OAR2. Multiple IDs indicate a tie.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2vid_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2MAX");
-	const char* oar2max_tag = "##FORMAT=<ID=OAR2MAX,Number=1,Type=Integer,Description=\"Number of OAR2 reads assigned to the HPID reported in OAR2HPID.\">";
+	const char* oar2max_tag = "##FORMAT=<ID=OAR2MAX,Number=1,Type=Integer,Description=\"Maximum number of OAR2 reads attributed to any variant ID reported in OAR2VID.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, oar2max_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "OAR2C");

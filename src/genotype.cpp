@@ -257,6 +257,7 @@ void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const 
 
     if (!computed) {
         bcf_update_format_int32(out_hdr, record, tag.c_str(), NULL, 0);
+        if (prefix == "OAR") bcf_update_format_int32(out_hdr, record, (tag + "ALL").c_str(), NULL, 0);
         bcf_update_format_int32(out_hdr, record, consistent_tag.c_str(), NULL, 0);
         bcf_update_format_int32(out_hdr, record, consistent_hq_tag.c_str(), NULL, 0);
         bcf_update_format_int32(out_hdr, record, exact_tag.c_str(), NULL, 0);
@@ -264,6 +265,7 @@ void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const 
     }
 
     bcf_update_format_int32(out_hdr, record, tag.c_str(), &reads, 1);
+    if (prefix == "OAR") bcf_update_format_int32(out_hdr, record, (tag + "ALL").c_str(), &reads, 1);
 
     int consistent = get_other_read_count(consistent_reads);
     bcf_update_format_int32(out_hdr, record, consistent_tag.c_str(), &consistent, 1);
@@ -275,24 +277,27 @@ void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const 
     bcf_update_format_int32(out_hdr, record, exact_tag.c_str(), &exact, 1);
 }
 
-void update_oar_max_fields(bcf_hdr_t* out_hdr, bcf1_t* record, int bp_number, bool computed, const std::unordered_map<int, int>& reads_by_hpid) {
+void update_oar_max_fields(bcf_hdr_t* out_hdr, bcf1_t* record, int bp_number, bool computed,
+    const std::unordered_map<int, int>& reads_by_hpid,
+    const std::unordered_map<std::string, int>& reads_by_vid) {
     const std::string tag_prefix = "OAR" + std::to_string(bp_number);
 
     if (!computed) {
         bcf_update_format_int32(out_hdr, record, (tag_prefix + "HPID").c_str(), NULL, 0);
+        bcf_update_format_string(out_hdr, record, (tag_prefix + "VID").c_str(), NULL, 0);
         bcf_update_format_int32(out_hdr, record, (tag_prefix + "MAX").c_str(), NULL, 0);
         return;
     }
 
     int32_t best_hpid = bcf_int32_missing;
-    int32_t best_count = 0;
+    int32_t best_hpid_count = 0;
 
     for (const auto& entry : reads_by_hpid) {
         int hpid = entry.first;
         int count = entry.second;
-        if (count > best_count || (count == best_count && hpid < best_hpid)) {
+        if (count > best_hpid_count || (count == best_hpid_count && hpid < best_hpid)) {
             best_hpid = hpid;
-            best_count = count;
+            best_hpid_count = count;
         }
     }
 
@@ -301,7 +306,33 @@ void update_oar_max_fields(bcf_hdr_t* out_hdr, bcf1_t* record, int bp_number, bo
     } else {
         bcf_update_format_int32(out_hdr, record, (tag_prefix + "HPID").c_str(), &best_hpid, 1);
     }
-    bcf_update_format_int32(out_hdr, record, (tag_prefix + "MAX").c_str(), &best_count, 1);
+
+    int32_t best_vid_count = 0;
+    std::vector<std::string> best_vids;
+    for (const auto& entry : reads_by_vid) {
+        const std::string& vid = entry.first;
+        int count = entry.second;
+        if (count > best_vid_count) {
+            best_vid_count = count;
+            best_vids.clear();
+            best_vids.push_back(vid);
+        } else if (count == best_vid_count) {
+            best_vids.push_back(vid);
+        }
+    }
+
+    if (best_vids.empty()) {
+        bcf_update_format_string(out_hdr, record, (tag_prefix + "VID").c_str(), NULL, 0);
+    } else {
+        std::sort(best_vids.begin(), best_vids.end());
+        std::string joined_vids = best_vids[0];
+        for (size_t i = 1; i < best_vids.size(); i++) {
+            joined_vids += "," + best_vids[i];
+        }
+        const char* joined_vids_cstr = joined_vids.c_str();
+        bcf_update_format_string(out_hdr, record, (tag_prefix + "VID").c_str(), &joined_vids_cstr, 1);
+    }
+    bcf_update_format_int32(out_hdr, record, (tag_prefix + "MAX").c_str(), &best_vid_count, 1);
 }
 
 void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_seq, hts_pos_t chr_len, int sample_idx) {
@@ -417,12 +448,14 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "ERHQ", &erhq, 1);
 
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 1, true, sv->sample_info.oar_bp1_reads, sv->sample_info.oar_bp1_consistent_reads);
-    update_oar_max_fields(out_hdr, sv->vcf_entry, 1, true, sv->sample_info.oar_bp1_reads_by_hpid);
+    update_oar_max_fields(out_hdr, sv->vcf_entry, 1, true,
+        sv->sample_info.oar_bp1_reads_by_hpid, sv->sample_info.oar_bp1_reads_by_vid);
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 1, true, sv->sample_info.orr_bp1_reads, sv->sample_info.orr_bp1_consistent_reads);
 
     const bool bp2_computed = sv->sample_info.ref_bp2.reads_info.computed;
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 2, bp2_computed, sv->sample_info.oar_bp2_reads, sv->sample_info.oar_bp2_consistent_reads);
-    update_oar_max_fields(out_hdr, sv->vcf_entry, 2, bp2_computed, sv->sample_info.oar_bp2_reads_by_hpid);
+    update_oar_max_fields(out_hdr, sv->vcf_entry, 2, bp2_computed,
+        sv->sample_info.oar_bp2_reads_by_hpid, sv->sample_info.oar_bp2_reads_by_vid);
     update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 2, bp2_computed, sv->sample_info.orr_bp2_reads, sv->sample_info.orr_bp2_consistent_reads);
 
     int td = sv->sample_info.too_deep;

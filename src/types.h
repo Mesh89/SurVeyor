@@ -267,6 +267,10 @@ struct sv_t {
         std::unordered_map<int, int> oar_bp1_reads_by_hpid;
         std::unordered_map<int, int> oar_bp2_reads_by_hpid;
 
+        // Number of reads attributed to each best-scoring variant within the selected destination haplotype.
+        std::unordered_map<std::string, int> oar_bp1_reads_by_vid;
+        std::unordered_map<std::string, int> oar_bp2_reads_by_vid;
+
         // OAR*C and ORR*C sources of truth keyed by suffixed read id; hq and exact derive CHQ and E.
         std::unordered_map<std::string, other_read_info_t> oar_bp1_consistent_reads;
         std::unordered_map<std::string, other_read_info_t> oar_bp2_consistent_reads;

@@ -860,6 +860,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         // We incremenet OAR counts for indels that are not the best match for this cluster
         if (!is_ref_allele) {
             int supporting_hpid = hp_indels[allele_cluster.allele_idx]->hpid;
+            const std::string& supporting_sv_id = hp_indels[allele_cluster.allele_idx]->id;
             for (int target_allele_idx = 0; target_allele_idx < hp_indels.size(); target_allele_idx++) {
                 if (std::find(best_allele_idxs.begin(), best_allele_idxs.end(), target_allele_idx) != best_allele_idxs.end()) {
                     continue;
@@ -867,7 +868,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
                 for (const hp_read_info_t& hp_read_info : cluster) {
                     hp_indels[target_allele_idx]->sample_info.oar_bp1_reads++;
                     evidence_map->register_oar_support(hp_indels[target_allele_idx]->sample_info, 1,
-                        hp_read_info.read, supporting_hpid);
+                        hp_read_info.read, supporting_hpid, supporting_sv_id);
                 }
             }
         }

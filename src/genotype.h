@@ -148,6 +148,10 @@ struct evidence_logger_t {
 
 struct evidence_map_t {
     std::unordered_map<std::string, int> read_to_hpid_map;
+    // All best-scoring variant IDs within the HPID selected for each read.
+    // A read can have more than one ID when equivalent records represent the
+    // same local haplotype.
+    std::unordered_map<std::string, std::set<std::string>> read_to_sv_ids_map;
 
     // OAR/ORR consistency joins two observations that can arrive in either order on different genotyping threads:
     // a variant classifies an assigned-away read as ALT or REF, and the assigned variant later finds it consistent.
@@ -274,6 +278,7 @@ struct evidence_map_t {
             if (passes_min_epr == best_assoc.passes_min_epr && score == best_assoc.score) {
                 if (best_assoc.unique) {
                     read_to_hpid_map[read_name] = sv_hpid_map[sv_id];
+                    read_to_sv_ids_map[read_name].insert(sv_id);
                 } else {
                     read_to_multiple_svs[read_name].push_back({sv_id, bp});
                 }
@@ -307,35 +312,42 @@ struct evidence_map_t {
             while (sv2_idx < sv_U_vec.size() && sv_hpid_map[sv_U_vec[sv2_idx].second.first] == sv_hpid_map[sv1.first]) {
                 sv2_idx++;
             }
+            int assigned_hpid;
             if (sv2_idx == sv_U_vec.size()) {
-                read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
-                continue;
-            }
-            sv_with_bp_t sv2 = sv_U_vec[sv2_idx].second;
-
-            int U1 = std::get<1>(sv_U_vec[0].first);
-            int U2 = std::get<1>(sv_U_vec[sv2_idx].first);
-            bool sv1_passes_min_epr = std::get<0>(sv_U_vec[0].first);
-            bool sv2_passes_min_epr = std::get<0>(sv_U_vec[sv2_idx].first);
-
-            if (U1 < 3) U1 = 0; // we require a minimum number of 3 uniquely assigned reads
-            if (U2 < 3) U2 = 0; // we require a minimum number of 3 uniquely assigned reads
-            int total_U = U1 + U2;
-            if (sv1_passes_min_epr != sv2_passes_min_epr) {
-                read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
-            } else if (total_U == 0) {
-                // assign to the highest-ranked SV when both candidates have no usable U
-                read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
+                assigned_hpid = sv_hpid_map[sv1.first];
             } else {
-                std::uniform_int_distribution<> dis(1, total_U);
-                int r = dis(gen);
-                if (r <= U1) {
-                    read_to_hpid_map[read_name] = sv_hpid_map[sv1.first];
+                sv_with_bp_t sv2 = sv_U_vec[sv2_idx].second;
+
+                int U1 = std::get<1>(sv_U_vec[0].first);
+                int U2 = std::get<1>(sv_U_vec[sv2_idx].first);
+                bool sv1_passes_min_epr = std::get<0>(sv_U_vec[0].first);
+                bool sv2_passes_min_epr = std::get<0>(sv_U_vec[sv2_idx].first);
+
+                if (U1 < 3) U1 = 0; // we require a minimum number of 3 uniquely assigned reads
+                if (U2 < 3) U2 = 0; // we require a minimum number of 3 uniquely assigned reads
+                int total_U = U1 + U2;
+                if (sv1_passes_min_epr != sv2_passes_min_epr) {
+                    assigned_hpid = sv_hpid_map[sv1.first];
+                } else if (total_U == 0) {
+                    // assign to the highest-ranked SV when both candidates have no usable U
+                    assigned_hpid = sv_hpid_map[sv1.first];
                 } else {
-                    read_to_hpid_map[read_name] = sv_hpid_map[sv2.first];
+                    std::uniform_int_distribution<> dis(1, total_U);
+                    int r = dis(gen);
+                    if (r <= U1) {
+                        assigned_hpid = sv_hpid_map[sv1.first];
+                    } else {
+                        assigned_hpid = sv_hpid_map[sv2.first];
+                    }
                 }
             }
 
+            read_to_hpid_map[read_name] = assigned_hpid;
+            for (const auto& sv_w_bp : sv_w_bps) {
+                if (sv_hpid_map[sv_w_bp.first] == assigned_hpid) {
+                    read_to_sv_ids_map[read_name].insert(sv_w_bp.first);
+                }
+            }
         }
     }
 
@@ -407,7 +419,8 @@ struct evidence_map_t {
     // Remember that an assigned-away read supports this variant's ALT breakpoint. If the assigned
     // variant has already reported consistency, populate OAR*C immediately; otherwise record_assigned_read_consistency does it later.
     void register_oar_support_core(sv_t::sample_info_t& sample_info, int bp_n,
-        const std::string& read_name, const int* supporting_hpid) {
+        const std::string& read_name, const int* supporting_hpid,
+        const std::set<std::string>* supporting_sv_ids) {
         std::lock_guard<std::mutex> lock(other_read_support_mtx);
 
         auto existing_targets = oar_targets_by_read.find(read_name);
@@ -439,6 +452,19 @@ struct evidence_map_t {
                 throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
             }
         }
+        if (target_added && supporting_sv_ids) {
+            std::unordered_map<std::string, int>* reads_by_vid;
+            if (bp_n == 1) {
+                reads_by_vid = &sample_info.oar_bp1_reads_by_vid;
+            } else if (bp_n == 2) {
+                reads_by_vid = &sample_info.oar_bp2_reads_by_vid;
+            } else {
+                throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
+            }
+            for (const std::string& sv_id : *supporting_sv_ids) {
+                (*reads_by_vid)[sv_id]++;
+            }
+        }
 
         auto assigned_read_it = assigned_consistent_reads.find(read_name);
         if (assigned_read_it != assigned_consistent_reads.end()) insert_or_update_oar_consistent_read(sample_info, bp_n, read_name, assigned_read_it->second);
@@ -447,12 +473,15 @@ struct evidence_map_t {
     void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name) {
         auto assigned_hpid_it = read_to_hpid_map.find(read_name);
         const int* supporting_hpid = assigned_hpid_it == read_to_hpid_map.end() ? NULL : &assigned_hpid_it->second;
-        register_oar_support_core(sample_info, bp_n, read_name, supporting_hpid);
+        auto assigned_sv_ids_it = read_to_sv_ids_map.find(read_name);
+        const std::set<std::string>* supporting_sv_ids = assigned_sv_ids_it == read_to_sv_ids_map.end() ? NULL : &assigned_sv_ids_it->second;
+        register_oar_support_core(sample_info, bp_n, read_name, supporting_hpid, supporting_sv_ids);
     }
 
     void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n,
-        const std::string& read_name, int supporting_hpid) {
-        register_oar_support_core(sample_info, bp_n, read_name, &supporting_hpid);
+        const std::string& read_name, int supporting_hpid, const std::string& supporting_sv_id) {
+        const std::set<std::string> supporting_sv_ids = {remove_svid_dup_suffix(supporting_sv_id)};
+        register_oar_support_core(sample_info, bp_n, read_name, &supporting_hpid, &supporting_sv_ids);
     }
 
     // Convenience overloads preserve the /1 or /2 suffix used as the read key.
@@ -465,8 +494,8 @@ struct evidence_map_t {
     }
 
     void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n,
-        const bp_support_read_t& read, int supporting_hpid) {
-        register_oar_support(sample_info, bp_n, read_name_with_suffix(read), supporting_hpid);
+        const bp_support_read_t& read, int supporting_hpid, const std::string& supporting_sv_id) {
+        register_oar_support(sample_info, bp_n, read_name_with_suffix(read), supporting_hpid, supporting_sv_id);
     }
 
     // Remember that an assigned-away read supports this variant's REF breakpoint. If the assigned
@@ -549,6 +578,8 @@ struct evidence_map_t {
         sample_info.orr_bp2_reads = 0;
         sample_info.oar_bp1_reads_by_hpid.clear();
         sample_info.oar_bp2_reads_by_hpid.clear();
+        sample_info.oar_bp1_reads_by_vid.clear();
+        sample_info.oar_bp2_reads_by_vid.clear();
         sample_info.oar_bp1_consistent_reads.clear();
         sample_info.oar_bp2_consistent_reads.clear();
         sample_info.orr_bp1_consistent_reads.clear();
