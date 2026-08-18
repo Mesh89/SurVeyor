@@ -126,11 +126,11 @@ class Features:
         if svtype_str == "DEL":
             if abs(Features.get_svlen(record)) >= max_is:
                 svtype_str += "_LARGE"
-            if 'EXL' not in sample:
+            if 'XAL' not in sample:
                 svtype_str += "_NOEXL"
         elif svtype_str == "DUP" and Features.get_svlen(record) > read_len-30:
             svtype_str += "_LARGE"
-            if 'EXL' not in sample:
+            if 'XAL' not in sample:
                 svtype_str += "_NOEXL"
 
         return svtype_str
@@ -296,26 +296,26 @@ class Features:
         ]
         return max(values, default=0)
 
-    def exas_exrs_diff_to_len(record):
+    def xaas_xars_diff_to_len(record):
         sample = record.samples[0]
-        exas1 = Features.get_number_value(sample, 'EXAS', 0)
-        exas2 = Features.get_number_value(sample, 'EXAS2', 0)
-        exrs1 = Features.get_number_value(sample, 'EXRS', 0)
-        exrs2 = Features.get_number_value(sample, 'EXRS2', 0)
+        xaas1 = Features.get_number_value(sample, 'XAAS', 0)
+        xaas2 = Features.get_number_value(sample, 'XAAS2', 0)
+        xars1 = Features.get_number_value(sample, 'XARS', 0)
+        xars2 = Features.get_number_value(sample, 'XARS2', 0)
         svinslen = len(Features.get_svinsseq(record))
         edit_distance = Features.get_edit_distance(record, svinslen)
-        return (exas1-exrs1+exas2-exrs2)/max(1, edit_distance)
+        return (xaas1-xars1+xaas2-xars2)/max(1, edit_distance)
 
     def has_extension_evidence(record):
         sample = record.samples[0]
-        return 'EXL' in sample or 'EXL2' in sample
+        return 'XAL' in sample or 'XAL2' in sample
 
-    def other_hpid_overlap_exas_exrs_diff_to_len(record, other_hpid, intervals_by_hpid):
+    def other_hpid_overlap_xaas_xars_diff_to_len(record, other_hpid, intervals_by_hpid):
         if other_hpid is None or intervals_by_hpid is None:
             return Features.NAN
         values = [
-            exas_exrs_diff_to_len
-            for chrom, start, stop, _, _, _, _, _, exas_exrs_diff_to_len, has_extension_evidence, _ in intervals_by_hpid.get(other_hpid, [])
+            xaas_xars_diff_to_len
+            for chrom, start, stop, _, _, _, _, _, xaas_xars_diff_to_len, has_extension_evidence, _ in intervals_by_hpid.get(other_hpid, [])
             if has_extension_evidence and record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=Features.NAN)
@@ -697,7 +697,7 @@ class Features:
         features['OTHER1_OVERLAP_MAX_MIN_AR_OVER_NAR'] = Features.other_hpid_overlap_max_min_ar_over_nar(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_MAX_MIN_ARCE_OVER_NARCE'] = Features.other_hpid_overlap_max_min_arce_over_narce(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_MAX_MIN_ARE_OVER_NARE'] = Features.other_hpid_overlap_max_min_are_over_nare(record, oar1hpid, intervals_by_hpid)
-        features['OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_exas_exrs_diff_to_len(record, oar1hpid, intervals_by_hpid)
+        features['OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_xaas_xars_diff_to_len(record, oar1hpid, intervals_by_hpid)
         features['OAR1C'] = Features.piecewise_normalise(oar1c, min_depth, max_depth)
         features['OAR1CHQ'] = Features.piecewise_normalise(oar1chq, min_depth, max_depth)
         features['OAR1C_HQ_RATIO'] = oar1chq/max(1, oar1c)
@@ -711,7 +711,7 @@ class Features:
         features['OTHER2_OVERLAP_MAX_MIN_AR_OVER_NAR'] = Features.other_hpid_overlap_max_min_ar_over_nar(record, oar2hpid, intervals_by_hpid)
         features['OTHER2_OVERLAP_MAX_MIN_ARCE_OVER_NARCE'] = Features.other_hpid_overlap_max_min_arce_over_narce(record, oar2hpid, intervals_by_hpid)
         features['OTHER2_OVERLAP_MAX_MIN_ARE_OVER_NARE'] = Features.other_hpid_overlap_max_min_are_over_nare(record, oar2hpid, intervals_by_hpid)
-        features['OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_exas_exrs_diff_to_len(record, oar2hpid, intervals_by_hpid)
+        features['OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_xaas_xars_diff_to_len(record, oar2hpid, intervals_by_hpid)
         features['OAR2C'] = Features.piecewise_normalise(oar2c, min_depth, max_depth)
         features['OAR2CHQ'] = Features.piecewise_normalise(oar2chq, min_depth, max_depth)
         features['OAR2C_HQ_RATIO'] = oar2chq/max(1, oar2c)
@@ -1126,46 +1126,46 @@ class Features:
         features['AXR1'], features['AXR2'] = axr1, axr2
         features['AXR1HQ'], features['AXR2HQ'] = axr1hq, axr2hq
 
-        exl1 = Features.get_number_value(sample, 'EXL', Features.NAN)
-        exl2 = Features.get_number_value(sample, 'EXL2', Features.NAN)
-        exl_norm_factor = max_is + read_len
-        normalised_exls = [exl / exl_norm_factor for exl in (exl1, exl2) if np.isfinite(exl)]
-        if normalised_exls:
-            features['MEXL'] = max(normalised_exls)
-            features['mEXL'] = min(normalised_exls) if len(normalised_exls) == 2 else Features.NAN
-            features['EXL'] = sum(normalised_exls)
+        xal1 = Features.get_number_value(sample, 'XAL', Features.NAN)
+        xal2 = Features.get_number_value(sample, 'XAL2', Features.NAN)
+        xal_norm_factor = max_is + read_len
+        normalised_xals = [xal / xal_norm_factor for xal in (xal1, xal2) if np.isfinite(xal)]
+        if normalised_xals:
+            features['MEXL'] = max(normalised_xals)
+            features['mEXL'] = min(normalised_xals) if len(normalised_xals) == 2 else Features.NAN
+            features['EXL'] = sum(normalised_xals)
         else:
             features['MEXL'] = Features.NAN
             features['mEXL'] = Features.NAN
             features['EXL'] = Features.NAN
 
-        exas1 = Features.get_number_value(sample, 'EXAS', 0)
-        exas2 = Features.get_number_value(sample, 'EXAS2', 0)
-        exrs1 = Features.get_number_value(sample, 'EXRS', 0)
-        exrs2 = Features.get_number_value(sample, 'EXRS2', 0)
+        xaas1 = Features.get_number_value(sample, 'XAAS', 0)
+        xaas2 = Features.get_number_value(sample, 'XAAS2', 0)
+        xars1 = Features.get_number_value(sample, 'XARS', 0)
+        xars2 = Features.get_number_value(sample, 'XARS2', 0)
 
-        features['EXAS_EXRS_DIFF_TO_LEN'] = (exas1-exrs1+exas2-exrs2)/max(1, edit_distance)
+        features['EXAS_EXRS_DIFF_TO_LEN'] = (xaas1-xars1+xaas2-xars2)/max(1, edit_distance)
 
-        exss1_1, exss1_2 = Features.get_number_value(sample, 'EXSS', [Features.NAN, Features.NAN])
-        features['EXSS1_1'] = exss1_1/(max_is+read_len)
-        features['EXSS1_2'] = exss1_2/(max_is+read_len)
-        features['EXSS1_RATIO1'] = exss1_1/max(1, exl1)
-        features['EXSS1_RATIO2'] = exss1_2/max(1, exl1)
+        xass1_1, xass1_2 = Features.get_number_value(sample, 'XASS', [Features.NAN, Features.NAN])
+        features['EXSS1_1'] = xass1_1/(max_is+read_len)
+        features['EXSS1_2'] = xass1_2/(max_is+read_len)
+        features['EXSS1_RATIO1'] = xass1_1/max(1, xal1)
+        features['EXSS1_RATIO2'] = xass1_2/max(1, xal1)
 
-        exss2_1, exss2_2 = Features.get_number_value(sample, 'EXSS2', [Features.NAN, Features.NAN])
-        features['EXSS2_1'] = exss2_1/(max_is+read_len)
-        features['EXSS2_2'] = exss2_2/(max_is+read_len)
-        features['EXSS2_RATIO1'] = exss2_1/max(1, exl2)
-        features['EXSS2_RATIO2'] = exss2_2/max(1, exl2)
+        xass2_1, xass2_2 = Features.get_number_value(sample, 'XASS2', [Features.NAN, Features.NAN])
+        features['EXSS2_1'] = xass2_1/(max_is+read_len)
+        features['EXSS2_2'] = xass2_2/(max_is+read_len)
+        features['EXSS2_RATIO1'] = xass2_1/max(1, xal2)
+        features['EXSS2_RATIO2'] = xass2_2/max(1, xal2)
 
-        exssc1_1, exssc1_2 = Features.get_number_value(sample, 'EXSSC', [Features.NAN, Features.NAN])
-        exssc2_1, exssc2_2 = Features.get_number_value(sample, 'EXSSC2', [Features.NAN, Features.NAN])
-        exsscia1_1, exsscia1_2 = Features.get_number_value(sample, 'EXSSCIA', [Features.NAN, Features.NAN])
-        exsscia2_1, exsscia2_2 = Features.get_number_value(sample, 'EXSSC2IA', [Features.NAN, Features.NAN])
-        features['EXSSC1_IA_RATIO'] = (exssc1_1+exssc1_2)/max(1, exsscia1_1+exsscia1_2)
-        features['EXSSC2_IA_RATIO'] = (exssc2_1+exssc2_2)/max(1, exsscia2_1+exsscia2_2)
-        features['EXSSC1_IA_DIFF'] = (exsscia1_1+exsscia1_2-exssc1_1-exssc1_2)/max(1, exss1_1+exss1_2)
-        features['EXSSC2_IA_DIFF'] = (exsscia2_1+exsscia2_2-exssc2_1-exssc2_2)/max(1, exss2_1+exss2_2)
+        xassc1_1, xassc1_2 = Features.get_number_value(sample, 'XASSC', [Features.NAN, Features.NAN])
+        xassc2_1, xassc2_2 = Features.get_number_value(sample, 'XASSC2', [Features.NAN, Features.NAN])
+        xasscia1_1, xasscia1_2 = Features.get_number_value(sample, 'XASSCIA', [Features.NAN, Features.NAN])
+        xasscia2_1, xasscia2_2 = Features.get_number_value(sample, 'XASSC2IA', [Features.NAN, Features.NAN])
+        features['EXSSC1_IA_RATIO'] = (xassc1_1+xassc1_2)/max(1, xasscia1_1+xasscia1_2)
+        features['EXSSC2_IA_RATIO'] = (xassc2_1+xassc2_2)/max(1, xasscia2_1+xasscia2_2)
+        features['EXSSC1_IA_DIFF'] = (xasscia1_1+xasscia1_2-xassc1_1-xassc1_2)/max(1, xass1_1+xass1_2)
+        features['EXSSC2_IA_DIFF'] = (xasscia2_1+xasscia2_2-xassc2_1-xassc2_2)/max(1, xass2_1+xass2_2)
 
         feature_values = []
         for feature_name in feature_names:
@@ -1287,7 +1287,7 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, ignore_gts = False, feature_name
                 Features.min_ar_over_nar(candidate),
                 Features.min_arce_over_narce(candidate),
                 Features.min_are_over_nare(candidate),
-                Features.exas_exrs_diff_to_len(candidate),
+                Features.xaas_xars_diff_to_len(candidate),
                 Features.has_extension_evidence(candidate),
                 Features.gt_as_homopolymer(candidate),
             ))

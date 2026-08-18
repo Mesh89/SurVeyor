@@ -506,53 +506,53 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* axrhq_tag = "##FORMAT=<ID=AXRHQ,Number=2,Type=Integer,Description=\"Number of high-quality reads used to extend the alternative allele consensus to the left and the right, respectively.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, axrhq_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXL");
-	const char* exl_tag = "##FORMAT=<ID=EXL,Number=1,Type=Integer,Description=\"Length of the extended alternative allele consensus.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exl_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XAL");
+	const char* xal_tag = "##FORMAT=<ID=XAL,Number=1,Type=Integer,Description=\"Length of the extended alternative allele consensus.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xal_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXL2");
-	const char* exl2_tag = "##FORMAT=<ID=EXL2,Number=1,Type=Integer,Description=\"Length of the extended alternative allele consensus for the second breakpoint (only for insertions).\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exl2_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XAL2");
+	const char* xal2_tag = "##FORMAT=<ID=XAL2,Number=1,Type=Integer,Description=\"Length of the extended alternative allele consensus for the second breakpoint (only for insertions).\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xal2_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXAS");
-	const char* exas_tag = "##FORMAT=<ID=EXAS,Number=1,Type=Integer,Description=\"Edit distance between the extended alternative allele consensus and the original alternative allele (the reference with the variants applied).\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exas_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XAAS");
+	const char* xaas_tag = "##FORMAT=<ID=XAAS,Number=1,Type=Integer,Description=\"Edit distance between the extended alternative allele consensus and the original alternative allele (the reference with the variants applied).\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xaas_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXAS2");
-	const char* exas2_tag = "##FORMAT=<ID=EXAS2,Number=1,Type=Integer,Description=\"Edit distance between the extended alternative allele consensus for the second breakpoint and the original alternative allele (the reference with the SV applied).\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exas2_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XAAS2");
+	const char* xaas2_tag = "##FORMAT=<ID=XAAS2,Number=1,Type=Integer,Description=\"Edit distance between the extended alternative allele consensus for the second breakpoint and the original alternative allele (the reference with the SV applied).\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xaas2_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXRS");
-	const char* exrs_tag = "##FORMAT=<ID=EXRS,Number=1,Type=Integer,Description=\"Score of the alignment between the extended alternative allele consensus and the reference.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exrs_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XARS");
+	const char* xars_tag = "##FORMAT=<ID=XARS,Number=1,Type=Integer,Description=\"Score of the alignment between the extended alternative allele consensus and the reference.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xars_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXRS2");
-	const char* exrs2_tag = "##FORMAT=<ID=EXRS2,Number=1,Type=Integer,Description=\"Score of the alignment between the extended alternative allele consensus for the second breakpoint and the reference.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exrs2_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XARS2");
+	const char* xars2_tag = "##FORMAT=<ID=XARS2,Number=1,Type=Integer,Description=\"Score of the alignment between the extended alternative allele consensus for the second breakpoint and the reference.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xars2_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXSS");
-	const char* exss_tag = "##FORMAT=<ID=EXSS,Number=2,Type=Integer,Description=\"How much of the extended alternative allele aligns to the left and right, respectively, of the breakpoint.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exss_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XASS");
+	const char* xass_tag = "##FORMAT=<ID=XASS,Number=2,Type=Integer,Description=\"How much of the extended alternative allele aligns to the left and right, respectively, of the breakpoint.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xass_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXSS2");
-	const char* exss2_tag = "##FORMAT=<ID=EXSS2,Number=2,Type=Integer,Description=\"How much of the extended alternative allele aligns to the left and right, respectively, of the second breakpoint (only for insertions).\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exss2_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XASS2");
+	const char* xass2_tag = "##FORMAT=<ID=XASS2,Number=2,Type=Integer,Description=\"How much of the extended alternative allele aligns to the left and right, respectively, of the second breakpoint (only for insertions).\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xass2_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXSSC");
-	const char* exssc_tag = "##FORMAT=<ID=EXSSC,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exssc_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XASSC");
+	const char* xassc_tag = "##FORMAT=<ID=XASSC,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xassc_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXSSCIA");
-	const char* exsscia_tag = "##FORMAT=<ID=EXSSCIA,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus for the first breakpoint, when allowed to map to the reference independently.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exsscia_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XASSCIA");
+	const char* xasscia_tag = "##FORMAT=<ID=XASSCIA,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus for the first breakpoint, when allowed to map to the reference independently.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xasscia_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXSSC2");
-	const char* exssc2_tag = "##FORMAT=<ID=EXSSC2,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus for the second breakpoint (only for insertions).\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exssc2_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XASSC2");
+	const char* xassc2_tag = "##FORMAT=<ID=XASSC2,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus for the second breakpoint (only for insertions).\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xassc2_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "EXSSC2IA");
-	const char* exssc2ia_tag = "##FORMAT=<ID=EXSSC2IA,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus for the second breakpoint, when allowed to map to the reference independently.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, exssc2ia_tag, &len));
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XASSC2IA");
+	const char* xassc2ia_tag = "##FORMAT=<ID=XASSC2IA,Number=2,Type=Integer,Description=\"Score of the left half and right half of the extended alternative allele consensus for the second breakpoint, when allowed to map to the reference independently.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xassc2ia_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "AR1C_OCCR");
 	const char* ar1c_occr_tag = "##FORMAT=<ID=AR1C_OCCR,Number=1,Type=Float,Description=\"Occupancy ratio of starts of reads supporting breakpoint 1 of the ALT allele, normalised by expected occupancy ratio.\">";

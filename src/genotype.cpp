@@ -496,41 +496,41 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "AXRHQ", hq_ext_reads, 2);
 
     if (sv->sample_info.ext_alt_consensus1_length > 0) {
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXAS", &(sv->sample_info.ext_alt_consensus1_to_alt_score), 1);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXRS", &(sv->sample_info.ext_alt_consensus1_to_ref_score), 1);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXL", &(sv->sample_info.ext_alt_consensus1_length), 1);
-        int exss[] = {sv->sample_info.alt_consensus1_split_size1, sv->sample_info.alt_consensus1_split_size2};
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSS", exss, 2);
-        int exssc[] = {sv->sample_info.alt_consensus1_split_score1, sv->sample_info.alt_consensus1_split_score2};
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSC", exssc, 2);
-        int exsscia[] = {sv->sample_info.alt_consensus1_split_score1_ind_aln, sv->sample_info.alt_consensus1_split_score2_ind_aln};
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSCIA", exsscia, 2);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAAS", &(sv->sample_info.ext_alt_consensus1_to_alt_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XARS", &(sv->sample_info.ext_alt_consensus1_to_ref_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAL", &(sv->sample_info.ext_alt_consensus1_length), 1);
+        int xass[] = {sv->sample_info.alt_consensus1_split_size1, sv->sample_info.alt_consensus1_split_size2};
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASS", xass, 2);
+        int xassc[] = {sv->sample_info.alt_consensus1_split_score1, sv->sample_info.alt_consensus1_split_score2};
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC", xassc, 2);
+        int xasscia[] = {sv->sample_info.alt_consensus1_split_score1_ind_aln, sv->sample_info.alt_consensus1_split_score2_ind_aln};
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSCIA", xasscia, 2);
     } else {
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXAS", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXRS", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXL", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSS", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSC", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSCIA", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAAS", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XARS", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAL", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASS", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSCIA", NULL, 0);
     }
 
     if (sv->sample_info.ext_alt_consensus2_length > 0) {
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXAS2", &(sv->sample_info.ext_alt_consensus2_to_alt_score), 1);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXRS2", &(sv->sample_info.ext_alt_consensus2_to_ref_score), 1);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXL2", &(sv->sample_info.ext_alt_consensus2_length), 1);
-        int exss2[] = {sv->sample_info.alt_consensus2_split_size1, sv->sample_info.alt_consensus2_split_size2};
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSS2", exss2, 2);
-        int exssc2[] = {sv->sample_info.alt_consensus2_split_score1, sv->sample_info.alt_consensus2_split_score2};
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSC2", exssc2, 2);
-        int exssc2ia[] = {sv->sample_info.alt_consensus2_split_score1_ind_aln, sv->sample_info.alt_consensus2_split_score2_ind_aln};
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSC2IA", exssc2ia, 2);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAAS2", &(sv->sample_info.ext_alt_consensus2_to_alt_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XARS2", &(sv->sample_info.ext_alt_consensus2_to_ref_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAL2", &(sv->sample_info.ext_alt_consensus2_length), 1);
+        int xass2[] = {sv->sample_info.alt_consensus2_split_size1, sv->sample_info.alt_consensus2_split_size2};
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASS2", xass2, 2);
+        int xassc2[] = {sv->sample_info.alt_consensus2_split_score1, sv->sample_info.alt_consensus2_split_score2};
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC2", xassc2, 2);
+        int xassc2ia[] = {sv->sample_info.alt_consensus2_split_score1_ind_aln, sv->sample_info.alt_consensus2_split_score2_ind_aln};
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC2IA", xassc2ia, 2);
     } else {
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXAS2", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXRS2", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXL2", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSS2", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSC2", NULL, 0);
-        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EXSSC2IA", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAAS2", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XARS2", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAL2", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASS2", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC2", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC2IA", NULL, 0);
     }
 
     if (sv->sample_info.alt1_occ_ratio != sv_t::sample_info_t::NOT_COMPUTED) {
