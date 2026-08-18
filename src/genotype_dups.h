@@ -60,7 +60,6 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     std::vector<std::vector<int>> alt_better_reads_scores(alt_seqs.size());
 
     StripedSmithWaterman::Filter filter_with_pos(true, false, 0, 32767);
-    StripedSmithWaterman::Filter filter_with_pos_and_cigar(true, true, 0, 32767);
     StripedSmithWaterman::Filter filter_with_score_only(false, false, 0, 32767);
     StripedSmithWaterman::Alignment alt_aln, ref_aln;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
@@ -163,8 +162,41 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions[alt_with_most_reads]);
     dup->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
 
+    auto score_dup_consensus = [&](const std::string& consensus_seq) {
+        alignment_targets_t targets;
+        hts_pos_t ref_start = std::max(hts_pos_t(0), dup->start-hts_pos_t(consensus_seq.length()));
+        hts_pos_t ref_end = std::min(dup->end+hts_pos_t(consensus_seq.length()), contig_len);
+        int n_extra_copies = alt_with_most_reads+1;
+        targets.alt_len = ref_end-ref_start+n_extra_copies*svlen;
+        targets.alt_seq = new char[targets.alt_len+1];
+        int pos = 0;
+        strncpy(targets.alt_seq, contig_seq+ref_start, dup_end-ref_start);
+        pos += dup_end-ref_start;
+        for (int i = 0; i < n_extra_copies; i++) {
+            strncpy(targets.alt_seq+pos, dup->ins_seq.c_str(), dup->ins_seq.length());
+            pos += dup->ins_seq.length();
+            strncpy(targets.alt_seq+pos, contig_seq+dup_start, dup_end-dup_start);
+            pos += dup_end-dup_start;
+        }
+        strncpy(targets.alt_seq+pos, contig_seq+dup_end, ref_end-dup_end);
+        pos += ref_end-dup_end;
+        targets.alt_seq[pos] = 0;
+        targets.ref_seqs.push_back(contig_seq+ref_start);
+        targets.ref_lens.push_back(ref_end-ref_start);
+        targets.left_flank_end = dup_start-ref_start;
+        targets.right_flank_start = pos-(ref_end-dup_end);
+        targets.right_flank_end_offset = 0;
+        targets.left_independent_ref_seq = targets.right_independent_ref_seq = contig_seq+ref_start;
+        targets.left_independent_ref_len = targets.right_independent_ref_len = ref_end-ref_start;
+        consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
+        delete[] targets.alt_seq;
+        return metrics;
+    };
+
     if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
-       // all we care about is the consensus sequence
+        consensus_alignment_metrics_t unextended_metrics = score_dup_consensus(alt_consensus_seq);
+        dup->sample_info.alt_consensus1_metrics = unextended_metrics;
+
         std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, dup->start-stats.max_is, dup->start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr);
         extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, dup->end, dup->end+stats.max_is, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr);
@@ -174,64 +206,17 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         dup->sample_info.hq_alt_rext_reads = alt_consensus->hq_right_ext_reads;
         alt_consensus_seq = alt_consensus->sequence;
 
-        hts_pos_t ref_start = dup->start-alt_consensus_seq.length();
-        if (ref_start < 0) ref_start = 0;
-        hts_pos_t ref_end = dup->end+alt_consensus_seq.length();
-        if (ref_end > contig_len) ref_end = contig_len;
-        aligner.Align(alt_consensus_seq.c_str(), contig_seq+ref_start, ref_end-ref_start, filter_with_pos_and_cigar, &ref_aln, 0);
-        dup->sample_info.ext_alt_consensus1_to_ref_score = ref_aln.query_end - ref_aln.query_begin - ref_aln.mismatches;
+        consensus_alignment_metrics_t extended_metrics = score_dup_consensus(alt_consensus_seq);
+        dup->sample_info.ext_alt_consensus1_metrics = extended_metrics;
 
-        int n_extra_copies = alt_with_most_reads+1;
-        int alt_len = ref_end - ref_start + n_extra_copies*svlen;
-		char* alt_seq = new char[alt_len+1];
-		int pos = 0;
-		strncpy(alt_seq, contig_seq+ref_start, dup_end-ref_start);
-		pos += dup_end - ref_start;
-		for (int i = 0; i < n_extra_copies; i++) {
-            strncpy(alt_seq+pos, dup->ins_seq.c_str(), dup->ins_seq.length());
-            pos += dup->ins_seq.length();
-			strncpy(alt_seq+pos, contig_seq+dup_start, dup_end-dup_start);
-			pos += dup_end-dup_start;
-		}
-		strncpy(alt_seq+pos, contig_seq+dup_end, ref_end-dup_end);
-		pos += ref_end - dup_end;
-		alt_seq[pos] = 0;
-        aligner.Align(alt_consensus_seq.c_str(), alt_seq, alt_len, filter_with_pos_and_cigar, &alt_aln, 0);
-        dup->sample_info.ext_alt_consensus1_to_alt_score = alt_aln.query_end - alt_aln.query_begin - alt_aln.mismatches;
-        delete[] alt_seq;
-
-        int lf_seq_end = dup_start - ref_start;
-        int lf_aln_rlen = std::max(0, lf_seq_end-alt_aln.ref_begin);
-        int rf_seq_len = ref_end - dup_end;
-        int rf_seq_start = pos - rf_seq_len;
-        int rf_aln_rlen = std::max(0, alt_aln.ref_end-rf_seq_start);
-
-        int temp;
-        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1, true);
-        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1, true);
-        dup->sample_info.alt_consensus1_split_size1 = query_lh_aln_score.second;
-        dup->sample_info.alt_consensus1_split_size2 = query_rh_aln_score.second;
-        dup->sample_info.alt_consensus1_split_score1 = query_lh_aln_score.first;
-        dup->sample_info.alt_consensus1_split_score2 = query_rh_aln_score.first;
-
-        dup->left_anchor_aln->start = dup_end - lf_aln_rlen;
+        int lf_aln_rlen = extended_metrics.split_ref_lengths[0];
+        int rf_aln_rlen = extended_metrics.split_ref_lengths[1];
+        dup->left_anchor_aln->start = dup_end-lf_aln_rlen;
         dup->left_anchor_aln->end = dup_end;
         dup->left_anchor_aln->seq_len = lf_aln_rlen;
         dup->right_anchor_aln->start = dup_start;
-        dup->right_anchor_aln->end = dup_start + rf_aln_rlen;
+        dup->right_anchor_aln->end = dup_start+rf_aln_rlen;
         dup->right_anchor_aln->seq_len = rf_aln_rlen;
-
-        dup->sample_info.ext_alt_consensus1_length = alt_consensus_seq.length();
-
-        ref_aln.Clear();
-        std::string lh_query = alt_consensus_seq.substr(0, query_lh_aln_score.second);
-        aligner.Align(lh_query.c_str(), contig_seq+ref_start, ref_end-ref_start, filter_with_score_only, &ref_aln, 0);
-        dup->sample_info.alt_consensus1_split_score1_ind_aln = ref_aln.sw_score;
-
-        ref_aln.Clear();
-        std::string rh_query = alt_consensus_seq.substr(alt_consensus_seq.length()-query_rh_aln_score.second);
-        aligner.Align(rh_query.c_str(), contig_seq+ref_start, ref_end-ref_start, filter_with_score_only, &ref_aln, 0);
-        dup->sample_info.alt_consensus1_split_score2_ind_aln = ref_aln.sw_score;
     }
 
     alt_is_consistent_read = classify_seqs_with_ref_seq(alt_consensus_seq, alt_better_reads[alt_with_most_reads],
@@ -314,8 +299,6 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     std::vector<int> alt_better_reads_scores;
 
     StripedSmithWaterman::Filter filter_with_pos(true, false, 0, 32767);
-    StripedSmithWaterman::Filter filter_with_pos_and_cigar(true, true, 0, 32767);
-    StripedSmithWaterman::Filter filter_with_score_only(false, false, 0, 32767);
     StripedSmithWaterman::Alignment alt_aln, ref1_aln, ref2_aln;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
@@ -437,8 +420,6 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read);
     auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read);
     auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read);
-    delete[] ref_bp1_seq;
-    delete[] ref_bp2_seq;
 
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions);
     dup->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
@@ -451,7 +432,43 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         }
     }
 
+    auto score_dup_consensus = [&](const std::string& consensus_seq) {
+        alignment_targets_t targets;
+        hts_pos_t lh_start = std::max(hts_pos_t(0), dup->end-hts_pos_t(consensus_seq.length()));
+        hts_pos_t lh_len = dup->end-lh_start;
+        hts_pos_t rh_start = dup->start;
+        hts_pos_t rh_end = std::min(dup->start+hts_pos_t(consensus_seq.length()), contig_len);
+        hts_pos_t rh_len = rh_end-dup->start;
+        targets.alt_len = lh_len+dup->ins_seq.length()+rh_len;
+        targets.alt_seq = new char[targets.alt_len+1];
+        strncpy(targets.alt_seq, contig_seq+lh_start, lh_len);
+        strncpy(targets.alt_seq+lh_len, dup->ins_seq.c_str(), dup->ins_seq.length());
+        strncpy(targets.alt_seq+lh_len+dup->ins_seq.length(), contig_seq+rh_start, rh_len);
+        targets.alt_seq[targets.alt_len] = 0;
+        hts_pos_t ref_bp1_start = std::max(hts_pos_t(0), dup->start-hts_pos_t(consensus_seq.length()));
+        hts_pos_t ref_bp1_end = std::min(dup->start+hts_pos_t(consensus_seq.length()), contig_len);
+        hts_pos_t ref_bp2_start = std::max(hts_pos_t(0), dup->end-hts_pos_t(consensus_seq.length()));
+        hts_pos_t ref_bp2_end = std::min(dup->end+hts_pos_t(consensus_seq.length()), contig_len);
+        targets.ref_seqs.push_back(contig_seq+ref_bp1_start);
+        targets.ref_lens.push_back(ref_bp1_end-ref_bp1_start);
+        targets.ref_seqs.push_back(contig_seq+ref_bp2_start);
+        targets.ref_lens.push_back(ref_bp2_end-ref_bp2_start);
+        targets.left_flank_end = lh_len;
+        targets.right_flank_start = lh_len+dup->ins_seq.length();
+        targets.right_flank_end_offset = 0;
+        targets.left_independent_ref_seq = contig_seq+ref_bp2_start;
+        targets.left_independent_ref_len = ref_bp2_end-ref_bp2_start;
+        targets.right_independent_ref_seq = contig_seq+ref_bp1_start;
+        targets.right_independent_ref_len = ref_bp1_end-ref_bp1_start;
+        consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
+        delete[] targets.alt_seq;
+        return metrics;
+    };
+
     if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
+        consensus_alignment_metrics_t unextended_metrics = score_dup_consensus(alt_consensus_seq);
+        dup->sample_info.alt_consensus1_metrics = unextended_metrics;
+
        // all we care about is the consensus sequence
         std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, dup->end-stats.max_is, dup->end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr); 
@@ -462,72 +479,21 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
         dup->sample_info.hq_alt_rext_reads = alt_consensus->hq_right_ext_reads;
         alt_consensus_seq = alt_consensus->sequence;
 
-        hts_pos_t lh_start = dup->end-alt_consensus_seq.length();
-        if (lh_start < 0) lh_start = 0;
-        hts_pos_t lh_len = dup->end-lh_start;
-        hts_pos_t rh_start = dup->start;
-        hts_pos_t rh_end = dup->start+alt_consensus_seq.length();
-        if (rh_end > contig_len) rh_end = contig_len;
-        hts_pos_t rh_len = rh_end-dup->start;
-    
-        delete[] alt_seq;
-        alt_seq = new char[lh_len + dup->ins_seq.length() + rh_len + 1];
-        strncpy(alt_seq, contig_seq+lh_start, lh_len);
-        strncpy(alt_seq+lh_len, dup->ins_seq.c_str(), dup->ins_seq.length());
-        strncpy(alt_seq+lh_len+dup->ins_seq.length(), contig_seq+rh_start, rh_len);
-        alt_seq[lh_len+dup->ins_seq.length()+rh_len] = 0;
+        consensus_alignment_metrics_t extended_metrics = score_dup_consensus(alt_consensus_seq);
+        dup->sample_info.ext_alt_consensus1_metrics = extended_metrics;
 
-        // align to ref+SV
-        aligner.Align(alt_consensus_seq.c_str(), alt_seq, lh_len+dup->ins_seq.length()+rh_len, filter_with_pos_and_cigar, &alt_aln, 0);
-
-        // length of the left and right flanking regions of the deletion covered by alt_consensus_seq
-        int lf_aln_rlen = std::max(hts_pos_t(0), lh_len - alt_aln.ref_begin);
-        int rf_aln_rlen = std::max(hts_pos_t(0), alt_aln.ref_end - lh_len - (int) dup->ins_seq.length());
-
-        // length of the alt_consensus_seq covering left and right flanking regions of the deletion
-        // note that this may be different from lf_aln_rlen and rf_aln_rlen, since the aln can include indels
-        int temp;
-        auto query_lh_aln_score = find_aln_prefix_score(alt_aln.cigar, lf_aln_rlen, 1, -4, -6, -1, true);
-        auto query_rh_aln_score = find_aln_suffix_score(alt_aln.cigar, rf_aln_rlen, 1, -4, -6, -1, true);
-        dup->sample_info.alt_consensus1_split_size1 = query_lh_aln_score.second;
-        dup->sample_info.alt_consensus1_split_size2 = query_rh_aln_score.second;
-        dup->sample_info.alt_consensus1_split_score1 = query_lh_aln_score.first;
-        dup->sample_info.alt_consensus1_split_score2 = query_rh_aln_score.first;
-
-        dup->left_anchor_aln->start = dup->end - lf_aln_rlen;
+        int lf_aln_rlen = extended_metrics.split_ref_lengths[0];
+        int rf_aln_rlen = extended_metrics.split_ref_lengths[1];
+        dup->left_anchor_aln->start = dup->end-lf_aln_rlen;
         dup->left_anchor_aln->end = dup->end;
         dup->left_anchor_aln->seq_len = lf_aln_rlen;
         dup->right_anchor_aln->start = dup->start;
-        dup->right_anchor_aln->end = dup->start + rf_aln_rlen;
+        dup->right_anchor_aln->end = dup->start+rf_aln_rlen;
         dup->right_anchor_aln->seq_len = rf_aln_rlen;
-
-        // align to ref
-        hts_pos_t ref_bp1_start = dup->start - alt_consensus_seq.length(), ref_bp1_end = dup->start + alt_consensus_seq.length();
-        if (ref_bp1_start < 0) ref_bp1_start = 0;
-        if (ref_bp1_end > contig_len) ref_bp1_end = contig_len;
-        hts_pos_t ref_bp2_start = dup->end - alt_consensus_seq.length(), ref_bp2_end = dup->end + alt_consensus_seq.length();
-        if (ref_bp2_start < 0) ref_bp2_start = 0;
-        if (ref_bp2_end > contig_len) ref_bp2_end = contig_len;
-        aligner.Align(alt_consensus_seq.c_str(), contig_seq+ref_bp1_start, ref_bp1_end-ref_bp1_start, filter_with_pos_and_cigar, &ref1_aln, 0);
-        aligner.Align(alt_consensus_seq.c_str(), contig_seq+ref_bp2_start, ref_bp2_end-ref_bp2_start, filter_with_pos_and_cigar, &ref2_aln, 0);
-
-        dup->sample_info.ext_alt_consensus1_length = alt_consensus_seq.length();
-        dup->sample_info.ext_alt_consensus1_to_alt_score = alt_aln.query_end - alt_aln.query_begin - alt_aln.mismatches;
-        dup->sample_info.ext_alt_consensus1_to_ref_score = std::max(
-            ref1_aln.query_end - ref1_aln.query_begin - ref1_aln.mismatches,
-            ref2_aln.query_end - ref2_aln.query_begin - ref2_aln.mismatches
-        );
-
-        ref1_aln.Clear();
-        std::string lh_query = alt_consensus_seq.substr(0, query_lh_aln_score.second);
-        aligner.Align(lh_query.c_str(), contig_seq+ref_bp2_start, ref_bp2_end-ref_bp2_start, filter_with_score_only, &ref1_aln, 0);
-        dup->sample_info.alt_consensus1_split_score1_ind_aln = ref1_aln.sw_score;
-
-        ref2_aln.Clear();
-        std::string rh_query = alt_consensus_seq.substr(alt_consensus_seq.length()-query_rh_aln_score.second);
-        aligner.Align(rh_query.c_str(), contig_seq+ref_bp1_start, ref_bp1_end-ref_bp1_start, filter_with_score_only, &ref2_aln, 0);
-        dup->sample_info.alt_consensus1_split_score2_ind_aln = ref2_aln.sw_score;
     }
+
+    delete[] ref_bp1_seq;
+    delete[] ref_bp2_seq;
 
     set_bp_consensus_info(dup->sample_info.alt_bp1.reads_info, alt_better_reads, alt_is_consistent_read, alt_is_exact_read, alt_avg_score, alt_stddev_score);
     set_bp_consensus_info(dup->sample_info.ref_bp1.reads_info, ref_bp1_better_reads, ref_bp1_is_consistent_read, ref_bp1_is_exact_read, ref_bp1_avg_score, ref_bp1_stddev_score);

@@ -4,6 +4,7 @@
 #include "htslib/hts.h"
 #include "utils.h"
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <climits>
 #include <iomanip>
@@ -13,6 +14,15 @@
 #include <memory>
 #include <unordered_map>
 #include "htslib/vcf.h"
+
+struct consensus_alignment_metrics_t {
+    int length = 0, alt_score = 0, ref_score = 0;
+    int alt_ref_begin = 0, alt_ref_end = -1;
+    std::array<int, 2> split_ref_lengths{{0, 0}};
+    std::array<int, 2> split_sizes{{0, 0}};
+    std::array<int, 2> split_scores{{0, 0}};
+    std::array<int, 2> independent_ref_scores{{0, 0}};
+};
 
 struct consensus_t {
     bool left_clipped;
@@ -279,15 +289,8 @@ struct sv_t {
 
         int alt_ref_equal_reads = 0, alt_ref_equal_reads_highmq = 0;
         int alt_lext_reads = 0, hq_alt_lext_reads = 0, alt_rext_reads = 0, hq_alt_rext_reads = 0;
-        int ext_alt_consensus1_length = 0, ext_alt_consensus2_length = 0;
-        int ext_alt_consensus1_to_alt_score = 0, ext_alt_consensus1_to_ref_score = 0;
-        int ext_alt_consensus2_to_alt_score = 0, ext_alt_consensus2_to_ref_score = 0;
-        int alt_consensus1_split_size1 = 0, alt_consensus1_split_size2 = 0;
-        int alt_consensus2_split_size1 = 0, alt_consensus2_split_size2 = 0;
-        int alt_consensus1_split_score1 = 0, alt_consensus1_split_score2 = 0;
-        int alt_consensus1_split_score1_ind_aln = 0, alt_consensus1_split_score2_ind_aln = 0;
-        int alt_consensus2_split_score1 = 0, alt_consensus2_split_score2 = 0;
-        int alt_consensus2_split_score1_ind_aln = 0, alt_consensus2_split_score2_ind_aln = 0;
+        consensus_alignment_metrics_t alt_consensus1_metrics, alt_consensus2_metrics;
+        consensus_alignment_metrics_t ext_alt_consensus1_metrics, ext_alt_consensus2_metrics;
         int ins_seq_prefix_cov = 0, ins_seq_suffix_cov = 0;
         bool too_deep = false;
         int alt1_hp_len_mode = NOT_COMPUTED, alt1_consistent_hp_len_mode = NOT_COMPUTED;

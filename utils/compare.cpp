@@ -923,8 +923,8 @@ int main(int argc, char* argv[]) {
 		if (a_alt_reads != b_alt_reads) {
 			return a_alt_reads > b_alt_reads;
 		}
-		int a_ext_alt_consensus = a.c_sv->sample_info.ext_alt_consensus1_to_alt_score + a.c_sv->sample_info.ext_alt_consensus2_to_alt_score;
-		int b_ext_alt_consensus = b.c_sv->sample_info.ext_alt_consensus1_to_alt_score + b.c_sv->sample_info.ext_alt_consensus2_to_alt_score;
+		int a_ext_alt_consensus = a.c_sv->sample_info.ext_alt_consensus1_metrics.alt_score + a.c_sv->sample_info.ext_alt_consensus2_metrics.alt_score;
+		int b_ext_alt_consensus = b.c_sv->sample_info.ext_alt_consensus1_metrics.alt_score + b.c_sv->sample_info.ext_alt_consensus2_metrics.alt_score;
 		if (a_ext_alt_consensus != b_ext_alt_consensus) {
 			return a_ext_alt_consensus > b_ext_alt_consensus;
 		}

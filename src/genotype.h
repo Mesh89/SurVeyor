@@ -11,6 +11,7 @@
 #include <sstream>
 #include <tuple>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "../libs/ssw_cpp.h"
@@ -22,6 +23,77 @@
 #include "vcf_utils.h"
 
 constexpr double MIN_EPR = 0.05;
+
+struct alignment_targets_t {
+    char* alt_seq = NULL;
+    int alt_len = 0;
+    std::vector<char*> ref_seqs;
+    std::vector<int> ref_lens;
+
+    // The left flank is alt_seq[0:left_flank_end], while the right flank starts at right_flank_start.
+    int left_flank_end = 0, right_flank_start = 0;
+    int right_flank_end_offset = 1;
+    bool has_left_split = true, has_right_split = true;
+
+    char* left_independent_ref_seq = NULL;
+    char* right_independent_ref_seq = NULL;
+    int left_independent_ref_len = 0, right_independent_ref_len = 0;
+};
+
+inline int consensus_alignment_score(const StripedSmithWaterman::Alignment& alignment) {
+    return alignment.query_end - alignment.query_begin - alignment.mismatches;
+}
+
+inline consensus_alignment_metrics_t score_consensus_alignment(const std::string& consensus_seq, const alignment_targets_t& targets, StripedSmithWaterman::Aligner& aligner) {
+    consensus_alignment_metrics_t metrics;
+    metrics.length = consensus_seq.length();
+
+    if (consensus_seq.empty() || targets.alt_seq == NULL || targets.alt_len <= 0) return metrics;
+
+    StripedSmithWaterman::Filter with_pos_and_cigar(true, true, 0, 32767);
+    StripedSmithWaterman::Filter score_only(false, false, 0, 32767);
+
+    StripedSmithWaterman::Alignment alt_alignment;
+    alt_alignment.Clear();
+    aligner.Align(consensus_seq.c_str(), targets.alt_seq, targets.alt_len, with_pos_and_cigar, &alt_alignment, 0);
+    metrics.alt_score = consensus_alignment_score(alt_alignment);
+    metrics.alt_ref_begin = alt_alignment.ref_begin;
+    metrics.alt_ref_end = alt_alignment.ref_end;
+
+    for (int i = 0; i < targets.ref_seqs.size() && i < targets.ref_lens.size(); i++) {
+        if (targets.ref_seqs[i] == NULL || targets.ref_lens[i] <= 0) continue;
+        StripedSmithWaterman::Alignment ref_alignment;
+        ref_alignment.Clear();
+        aligner.Align(consensus_seq.c_str(), targets.ref_seqs[i], targets.ref_lens[i], with_pos_and_cigar, &ref_alignment, 0);
+        metrics.ref_score = std::max(metrics.ref_score, consensus_alignment_score(ref_alignment));
+    }
+
+    int left_ref_len = targets.has_left_split ? std::max(0, targets.left_flank_end-alt_alignment.ref_begin) : 0;
+    int right_ref_len = targets.has_right_split ? std::max(0, alt_alignment.ref_end+targets.right_flank_end_offset-targets.right_flank_start) : 0;
+    auto left = targets.has_left_split ? find_aln_prefix_score(alt_alignment.cigar, left_ref_len, 1, -4, -6, -1, true) : std::make_pair(0, 0);
+    auto right = targets.has_right_split ? find_aln_suffix_score(alt_alignment.cigar, right_ref_len, 1, -4, -6, -1, true) : std::make_pair(0, 0);
+    metrics.split_ref_lengths = {{left_ref_len, right_ref_len}};
+    metrics.split_sizes = {{left.second, right.second}};
+    metrics.split_scores = {{left.first, right.first}};
+
+    if (left.second > 0 && targets.left_independent_ref_seq != NULL && targets.left_independent_ref_len > 0) {
+        StripedSmithWaterman::Alignment alignment;
+        alignment.Clear();
+        const std::string query = consensus_seq.substr(0, left.second);
+        aligner.Align(query.c_str(), targets.left_independent_ref_seq, targets.left_independent_ref_len, score_only, &alignment, 0);
+        metrics.independent_ref_scores[0] = alignment.sw_score;
+    }
+
+    if (right.second > 0 && targets.right_independent_ref_seq != NULL && targets.right_independent_ref_len > 0) {
+        StripedSmithWaterman::Alignment alignment;
+        alignment.Clear();
+        const std::string query = consensus_seq.substr(consensus_seq.length()-right.second);
+        aligner.Align(query.c_str(), targets.right_independent_ref_seq, targets.right_independent_ref_len, score_only, &alignment, 0);
+        metrics.independent_ref_scores[1] = alignment.sw_score;
+    }
+
+    return metrics;
+}
 
 // query and reference must be NUL-terminated. strstr uses the terminator to
 // bound its search; reference_len is still used to validate that the returned

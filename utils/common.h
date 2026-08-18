@@ -37,8 +37,8 @@ void load_compare_tiebreak_fields(bcf_hdr_t* hdr, bcf1_t* line, sv_t* sv) {
     sv->sample_info.alt_bp2.reads_info.consistent_fwd = get_optional_format_int32(hdr, line, "AR2CF");
     sv->sample_info.alt_bp2.reads_info.consistent_rev = get_optional_format_int32(hdr, line, "AR2CR");
 
-    sv->sample_info.ext_alt_consensus1_to_alt_score = get_optional_format_int32(hdr, line, "XAAS");
-    sv->sample_info.ext_alt_consensus2_to_alt_score = get_optional_format_int32(hdr, line, "XAAS2");
+    sv->sample_info.ext_alt_consensus1_metrics.alt_score = get_optional_format_int32(hdr, line, "XAAS");
+    sv->sample_info.ext_alt_consensus2_metrics.alt_score = get_optional_format_int32(hdr, line, "XAAS2");
 }
 
 std::vector<std::shared_ptr<sv_t>> read_sv_list(const char* filename) {

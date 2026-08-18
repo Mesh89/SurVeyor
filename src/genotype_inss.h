@@ -131,8 +131,6 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     hts_pos_t alt_bp2_pos = alt_bp2_len - alt_rf_len;
 
     StripedSmithWaterman::Filter filter_with_pos(true, false, 0, 32767);
-    StripedSmithWaterman::Filter filter_with_pos_and_cigar(true, true, 0, 32767);
-    StripedSmithWaterman::Filter filter_with_score_only(false, false, 0, 32767);
     StripedSmithWaterman::Alignment alt1_aln, alt2_aln, ref1_aln, ref2_aln;
     int aln_reads = 0;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
@@ -269,9 +267,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     double alt_bp1_stddev_score, alt_bp2_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_bp1_is_exact_read, alt_bp2_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
     auto alt_bp1_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, std::vector<bool>(), alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read);
-    delete[] alt_bp1_seq;
     auto alt_bp2_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, std::vector<bool>(), alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read);
-    delete[] alt_bp2_seq;
 
     std::vector<int> alt_bp1_better_read_positions_consistent = get_consistent_reads_start_positions(alt_bp1_is_consistent_read, alt_bp1_better_read_positions);
     ins->sample_info.alt1_occ_ratio = occ_ratio(alt_bp1_better_read_positions_consistent, alt1_ref_diff_reads_expected_positions.size());
@@ -312,26 +308,89 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
     ref_bp1_seq[ref_bp1_len] = 0;
     auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read);
-    delete[] ref_bp1_seq;
 
     char* ref_bp2_seq = new char[ref_bp2_len+1];
     strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
     ref_bp2_seq[ref_bp2_len] = 0;
     auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read);
-    delete[] ref_bp2_seq;
 
+    auto score_ins_consensus = [&](const std::string& consensus_seq, bool bp1) {
+        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, consensus_seq.length(), ins->aux_indels, ins->aux_snps);
+        int alt_lf_len = strlen(lf_seq);
+        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, consensus_seq.length(), ins->aux_indels, ins->aux_snps);
+        int alt_rf_len = strlen(rf_seq);
+        int ins_seq_portion_len = std::min(ins->ins_seq.length(), consensus_seq.length());
+        int extra_len = std::max(0, int(consensus_seq.length())-int(ins->ins_seq.length()));
+
+        alignment_targets_t targets;
+        if (bp1) {
+            extra_len = std::min(extra_len, alt_rf_len);
+            targets.alt_len = alt_lf_len+ins_seq_portion_len+extra_len;
+            targets.alt_seq = new char[targets.alt_len+1];
+            strncpy(targets.alt_seq, lf_seq, alt_lf_len);
+            strncpy(targets.alt_seq+alt_lf_len, ins->ins_seq.c_str(), ins_seq_portion_len);
+            strncpy(targets.alt_seq+alt_lf_len+ins_seq_portion_len, rf_seq, extra_len);
+            targets.left_flank_end = alt_lf_len;
+            targets.right_flank_start = alt_lf_len+ins_seq_portion_len;
+        } else {
+            extra_len = std::min(extra_len, alt_lf_len);
+            targets.alt_len = extra_len+ins_seq_portion_len+alt_rf_len;
+            targets.alt_seq = new char[targets.alt_len+1];
+            strncpy(targets.alt_seq, lf_seq+(alt_lf_len-extra_len), extra_len);
+            strncpy(targets.alt_seq+extra_len, ins->ins_seq.c_str()+(ins->ins_seq.length()-ins_seq_portion_len), ins_seq_portion_len);
+            strncpy(targets.alt_seq+extra_len+ins_seq_portion_len, rf_seq, alt_rf_len);
+            targets.left_flank_end = extra_len;
+            targets.right_flank_start = extra_len+ins_seq_portion_len;
+        }
+        targets.alt_seq[targets.alt_len] = 0;
+
+        hts_pos_t breakpoint = bp1 ? ins_start : ins_end;
+        hts_pos_t ref_start = std::max(hts_pos_t(0), breakpoint-hts_pos_t(consensus_seq.length()));
+        hts_pos_t ref_end = std::min(breakpoint+hts_pos_t(consensus_seq.length()), contig_len);
+        targets.ref_seqs.push_back(contig_seq+ref_start);
+        targets.ref_lens.push_back(ref_end-ref_start);
+
+        char* independent_ref_seq = concat3(lf_seq, contig_seq+ins_start, rf_seq, alt_lf_len, ins_end-ins_start, alt_rf_len);
+        targets.left_independent_ref_seq = targets.right_independent_ref_seq = independent_ref_seq;
+        targets.left_independent_ref_len = targets.right_independent_ref_len = alt_lf_len+ins_end-ins_start+alt_rf_len;
+
+        consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
+        delete[] targets.alt_seq;
+        delete[] independent_ref_seq;
+        delete[] lf_seq;
+        delete[] rf_seq;
+        return metrics;
+    };
+
+    ins->sample_info.ext_alt_consensus1_metrics.length = alt_bp1_consensus_seq.length();
     if (alt_bp1_consensus_seq.length() >= 2*config.min_clip_len) {
+        consensus_alignment_metrics_t unextended_metrics = score_ins_consensus(alt_bp1_consensus_seq, true);
+        ins->sample_info.alt_consensus1_metrics = unextended_metrics;
+
         // all we care about is the consensus sequence
         std::shared_ptr<consensus_t> alt_bp1_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp1_consensus_seq, 0, 0, 0, 0, 0, 0);
-        extend_consensus_to_left(alt_bp1_consensus, candidate_reads_for_extension_itree, ins_start-stats.max_is, ins_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr); 
+        extend_consensus_to_left(alt_bp1_consensus, candidate_reads_for_extension_itree, ins_start-stats.max_is, ins_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr);
         extend_consensus_to_right(alt_bp1_consensus, candidate_reads_for_extension_itree, ins_start, ins_start+stats.max_is, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr);
         ins->sample_info.alt_lext_reads = alt_bp1_consensus->left_ext_reads;
         ins->sample_info.alt_rext_reads = alt_bp1_consensus->right_ext_reads;
         ins->sample_info.hq_alt_lext_reads = alt_bp1_consensus->hq_left_ext_reads;
         ins->sample_info.hq_alt_rext_reads = alt_bp1_consensus->hq_right_ext_reads;
         alt_bp1_consensus_seq = alt_bp1_consensus->sequence;
+
+        consensus_alignment_metrics_t extended_metrics = score_ins_consensus(alt_bp1_consensus_seq, true);
+        ins->sample_info.ext_alt_consensus1_metrics = extended_metrics;
+
+        int lf_aln_rlen = extended_metrics.split_ref_lengths[0];
+        ins->left_anchor_aln->start = ins_start-lf_aln_rlen;
+        ins->left_anchor_aln->end = ins_start;
+        ins->left_anchor_aln->seq_len = lf_aln_rlen;
     }
+
+    ins->sample_info.ext_alt_consensus2_metrics.length = alt_bp2_consensus_seq.length();
     if (alt_bp2_consensus_seq.length() >= 2*config.min_clip_len) {
+        consensus_alignment_metrics_t unextended_metrics = score_ins_consensus(alt_bp2_consensus_seq, false);
+        ins->sample_info.alt_consensus2_metrics = unextended_metrics;
+
         std::shared_ptr<consensus_t> alt_bp2_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp2_consensus_seq, 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_bp2_consensus, candidate_reads_for_extension_itree, ins_end-stats.max_is, ins_end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr);
         extend_consensus_to_right(alt_bp2_consensus, candidate_reads_for_extension_itree, ins_end, ins_end+stats.max_is, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr);
@@ -340,151 +399,20 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         ins->sample_info.hq_alt_lext_reads += alt_bp2_consensus->hq_left_ext_reads;
         ins->sample_info.hq_alt_rext_reads += alt_bp2_consensus->hq_right_ext_reads;
         alt_bp2_consensus_seq = alt_bp2_consensus->sequence;
-    }
 
-    ins->sample_info.ext_alt_consensus1_length = alt_bp1_consensus_seq.length();
-    ins->sample_info.ext_alt_consensus2_length = alt_bp2_consensus_seq.length();
+        consensus_alignment_metrics_t extended_metrics = score_ins_consensus(alt_bp2_consensus_seq, false);
+        ins->sample_info.ext_alt_consensus2_metrics = extended_metrics;
 
-    ref1_aln.Clear();
-    alt1_aln.Clear();
-    if (alt_bp1_consensus_seq.length() >= 2*config.min_clip_len) {
-        hts_pos_t ref_bp1_start = ins_start-alt_bp1_consensus_seq.length();
-        if (ref_bp1_start < 0) ref_bp1_start = 0;
-        hts_pos_t ref_bp1_end = ins_start+alt_bp1_consensus_seq.length();
-        if (ref_bp1_end > contig_len) ref_bp1_end = contig_len;
-        aligner.Align(alt_bp1_consensus_seq.c_str(), contig_seq+ref_bp1_start, ref_bp1_end-ref_bp1_start, filter_with_pos_and_cigar, &ref1_aln, 0);
-
-        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, alt_bp1_consensus_seq.length(), ins->aux_indels, ins->aux_snps);
-        int alt_lf_len = strlen(lf_seq);
-
-        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, alt_bp1_consensus_seq.length(),  ins->aux_indels, ins->aux_snps);
-        int alt_rf_len = strlen(rf_seq);
-
-        char* alt_bp1_seq = new char[2*alt_bp1_consensus_seq.length()+1];
-        strncpy(alt_bp1_seq, lf_seq, alt_lf_len);
-        int ins_seq_portion_len = std::min(ins->ins_seq.length(), alt_bp1_consensus_seq.length());
-        strncpy(alt_bp1_seq+alt_lf_len, ins->ins_seq.c_str(), ins_seq_portion_len);
-        int extra_len = alt_bp1_consensus_seq.length() - ins->ins_seq.length();
-        if (extra_len > 0) {
-            if (extra_len > alt_rf_len) extra_len = alt_rf_len; // there may not be enough bp if near the end of contig
-            strncpy(alt_bp1_seq+alt_lf_len+ins_seq_portion_len, rf_seq, extra_len);
-        } else {
-            extra_len = 0;
-        }
-        int alt_bp1_seq_len = alt_lf_len + ins_seq_portion_len + extra_len;
-        alt_bp1_seq[alt_bp1_seq_len] = 0;
-
-        aligner.Align(alt_bp1_consensus_seq.c_str(), alt_bp1_seq, alt_bp1_seq_len, filter_with_pos_and_cigar, &alt1_aln, 0);
-        delete[] alt_bp1_seq;
-
-        // length of the left and right flanking regions of the insertion covered by alt_bp1_consensus_seq
-        int lf_aln_rlen = std::max(0, alt_lf_len - alt1_aln.ref_begin);
-        int rf_aln_rlen = std::max(0, alt1_aln.ref_end+1 - alt_lf_len - ins_seq_portion_len);
-
-        // length of the alt_consensus_seq covering left and right flanking regions of the deletion
-        // note that this may be different from lf_aln_rlen and rf_aln_rlen, since the aln can include indels
-        auto query_lh_aln_score = find_aln_prefix_score(alt1_aln.cigar, lf_aln_rlen, 1, -4, -6, -1, true);
-        auto query_rh_aln_score = find_aln_suffix_score(alt1_aln.cigar, rf_aln_rlen, 1, -4, -6, -1, true);
-        ins->sample_info.alt_consensus1_split_size1 = query_lh_aln_score.second;
-        ins->sample_info.alt_consensus1_split_size2 = query_rh_aln_score.second;
-        ins->sample_info.alt_consensus1_split_score1 = query_lh_aln_score.first;
-        ins->sample_info.alt_consensus1_split_score2 = query_rh_aln_score.first;
-
-        ins->left_anchor_aln->start = ins_start - lf_aln_rlen;
-        ins->left_anchor_aln->end = ins_start;
-        ins->left_anchor_aln->seq_len = lf_aln_rlen;
-
-        StripedSmithWaterman::Alignment aln;
-
-        char* ref_seq = concat3(lf_seq, contig_seq+ins_start, rf_seq, alt_lf_len, ins_end-ins_start, alt_rf_len);
-
-        aln.Clear();
-        std::string lh_query = alt_bp1_consensus_seq.substr(0, query_lh_aln_score.second);
-        aligner.Align(lh_query.c_str(), ref_seq, alt_lf_len+ins_end-ins_start+alt_rf_len, filter_with_score_only, &aln, 0);
-        ins->sample_info.alt_consensus1_split_score1_ind_aln = aln.sw_score;
-
-        aln.Clear();
-        std::string rh_query = alt_bp1_consensus_seq.substr(alt_bp1_consensus_seq.length()-query_rh_aln_score.second);
-        aligner.Align(rh_query.c_str(), ref_seq, alt_lf_len+ins_end-ins_start+alt_rf_len, filter_with_score_only, &aln, 0);
-        ins->sample_info.alt_consensus1_split_score2_ind_aln = aln.sw_score;
-
-        delete[] ref_seq;
-        delete[] lf_seq;
-        delete[] rf_seq;
-    }
-
-    ref2_aln.Clear();
-    alt2_aln.Clear();
-    if (alt_bp2_consensus_seq.length() >= 2*config.min_clip_len) {
-        hts_pos_t ref_bp2_start = ins_end-alt_bp2_consensus_seq.length();
-        if (ref_bp2_start < 0) ref_bp2_start = 0;
-        hts_pos_t ref_bp2_end = ins_end+alt_bp2_consensus_seq.length();
-        if (ref_bp2_end > contig_len) ref_bp2_end = contig_len; 
-        aligner.Align(alt_bp2_consensus_seq.c_str(), contig_seq+ref_bp2_start, ref_bp2_end-ref_bp2_start, filter_with_pos_and_cigar, &ref2_aln, 0);
-
-        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, alt_bp2_consensus_seq.length(), ins->aux_indels, ins->aux_snps);
-        int alt_lf_len = strlen(lf_seq);
-
-        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, alt_bp2_consensus_seq.length(),  ins->aux_indels, ins->aux_snps);
-        int alt_rf_len = strlen(rf_seq);
-
-        alt_bp2_seq = new char[2*alt_bp2_consensus_seq.length()+1];
-        int extra_len = alt_bp2_consensus_seq.length() - ins->ins_seq.length();
-        if (extra_len > 0) {
-            if (extra_len > alt_lf_len) extra_len = alt_lf_len; // there may not be enough bp if near the start of contig
-            strncpy(alt_bp2_seq, lf_seq+(alt_lf_len - extra_len), extra_len);
-        } else {
-            extra_len = 0;
-        }
-        int ins_seq_portion_len = std::min(ins->ins_seq.length(), alt_bp2_consensus_seq.length());
-        strncpy(alt_bp2_seq+extra_len, ins->ins_seq.c_str()+(ins->ins_seq.length()-ins_seq_portion_len), ins_seq_portion_len);
-        strncpy(alt_bp2_seq+extra_len+ins_seq_portion_len, rf_seq, alt_rf_len);
-        int alt_bp2_seq_len = extra_len + ins_seq_portion_len + alt_rf_len;
-        alt_bp2_seq[alt_bp2_seq_len] = 0;
-
-        aligner.Align(alt_bp2_consensus_seq.c_str(), alt_bp2_seq, alt_bp2_seq_len, filter_with_pos_and_cigar, &alt2_aln, 0);
-        delete[] alt_bp2_seq;
-
-        // length of the left and right flanking regions of the insertion covered by alt_consensus_seq
-        int lf_aln_rlen = std::max(0, extra_len - alt2_aln.ref_begin);
-        int rf_aln_rlen = std::max(0, alt2_aln.ref_end+1 - (extra_len + ins_seq_portion_len));
-
-        // length of the alt_consensus_seq covering left and right flanking regions of the insertion
-        // note that this may be different from lf_aln_rlen and rf_aln_rlen, since the aln can include indels
-        auto query_lh_aln_score = find_aln_prefix_score(alt2_aln.cigar, lf_aln_rlen, 1, -4, -6, -1, true);
-        auto query_rh_aln_score = find_aln_suffix_score(alt2_aln.cigar, rf_aln_rlen, 1, -4, -6, -1, true);
-        ins->sample_info.alt_consensus2_split_size1 = query_lh_aln_score.second;
-        ins->sample_info.alt_consensus2_split_size2 = query_rh_aln_score.second;
-        ins->sample_info.alt_consensus2_split_score1 = query_lh_aln_score.first;
-        ins->sample_info.alt_consensus2_split_score2 = query_rh_aln_score.first;
-
+        int rf_aln_rlen = extended_metrics.split_ref_lengths[1];
         ins->right_anchor_aln->start = ins_end;
-        ins->right_anchor_aln->end = ins_end + rf_aln_rlen;
+        ins->right_anchor_aln->end = ins_end+rf_aln_rlen;
         ins->right_anchor_aln->seq_len = rf_aln_rlen;
-
-        StripedSmithWaterman::Alignment aln;
-
-        char* ref_seq = concat3(lf_seq, contig_seq+ins_start, rf_seq, alt_lf_len, ins_end-ins_start, alt_rf_len);
-
-        aln.Clear();
-        std::string lh_query = alt_bp2_consensus_seq.substr(0, query_lh_aln_score.second);
-        aligner.Align(lh_query.c_str(), ref_seq, alt_lf_len+ins_end-ins_start+alt_rf_len, filter_with_score_only, &aln, 0);
-        ins->sample_info.alt_consensus2_split_score1_ind_aln = aln.sw_score;
-
-        aln.Clear();
-        std::string rh_query = alt_bp2_consensus_seq.substr(alt_bp2_consensus_seq.length()-query_rh_aln_score.second);
-        aligner.Align(rh_query.c_str(), ref_seq, alt_lf_len+ins_end-ins_start+alt_rf_len, filter_with_score_only, &aln, 0);
-        ins->sample_info.alt_consensus2_split_score2_ind_aln = aln.sw_score;
-
-        delete[] ref_seq;
-        delete[] lf_seq;
-        delete[] rf_seq;
     }
 
-    ins->sample_info.ext_alt_consensus1_to_ref_score = ref1_aln.query_end - ref1_aln.query_begin - ref1_aln.mismatches;
-    ins->sample_info.ext_alt_consensus2_to_ref_score = ref2_aln.query_end - ref2_aln.query_begin - ref2_aln.mismatches;
-    ins->sample_info.ext_alt_consensus1_to_alt_score = alt1_aln.query_end - alt1_aln.query_begin - alt1_aln.mismatches;
-    ins->sample_info.ext_alt_consensus2_to_alt_score = alt2_aln.query_end - alt2_aln.query_begin - alt2_aln.mismatches;
+    delete[] alt_bp1_seq;
+    delete[] alt_bp2_seq;
+    delete[] ref_bp1_seq;
+    delete[] ref_bp2_seq;
 
     set_bp_consensus_info(ins->sample_info.alt_bp1.reads_info, alt_bp1_better_reads, alt_bp1_is_consistent_read, alt_bp1_is_exact_read, alt_bp1_avg_score, alt_bp1_stddev_score);
     set_bp_consensus_info(ins->sample_info.alt_bp2.reads_info, alt_bp2_better_reads, alt_bp2_is_consistent_read, alt_bp2_is_exact_read, alt_bp2_avg_score, alt_bp2_stddev_score);
