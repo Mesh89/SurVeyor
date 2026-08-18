@@ -23,37 +23,53 @@ class Features:
                             'INS_SUFFIX_A_RATIO', 'INS_SUFFIX_C_RATIO', 'INS_SUFFIX_G_RATIO', 'INS_SUFFIX_T_RATIO', 'MAX_INS_SUFFIX_BASE_COUNT_RATIO',
                             'INS_SEQ_COV_PREFIX_LEN', 'INS_SEQ_COV_SUFFIX_LEN', 'EXP_ALT_READS_FREQ1', 'EXP_ALT_READS_FREQ2', 'HP_REF_LEN', 'HP_ALT_LEN' ]
 
-    reads_features_names = ['AR1', 'AR1_ADJ', 'AR1C', 'AR1C_ADJ', 'AR1C_RATIO', 'AR1CmQ', 'AR1CMQ', 'AR1CHQ', 'AR1C_HQ_RATIO', 'AR1E', 'AR1E_RATIO',
-                            'AR2', 'AR2_ADJ', 'AR2C', 'AR2C_ADJ', 'AR2C_RATIO', 'AR2CmQ', 'AR2CMQ', 'AR2CHQ', 'AR2C_HQ_RATIO', 'AR2E', 'AR2E_RATIO',
+    reads_features_names = ['AR1', 'AR1_ADJ', 'AR1C', 'AR1C_ADJ', 'AR1C_RATIO', 'AR1CmQ', 'AR1CMQ', 'AR1CHQ', 'AR1C_HQ_RATIO', 
+                            'AR2', 'AR2_ADJ', 'AR2C', 'AR2C_ADJ', 'AR2C_RATIO', 'AR2CmQ', 'AR2CMQ', 'AR2CHQ', 'AR2C_HQ_RATIO', 
+                            'AR1E', 'AR1EmQ', 'AR1EMQ', 'AR1E_HQ_RATIO', 'AR1E_RATIO',
+                            'AR2E', 'AR2EmQ', 'AR2EMQ', 'AR2E_HQ_RATIO', 'AR2E_RATIO',
+                            'AR1CE', 'AR1CEmQ', 'AR1CEMQ', 'AR1CE_HQ_RATIO', 'AR1CE_RATIO',
+                            'AR2CE', 'AR2CEmQ', 'AR2CEMQ', 'AR2CE_HQ_RATIO', 'AR2CE_RATIO',
                             'AR1HPMODE', 'AR1CHPMODE', 'AR1CHPIQR', 'AR1HPMODE_AR1CHPMODE_DIFF', 'AR1HPMODE_ALTLEN_DIFF', 'AR1CHPMODE_ALTLEN_DIFF',
                             'AR1CHPmQ', 'AR1CHPMQ', 'AR1CHPAQ', 'AR1CHPSQ', 'AR1HP5PMR', 'AR1HP3PMR',
-                            'MAXARCD', 'MAXARED',
-                            'RR1', 'RR1C', 'RR1CmQ', 'RR1CMQ', 'RR1C_HQ_RATIO', 'RR1E', 'RR1EmQ', 'RR1EMQ', 'RR1E_HQ_RATIO', 'RR1E_RATIO',
+                            'MAXARCD', 'MAXARCED', 'MAXARED',
+                            'RR1', 'RR1C', 'RR1CmQ', 'RR1CMQ', 'RR1C_HQ_RATIO',
+                            'RR1E', 'RR1EmQ', 'RR1EMQ', 'RR1E_HQ_RATIO', 'RR1E_RATIO',
+                            'RR1CE', 'RR1CEmQ', 'RR1CEMQ', 'RR1CE_HQ_RATIO', 'RR1CE_RATIO',
                             'RR1HPMODE', 'RR1CHPMODE', 'RR1CHPIQR', 'RR1HPMODE_RR1CHPMODE_DIFF', 'RR1HPMODE_REFLEN_DIFF', 'RR1CHPMODE_REFLEN_DIFF',
                             'RR1CHPmQ', 'RR1CHPMQ', 'RR1CHPAQ', 'RR1CHPSQ', 'RR1HP5PMR', 'RR1HP3PMR',
-                            'RR2', 'RR2C', 'RR2CmQ', 'RR2CMQ', 'RR2C_HQ_RATIO', 'RR2E', 'RR2E_RATIO', 'MAXRRCD', 'MAXRRED',
+                            'RR2', 'RR2C', 'RR2CmQ', 'RR2CMQ', 'RR2C_HQ_RATIO',
+                            'RR2E', 'RR2EmQ', 'RR2EMQ', 'RR2E_HQ_RATIO', 'RR2E_RATIO',
+                            'RR2CE', 'RR2CEmQ', 'RR2CEMQ', 'RR2CE_HQ_RATIO', 'RR2CE_RATIO',
+                            'MAXRRCD', 'MAXRRCED', 'MAXRRED',
                             'OAR1', 'OAR2', 'OAR1MAX_RATIO', 'OAR2MAX_RATIO', 
                             'OTHER_HP_GENOTYPED',
                             'OTHER1_OVERLAP_PRESENT', 'OTHER2_OVERLAP_PRESENT',
                             'OTHER1_OVERLAP_MAX_MIN_ARC_OVER_NARC', 'OTHER2_OVERLAP_MAX_MIN_ARC_OVER_NARC',
                             'OTHER1_OVERLAP_MAX_MIN_ARCHQ', 'OTHER2_OVERLAP_MAX_MIN_ARCHQ',
                             'OTHER1_OVERLAP_MAX_MIN_AR_OVER_NAR', 'OTHER2_OVERLAP_MAX_MIN_AR_OVER_NAR',
+                            'OTHER1_OVERLAP_MAX_MIN_ARCE_OVER_NARCE', 'OTHER2_OVERLAP_MAX_MIN_ARCE_OVER_NARCE',
                             'OTHER1_OVERLAP_MAX_MIN_ARE_OVER_NARE', 'OTHER2_OVERLAP_MAX_MIN_ARE_OVER_NARE',
                             'OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN', 'OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN',
                             'OAR1C', 'OAR2C', 'OAR1CHQ', 'OAR2CHQ', 'OAR1C_HQ_RATIO', 'OAR2C_HQ_RATIO', 'OAR1E', 'OAR2E',
-                            'NAR1', 'NAR2', 'NAR1C', 'NAR2C', 'NAR1CHQ', 'NAR2CHQ', 'NAR1C_HQ_RATIO', 'NAR2C_HQ_RATIO', 'NAR1E', 'NAR2E',
+                            'NAR1', 'NAR2', 'NAR1C', 'NAR2C', 'NAR1CHQ', 'NAR2CHQ', 'NAR1C_HQ_RATIO', 'NAR2C_HQ_RATIO',
+                            'NAR1CE', 'NAR2CE', 'NAR1E', 'NAR2E',
                             'ER', 'ERHQ',
                             'AR1CMSPAN_1', 'AR1CMSPAN_2', 'AR1CMHQSPAN_1', 'AR1CMHQSPAN_2',
                             'AR2CMSPAN_1', 'AR2CMSPAN_2', 'AR2CMHQSPAN_1', 'AR2CMHQSPAN_2',
                             'RR1CMSPAN_1', 'RR1CMSPAN_2', 'RR1CMHQSPAN_1', 'RR1CMHQSPAN_2',
                             'RR2CMSPAN_1', 'RR2CMSPAN_2', 'RR2CMHQSPAN_1', 'RR2CMHQSPAN_2',
                             'AR1_RR1_CAS_Z_SCORE', 'AR2_RR2_CAS_Z_SCORE', 
-                            'AR1_OVER_RR1', 'AR2_OVER_RR2', 'AR1C_OVER_RR1C', 'AR2C_OVER_RR2C', 'AR1E_OVER_RR1E', 'AR2E_OVER_RR2E',
-                            'AR1_OVER_OAR1', 'AR2_OVER_OAR2', 'AR1C_OVER_OAR1C', 'AR2C_OVER_OAR2C', 'AR1E_OVER_OAR1E', 'AR2E_OVER_OAR2E',
-                            'OAR1_OVER_NAR1', 'OAR2_OVER_NAR2', 'OAR1C_OVER_NAR1C', 'OAR2C_OVER_NAR2C', 'OAR1E_OVER_NAR1E', 'OAR2E_OVER_NAR2E',
-                            'OAR1_OVER_TOTAL1', 'OAR2_OVER_TOTAL2', 'OAR1C_OVER_TOTAL1C', 'OAR2C_OVER_TOTAL2C', 'OAR1E_OVER_TOTAL1E', 'OAR2E_OVER_TOTAL2E',
+                            'AR1_OVER_RR1', 'AR2_OVER_RR2', 'AR1C_OVER_RR1C', 'AR2C_OVER_RR2C',
+                            'AR1CE_OVER_RR1CE', 'AR2CE_OVER_RR2CE', 'AR1E_OVER_RR1E', 'AR2E_OVER_RR2E',
+                            'AR1_OVER_OAR1', 'AR2_OVER_OAR2', 'AR1C_OVER_OAR1C', 'AR2C_OVER_OAR2C',
+                            'AR1CE_OVER_OAR1E', 'AR2CE_OVER_OAR2E', 'AR1E_OVER_OAR1E', 'AR2E_OVER_OAR2E',
+                            'OAR1_OVER_NAR1', 'OAR2_OVER_NAR2', 'OAR1C_OVER_NAR1C', 'OAR2C_OVER_NAR2C',
+                            'OAR1E_OVER_NAR1CE', 'OAR2E_OVER_NAR2CE', 'OAR1E_OVER_NAR1E', 'OAR2E_OVER_NAR2E',
+                            'OAR1_OVER_TOTAL1', 'OAR2_OVER_TOTAL2', 'OAR1C_OVER_TOTAL1C', 'OAR2C_OVER_TOTAL2C',
+                            'OAR1E_OVER_TOTAL1CE', 'OAR2E_OVER_TOTAL2CE', 'OAR1E_OVER_TOTAL1E', 'OAR2E_OVER_TOTAL2E',
                             'ORR1_RATIO', 'ORR2_RATIO', 'ORR1C_RATIO', 'ORR2C_RATIO', 'ORR1E_RATIO', 'ORR2E_RATIO',
-                            'AR1_OVER_NAR1', 'AR2_OVER_NAR2', 'AR1C_OVER_NAR1C', 'AR2C_OVER_NAR2C', 'AR1E_OVER_NAR1E', 'AR2E_OVER_NAR2E']
+                            'AR1_OVER_NAR1', 'AR2_OVER_NAR2', 'AR1C_OVER_NAR1C', 'AR2C_OVER_NAR2C',
+                            'AR1CE_OVER_NAR1CE', 'AR2CE_OVER_NAR2CE', 'AR1E_OVER_NAR1E', 'AR2E_OVER_NAR2E']
 
     fmt_features_names = [  'AXR1', 'AXR2', 'AXR1HQ', 'AXR2HQ',
                             'EXSS1_1', 'EXSS1_2', 'EXSS2_1', 'EXSS2_2',
@@ -129,12 +145,18 @@ class Features:
         else:
             return float(v)/norm_factor
 
+    def exact_read_ratio(exact_reads, reads):
+        return exact_reads/max(1, reads)
+
+    def consistent_exact_read_ratio(consistent_exact_reads, consistent_reads):
+        return consistent_exact_reads/max(1, consistent_reads)
+
     def get_string_value(info, key, default):
         if key in info:
             return info[key]
         else:
             return default
-        
+
     def get_string_list_value(info, key, default):
         if key in info:
             v = info[key]
@@ -148,7 +170,7 @@ class Features:
     def other_hpid_overlap_present(record, other_hpid, intervals_by_hpid):
         if other_hpid is None or intervals_by_hpid is None:
             return 0
-        for chrom, start, stop, _, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, []):
+        for chrom, start, stop, _, _, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, []):
             if record.chrom == chrom and record.start < stop and start < record.stop:
                 return 1
         return 0
@@ -158,7 +180,7 @@ class Features:
             return 0
         return int(any(
             hp_genotyped
-            for chrom, start, stop, _, _, _, _, _, _, hp_genotyped in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, _, _, _, _, _, hp_genotyped in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ))
 
@@ -195,7 +217,7 @@ class Features:
             return 0
         values = [
             min_arc_over_narc
-            for chrom, start, stop, min_arc_over_narc, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, min_arc_over_narc, _, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -211,7 +233,7 @@ class Features:
             return 0
         values = [
             min_archq
-            for chrom, start, stop, _, min_archq, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, min_archq, _, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -221,20 +243,44 @@ class Features:
             return 0
         values = [
             min_ar_over_nar
-            for chrom, start, stop, _, _, min_ar_over_nar, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, min_ar_over_nar, _, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            if record.chrom == chrom and record.start < stop and start < record.stop
+        ]
+        return max(values, default=0)
+
+    def min_arce_over_narce(record):
+        sample = record.samples[0]
+        ar1ce = Features.get_number_value(sample, 'AR1CE', 0)
+        oar1e = Features.get_number_value(sample, 'OAR1E', 0)
+        rr1ce = Features.get_number_value(sample, 'RR1CE', 0)
+
+        ar2ce = Features.get_number_value(sample, 'AR2CE', ar1ce)
+        oar2e = Features.get_number_value(sample, 'OAR2E', oar1e)
+        rr2ce = Features.get_number_value(sample, 'RR2CE', rr1ce)
+
+        ratio1 = ar1ce/max(1, ar1ce + oar1e + rr1ce)
+        ratio2 = ar2ce/max(1, ar2ce + oar2e + rr2ce)
+        return min(ratio1, ratio2)
+
+    def other_hpid_overlap_max_min_arce_over_narce(record, other_hpid, intervals_by_hpid):
+        if other_hpid is None or intervals_by_hpid is None:
+            return 0
+        values = [
+            min_arce_over_narce
+            for chrom, start, stop, _, _, _, min_arce_over_narce, _, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
 
     def min_are_over_nare(record):
         sample = record.samples[0]
-        ar1e = Features.get_number_value(sample, 'AR1CE', 0)
+        ar1e = Features.get_number_value(sample, 'AR1E', 0)
         oar1e = Features.get_number_value(sample, 'OAR1E', 0)
-        rr1e = Features.get_number_value(sample, 'RR1CE', 0)
+        rr1e = Features.get_number_value(sample, 'RR1E', 0)
 
-        ar2e = Features.get_number_value(sample, 'AR2CE', ar1e)
+        ar2e = Features.get_number_value(sample, 'AR2E', ar1e)
         oar2e = Features.get_number_value(sample, 'OAR2E', oar1e)
-        rr2e = Features.get_number_value(sample, 'RR2CE', rr1e)
+        rr2e = Features.get_number_value(sample, 'RR2E', rr1e)
 
         ratio1 = ar1e/max(1, ar1e + oar1e + rr1e)
         ratio2 = ar2e/max(1, ar2e + oar2e + rr2e)
@@ -245,7 +291,7 @@ class Features:
             return 0
         values = [
             min_are_over_nare
-            for chrom, start, stop, _, _, _, min_are_over_nare, _, _, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, _, _, min_are_over_nare, _, _, _ in intervals_by_hpid.get(other_hpid, [])
             if record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=0)
@@ -269,7 +315,7 @@ class Features:
             return Features.NAN
         values = [
             exas_exrs_diff_to_len
-            for chrom, start, stop, _, _, _, _, exas_exrs_diff_to_len, has_extension_evidence, _ in intervals_by_hpid.get(other_hpid, [])
+            for chrom, start, stop, _, _, _, _, _, exas_exrs_diff_to_len, has_extension_evidence, _ in intervals_by_hpid.get(other_hpid, [])
             if has_extension_evidence and record.chrom == chrom and record.start < stop and start < record.stop
         ]
         return max(values, default=Features.NAN)
@@ -479,7 +525,14 @@ class Features:
         ar1 = Features.get_number_value(sample, 'AR1', 0)
         ar1c = Features.get_number_value(sample, 'AR1C', 0)
         arc1hq = Features.get_number_value(sample, 'AR1CHQ', 0)
-        ar1e = Features.get_number_value(sample, 'AR1CE', 0)
+        ar1ce = Features.get_number_value(sample, 'AR1CE', 0)
+        ar1cehq = Features.get_number_value(sample, 'AR1CEHQ', 0)
+        ar1ce_min_mq = Features.get_number_value(sample, 'AR1CEmQ', Features.NAN)
+        ar1ce_max_mq = Features.get_number_value(sample, 'AR1CEMQ', Features.NAN)
+        ar1e = Features.get_number_value(sample, 'AR1E', 0)
+        ar1ehq = Features.get_number_value(sample, 'AR1EHQ', 0)
+        ar1e_min_mq = Features.get_number_value(sample, 'AR1EmQ', Features.NAN)
+        ar1e_max_mq = Features.get_number_value(sample, 'AR1EMQ', Features.NAN)
         ar1_adj = ar1
         ar1c_adj = ar1c
         if exp_alt_reads_freq1 > 0:
@@ -497,7 +550,15 @@ class Features:
         features['AR1CHQ'] = Features.piecewise_normalise(arc1hq, min_depth, max_depth)
         features['AR1C_HQ_RATIO'] = arc1hq/max(1, ar1c)
         features['AR1E'] = Features.piecewise_normalise(ar1e, min_depth, max_depth)
-        features['AR1E_RATIO'] = ar1e/max(1, ar1c)
+        features['AR1EmQ'] = ar1e_min_mq
+        features['AR1EMQ'] = ar1e_max_mq
+        features['AR1E_HQ_RATIO'] = ar1ehq/max(1, ar1e)
+        features['AR1E_RATIO'] = Features.exact_read_ratio(ar1e, ar1)
+        features['AR1CE'] = Features.piecewise_normalise(ar1ce, min_depth, max_depth)
+        features['AR1CEmQ'] = ar1ce_min_mq
+        features['AR1CEMQ'] = ar1ce_max_mq
+        features['AR1CE_HQ_RATIO'] = ar1cehq/max(1, ar1ce)
+        features['AR1CE_RATIO'] = Features.consistent_exact_read_ratio(ar1ce, ar1c)
         features['AR1CMSPAN_1'], features['AR1CMSPAN_2'] = Features.get_number_value(sample, 'AR1CMSPAN', [0, 0], max_is)
         features['AR1CMHQSPAN_1'], features['AR1CMHQSPAN_2'] = Features.get_number_value(sample, 'AR1CMHQSPAN', [0, 0], max_is)
 
@@ -517,7 +578,14 @@ class Features:
         ar2 = Features.get_number_value(sample, 'AR2', 0)
         ar2c = Features.get_number_value(sample, 'AR2C', 0)
         arc2hq = Features.get_number_value(sample, 'AR2CHQ', 0)
-        ar2e = Features.get_number_value(sample, 'AR2CE', 0)
+        ar2e = Features.get_number_value(sample, 'AR2E', 0)
+        ar2ehq = Features.get_number_value(sample, 'AR2EHQ', 0)
+        ar2e_min_mq = Features.get_number_value(sample, 'AR2EmQ', Features.NAN)
+        ar2e_max_mq = Features.get_number_value(sample, 'AR2EMQ', Features.NAN)
+        ar2ce = Features.get_number_value(sample, 'AR2CE', 0)
+        ar2cehq = Features.get_number_value(sample, 'AR2CEHQ', 0)
+        ar2ce_min_mq = Features.get_number_value(sample, 'AR2CEmQ', Features.NAN)
+        ar2ce_max_mq = Features.get_number_value(sample, 'AR2CEMQ', Features.NAN)
         ar2cas = Features.get_number_value(sample, 'AR2CAS', Features.NAN)
         ar2css = Features.get_number_value(sample, 'AR2CSS', Features.NAN)
         has_ar2 = 'AR2' in sample
@@ -525,7 +593,14 @@ class Features:
             ar2 = ar1
             ar2c = ar1c
             arc2hq = arc1hq
+            ar2ce = ar1ce
+            ar2cehq = ar1cehq
+            ar2ce_min_mq = ar1ce_min_mq
+            ar2ce_max_mq = ar1ce_max_mq
             ar2e = ar1e
+            ar2ehq = ar1ehq
+            ar2e_min_mq = ar1e_min_mq
+            ar2e_max_mq = ar1e_max_mq
             ar2cas = ar1cas
             ar2css = ar1css
             ar2_adj = ar1_adj
@@ -546,7 +621,15 @@ class Features:
         features['AR2CHQ'] = Features.piecewise_normalise(arc2hq, min_depth, max_depth)
         features['AR2C_HQ_RATIO'] = arc2hq/max(1, ar2c)
         features['AR2E'] = Features.piecewise_normalise(ar2e, min_depth, max_depth)
-        features['AR2E_RATIO'] = ar2e/max(1, ar2c)
+        features['AR2EmQ'] = ar2e_min_mq
+        features['AR2EMQ'] = ar2e_max_mq
+        features['AR2E_HQ_RATIO'] = ar2ehq/max(1, ar2e)
+        features['AR2E_RATIO'] = Features.exact_read_ratio(ar2e, ar2)
+        features['AR2CE'] = Features.piecewise_normalise(ar2ce, min_depth, max_depth)
+        features['AR2CEmQ'] = ar2ce_min_mq
+        features['AR2CEMQ'] = ar2ce_max_mq
+        features['AR2CE_HQ_RATIO'] = ar2cehq/max(1, ar2ce)
+        features['AR2CE_RATIO'] = Features.consistent_exact_read_ratio(ar2ce, ar2c)
         features['AR2CMSPAN_1'], features['AR2CMSPAN_2'] = Features.get_number_value(sample, 'AR2CMSPAN', [0, 0], max_is)
         features['AR2CMHQSPAN_1'], features['AR2CMHQSPAN_2'] = Features.get_number_value(sample, 'AR2CMHQSPAN', [0, 0], max_is)
         if not has_ar2:
@@ -563,13 +646,22 @@ class Features:
         features['ARCR'] = ar1cr + ar2cr
         features['MAXARCD'] = max(features['ARCF'], features['ARCR'])
 
-        ar1ef = Features.get_number_value(sample, 'AR1CEF', 0, max(1, ar1e))
-        ar1er = Features.get_number_value(sample, 'AR1CER', 0, max(1, ar1e))
-        ar2ef = Features.get_number_value(sample, 'AR2CEF', 0, max(1, ar2e))
-        ar2er = Features.get_number_value(sample, 'AR2CER', 0, max(1, ar2e))
+        ar1ef = Features.get_number_value(sample, 'AR1CEF', 0, max(1, ar1ce))
+        ar1er = Features.get_number_value(sample, 'AR1CER', 0, max(1, ar1ce))
+        ar2ef = Features.get_number_value(sample, 'AR2CEF', 0, max(1, ar2ce))
+        ar2er = Features.get_number_value(sample, 'AR2CER', 0, max(1, ar2ce))
         if not has_ar2: ar2ef, ar2er = ar1ef, ar1er
-        features['AREF'] = ar1ef + ar2ef
-        features['ARER'] = ar1er + ar2er
+        features['ARCEF'] = ar1ef + ar2ef
+        features['ARCER'] = ar1er + ar2er
+        features['MAXARCED'] = max(features['ARCEF'], features['ARCER'])
+
+        ar1_exact_fwd = Features.get_number_value(sample, 'AR1EF', 0, max(1, ar1e))
+        ar1_exact_rev = Features.get_number_value(sample, 'AR1ER', 0, max(1, ar1e))
+        ar2_exact_fwd = Features.get_number_value(sample, 'AR2EF', 0, max(1, ar2e))
+        ar2_exact_rev = Features.get_number_value(sample, 'AR2ER', 0, max(1, ar2e))
+        if not has_ar2: ar2_exact_fwd, ar2_exact_rev = ar1_exact_fwd, ar1_exact_rev
+        features['AREF'] = ar1_exact_fwd + ar2_exact_fwd
+        features['ARER'] = ar1_exact_rev + ar2_exact_rev
         features['MAXARED'] = max(features['AREF'], features['ARER'])
 
         oar1 = Features.get_number_value(sample, 'OAR1', 0)
@@ -603,6 +695,7 @@ class Features:
         other1_overlap_max_min_archq = Features.other_hpid_overlap_max_min_archq(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_MAX_MIN_ARCHQ'] = Features.piecewise_normalise(other1_overlap_max_min_archq, min_depth, max_depth)
         features['OTHER1_OVERLAP_MAX_MIN_AR_OVER_NAR'] = Features.other_hpid_overlap_max_min_ar_over_nar(record, oar1hpid, intervals_by_hpid)
+        features['OTHER1_OVERLAP_MAX_MIN_ARCE_OVER_NARCE'] = Features.other_hpid_overlap_max_min_arce_over_narce(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_MAX_MIN_ARE_OVER_NARE'] = Features.other_hpid_overlap_max_min_are_over_nare(record, oar1hpid, intervals_by_hpid)
         features['OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_exas_exrs_diff_to_len(record, oar1hpid, intervals_by_hpid)
         features['OAR1C'] = Features.piecewise_normalise(oar1c, min_depth, max_depth)
@@ -616,6 +709,7 @@ class Features:
         other2_overlap_max_min_archq = Features.other_hpid_overlap_max_min_archq(record, oar2hpid, intervals_by_hpid)
         features['OTHER2_OVERLAP_MAX_MIN_ARCHQ'] = Features.piecewise_normalise(other2_overlap_max_min_archq, min_depth, max_depth)
         features['OTHER2_OVERLAP_MAX_MIN_AR_OVER_NAR'] = Features.other_hpid_overlap_max_min_ar_over_nar(record, oar2hpid, intervals_by_hpid)
+        features['OTHER2_OVERLAP_MAX_MIN_ARCE_OVER_NARCE'] = Features.other_hpid_overlap_max_min_arce_over_narce(record, oar2hpid, intervals_by_hpid)
         features['OTHER2_OVERLAP_MAX_MIN_ARE_OVER_NARE'] = Features.other_hpid_overlap_max_min_are_over_nare(record, oar2hpid, intervals_by_hpid)
         features['OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = Features.other_hpid_overlap_exas_exrs_diff_to_len(record, oar2hpid, intervals_by_hpid)
         features['OAR2C'] = Features.piecewise_normalise(oar2c, min_depth, max_depth)
@@ -637,12 +731,25 @@ class Features:
         rr1 = Features.get_number_value(sample, 'RR1', 0)
         rr1c = Features.get_number_value(sample, 'RR1C', 0)
         rr1chq = Features.get_number_value(sample, 'RR1CHQ', 0)
-        rr1e = Features.get_number_value(sample, 'RR1CE', 0)
-        rr1ehq = Features.get_number_value(sample, 'RR1CEHQ', 0)
+        rr1e = Features.get_number_value(sample, 'RR1E', 0)
+        rr1ehq = Features.get_number_value(sample, 'RR1EHQ', 0)
+        rr1e_min_mq = Features.get_number_value(sample, 'RR1EmQ', Features.NAN)
+        rr1e_max_mq = Features.get_number_value(sample, 'RR1EMQ', Features.NAN)
+        rr1ce = Features.get_number_value(sample, 'RR1CE', 0)
+        rr1cehq = Features.get_number_value(sample, 'RR1CEHQ', 0)
+        rr1ce_min_mq = Features.get_number_value(sample, 'RR1CEmQ', Features.NAN)
+        rr1ce_max_mq = Features.get_number_value(sample, 'RR1CEMQ', Features.NAN)
         rr2 = Features.get_number_value(sample, 'RR2', 0)
         rr2c = Features.get_number_value(sample, 'RR2C', 0)
         rr2chq = Features.get_number_value(sample, 'RR2CHQ', 0)
-        rr2e = Features.get_number_value(sample, 'RR2CE', 0)
+        rr2e = Features.get_number_value(sample, 'RR2E', 0)
+        rr2ehq = Features.get_number_value(sample, 'RR2EHQ', 0)
+        rr2e_min_mq = Features.get_number_value(sample, 'RR2EmQ', Features.NAN)
+        rr2e_max_mq = Features.get_number_value(sample, 'RR2EMQ', Features.NAN)
+        rr2ce = Features.get_number_value(sample, 'RR2CE', 0)
+        rr2cehq = Features.get_number_value(sample, 'RR2CEHQ', 0)
+        rr2ce_min_mq = Features.get_number_value(sample, 'RR2CEmQ', Features.NAN)
+        rr2ce_max_mq = Features.get_number_value(sample, 'RR2CEMQ', Features.NAN)
 
         rr1cas = Features.get_number_value(sample, 'RR1CAS', Features.NAN)
         rr1css = Features.get_number_value(sample, 'RR1CSS', Features.NAN)
@@ -652,10 +759,15 @@ class Features:
         features['RR1CMQ'] = Features.get_number_value(sample, 'RR1CMQ', Features.NAN)
         features['RR1C_HQ_RATIO'] = rr1chq/max(1, rr1c)
         features['RR1E'] = Features.piecewise_normalise(rr1e, min_depth, max_depth)
-        features['RR1EmQ'] = Features.get_number_value(sample, 'RR1CEmQ', Features.NAN)
-        features['RR1EMQ'] = Features.get_number_value(sample, 'RR1CEMQ', Features.NAN)
+        features['RR1EmQ'] = rr1e_min_mq
+        features['RR1EMQ'] = rr1e_max_mq
         features['RR1E_HQ_RATIO'] = rr1ehq/max(1, rr1e)
-        features['RR1E_RATIO'] = rr1e/max(1, rr1c)
+        features['RR1E_RATIO'] = Features.exact_read_ratio(rr1e, rr1)
+        features['RR1CE'] = Features.piecewise_normalise(rr1ce, min_depth, max_depth)
+        features['RR1CEmQ'] = rr1ce_min_mq
+        features['RR1CEMQ'] = rr1ce_max_mq
+        features['RR1CE_HQ_RATIO'] = rr1cehq/max(1, rr1ce)
+        features['RR1CE_RATIO'] = Features.consistent_exact_read_ratio(rr1ce, rr1c)
         features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.get_number_value(sample, 'RR1CMSPAN', [0, 0], max_is)
         features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2'] = Features.get_number_value(sample, 'RR1CMHQSPAN', [0, 0], max_is)
 
@@ -679,7 +791,14 @@ class Features:
             rr2 = rr1
             rr2c = rr1c
             rr2chq = rr1chq
+            rr2ce = rr1ce
+            rr2cehq = rr1cehq
+            rr2ce_min_mq = rr1ce_min_mq
+            rr2ce_max_mq = rr1ce_max_mq
             rr2e = rr1e
+            rr2ehq = rr1ehq
+            rr2e_min_mq = rr1e_min_mq
+            rr2e_max_mq = rr1e_max_mq
             rr2cas = rr1cas
             rr2css = rr1css
         features['RR2'] = Features.piecewise_normalise(rr2, min_depth, max_depth)
@@ -688,7 +807,15 @@ class Features:
         features['RR2CMQ'] = Features.get_number_value(sample, 'RR2CMQ', Features.NAN)
         features['RR2C_HQ_RATIO'] = rr2chq/max(1, rr2c)
         features['RR2E'] = Features.piecewise_normalise(rr2e, min_depth, max_depth)
-        features['RR2E_RATIO'] = rr2e/max(1, rr2c)
+        features['RR2EmQ'] = rr2e_min_mq
+        features['RR2EMQ'] = rr2e_max_mq
+        features['RR2E_HQ_RATIO'] = rr2ehq/max(1, rr2e)
+        features['RR2E_RATIO'] = Features.exact_read_ratio(rr2e, rr2)
+        features['RR2CE'] = Features.piecewise_normalise(rr2ce, min_depth, max_depth)
+        features['RR2CEmQ'] = rr2ce_min_mq
+        features['RR2CEMQ'] = rr2ce_max_mq
+        features['RR2CE_HQ_RATIO'] = rr2cehq/max(1, rr2ce)
+        features['RR2CE_RATIO'] = Features.consistent_exact_read_ratio(rr2ce, rr2c)
         features['RR2CMSPAN_1'], features['RR2CMSPAN_2'] = Features.get_number_value(sample, 'RR2CMSPAN', [0, 0], max_is)
         features['RR2CMHQSPAN_1'], features['RR2CMHQSPAN_2'] = Features.get_number_value(sample, 'RR2CMHQSPAN', [0, 0], max_is)
         if not has_rr2:
@@ -709,34 +836,47 @@ class Features:
         features['RRCR'] = rr1cr_ratio + rr2cr_ratio
         features['MAXRRCD'] = max(features['RRCF'], features['RRCR'])
 
-        rr1ef = Features.get_number_value(sample, 'RR1CEF', 0, max(1, rr1e))
-        rr1er = Features.get_number_value(sample, 'RR1CER', 0, max(1, rr1e))
-        rr2ef = Features.get_number_value(sample, 'RR2CEF', 0, max(1, rr2e))
-        rr2er = Features.get_number_value(sample, 'RR2CER', 0, max(1, rr2e))
+        rr1ef = Features.get_number_value(sample, 'RR1CEF', 0, max(1, rr1ce))
+        rr1er = Features.get_number_value(sample, 'RR1CER', 0, max(1, rr1ce))
+        rr2ef = Features.get_number_value(sample, 'RR2CEF', 0, max(1, rr2ce))
+        rr2er = Features.get_number_value(sample, 'RR2CER', 0, max(1, rr2ce))
         if not has_rr2: rr2ef, rr2er = rr1ef, rr1er
-        features['RREF'] = rr1ef + rr2ef
-        features['RRER'] = rr1er + rr2er
+        features['RRCEF'] = rr1ef + rr2ef
+        features['RRCER'] = rr1er + rr2er
+        features['MAXRRCED'] = max(features['RRCEF'], features['RRCER'])
+
+        rr1e_fwd = Features.get_number_value(sample, 'RR1EF', 0, max(1, rr1e))
+        rr1e_rev = Features.get_number_value(sample, 'RR1ER', 0, max(1, rr1e))
+        rr2_exact_fwd = Features.get_number_value(sample, 'RR2EF', 0, max(1, rr2e))
+        rr2_exact_rev = Features.get_number_value(sample, 'RR2ER', 0, max(1, rr2e))
+        if not has_rr2: rr2_exact_fwd, rr2_exact_rev = rr1e_fwd, rr1e_rev
+        features['RREF'] = rr1e_fwd + rr2_exact_fwd
+        features['RRER'] = rr1e_rev + rr2_exact_rev
         features['MAXRRED'] = max(features['RREF'], features['RRER'])
 
         nar1 = rr1 + oar1
         nar1c = rr1c + oar1c
         nar1chq = rr1chq + oar1chq
-        nar1e = rr1e + oar1e
+        nar1e = rr1ce + oar1e
+        nar1_exact = rr1e + oar1e
         features['NAR1'] = Features.piecewise_normalise(nar1, min_depth, max_depth)
         features['NAR1C'] = Features.piecewise_normalise(nar1c, min_depth, max_depth)
         features['NAR1CHQ'] = Features.piecewise_normalise(nar1chq, min_depth, max_depth)
         features['NAR1C_HQ_RATIO'] = nar1chq/max(1, nar1c)
-        features['NAR1E'] = Features.piecewise_normalise(nar1e, min_depth, max_depth)
+        features['NAR1CE'] = Features.piecewise_normalise(nar1e, min_depth, max_depth)
+        features['NAR1E'] = Features.piecewise_normalise(nar1_exact, min_depth, max_depth)
 
         nar2 = rr2 + oar2
         nar2c = rr2c + oar2c
         nar2chq = rr2chq + oar2chq
-        nar2e = rr2e + oar2e
+        nar2e = rr2ce + oar2e
+        nar2_exact = rr2e + oar2e
         features['NAR2'] = Features.piecewise_normalise(nar2, min_depth, max_depth)
         features['NAR2C'] = Features.piecewise_normalise(nar2c, min_depth, max_depth)
         features['NAR2CHQ'] = Features.piecewise_normalise(nar2chq, min_depth, max_depth)
         features['NAR2C_HQ_RATIO'] = nar2chq/max(1, nar2c)
-        features['NAR2E'] = Features.piecewise_normalise(nar2e, min_depth, max_depth)
+        features['NAR2CE'] = Features.piecewise_normalise(nar2e, min_depth, max_depth)
+        features['NAR2E'] = Features.piecewise_normalise(nar2_exact, min_depth, max_depth)
 
         er = Features.get_number_value(sample, 'ER', 0)
         erhq = Features.get_number_value(sample, 'ERHQ', 0)
@@ -750,26 +890,34 @@ class Features:
         features['AR2_OVER_RR2'] = ar2/max(1, ar2+rr2)
         features['AR1C_OVER_RR1C'] = ar1c/max(1, ar1c+rr1c)
         features['AR2C_OVER_RR2C'] = ar2c/max(1, ar2c+rr2c)
+        features['AR1CE_OVER_RR1CE'] = ar1ce/max(1, ar1ce+rr1ce)
+        features['AR2CE_OVER_RR2CE'] = ar2ce/max(1, ar2ce+rr2ce)
         features['AR1E_OVER_RR1E'] = ar1e/max(1, ar1e+rr1e)
         features['AR2E_OVER_RR2E'] = ar2e/max(1, ar2e+rr2e)
         features['AR1_OVER_OAR1'] = ar1/max(1, ar1+oar1)
         features['AR2_OVER_OAR2'] = ar2/max(1, ar2+oar2)
         features['AR1C_OVER_OAR1C'] = ar1c/max(1, ar1c+oar1c)
         features['AR2C_OVER_OAR2C'] = ar2c/max(1, ar2c+oar2c)
+        features['AR1CE_OVER_OAR1E'] = ar1ce/max(1, ar1ce+oar1e)
+        features['AR2CE_OVER_OAR2E'] = ar2ce/max(1, ar2ce+oar2e)
         features['AR1E_OVER_OAR1E'] = ar1e/max(1, ar1e+oar1e)
         features['AR2E_OVER_OAR2E'] = ar2e/max(1, ar2e+oar2e)
         features['OAR1_OVER_NAR1'] = oar1/max(1, nar1)
         features['OAR2_OVER_NAR2'] = oar2/max(1, nar2)
         features['OAR1C_OVER_NAR1C'] = oar1c/max(1, nar1c)
         features['OAR2C_OVER_NAR2C'] = oar2c/max(1, nar2c)
-        features['OAR1E_OVER_NAR1E'] = oar1e/max(1, nar1e)
-        features['OAR2E_OVER_NAR2E'] = oar2e/max(1, nar2e)
+        features['OAR1E_OVER_NAR1CE'] = oar1e/max(1, nar1e)
+        features['OAR2E_OVER_NAR2CE'] = oar2e/max(1, nar2e)
+        features['OAR1E_OVER_NAR1E'] = oar1e/max(1, nar1_exact)
+        features['OAR2E_OVER_NAR2E'] = oar2e/max(1, nar2_exact)
         features['OAR1_OVER_TOTAL1'] = oar1/max(1, nar1+ar1)
         features['OAR2_OVER_TOTAL2'] = oar2/max(1, nar2+ar2)
         features['OAR1C_OVER_TOTAL1C'] = oar1c/max(1, nar1c+ar1c)
         features['OAR2C_OVER_TOTAL2C'] = oar2c/max(1, nar2c+ar2c)
-        features['OAR1E_OVER_TOTAL1E'] = oar1e/max(1, nar1e+ar1e)
-        features['OAR2E_OVER_TOTAL2E'] = oar2e/max(1, nar2e+ar2e)
+        features['OAR1E_OVER_TOTAL1CE'] = oar1e/max(1, nar1e+ar1ce)
+        features['OAR2E_OVER_TOTAL2CE'] = oar2e/max(1, nar2e+ar2ce)
+        features['OAR1E_OVER_TOTAL1E'] = oar1e/max(1, nar1_exact+ar1e)
+        features['OAR2E_OVER_TOTAL2E'] = oar2e/max(1, nar2_exact+ar2e)
         features['ORR1_RATIO'] = orr1/max(1, rr1)
         features['ORR2_RATIO'] = orr2/max(1, rr2)
         features['ORR1C_RATIO'] = orr1c/max(1, rr1)
@@ -780,8 +928,10 @@ class Features:
         features['AR2_OVER_NAR2'] = ar2/max(1, ar2+nar2)
         features['AR1C_OVER_NAR1C'] = ar1c/max(1, ar1c+nar1c)
         features['AR2C_OVER_NAR2C'] = ar2c/max(1, ar2c+nar2c)
-        features['AR1E_OVER_NAR1E'] = ar1e/max(1, ar1e+nar1e)
-        features['AR2E_OVER_NAR2E'] = ar2e/max(1, ar2e+nar2e)
+        features['AR1CE_OVER_NAR1CE'] = ar1ce/max(1, ar1ce+nar1e)
+        features['AR2CE_OVER_NAR2CE'] = ar2ce/max(1, ar2ce+nar2e)
+        features['AR1E_OVER_NAR1E'] = ar1e/max(1, ar1e+nar1_exact)
+        features['AR2E_OVER_NAR2E'] = ar2e/max(1, ar2e+nar2_exact)
 
         md = Features.get_number_value(sample, 'MD', [0, 0, 0, 0])
         features['MDLF'] = Features.piecewise_normalise(md[0], min_depth, max_depth)
@@ -1135,6 +1285,7 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, ignore_gts = False, feature_name
                 Features.min_arc_over_narc(candidate),
                 Features.min_archq(candidate),
                 Features.min_ar_over_nar(candidate),
+                Features.min_arce_over_narce(candidate),
                 Features.min_are_over_nare(candidate),
                 Features.exas_exrs_diff_to_len(candidate),
                 Features.has_extension_evidence(candidate),
