@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <limits>
+#include <map>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -147,11 +149,21 @@ struct evidence_logger_t {
 };
 
 struct evidence_map_t {
-    std::unordered_map<std::string, int> read_to_hpid_map;
-    // All best-scoring variant IDs within the HPID selected for each read.
-    // A read can have more than one ID when equivalent records represent the
-    // same local haplotype.
-    std::unordered_map<std::string, std::set<std::string>> read_to_sv_ids_map;
+    struct read_assignment_t {
+        int hpid;
+        // Singleton HPIDs derive their sole VID from vid_idxs_by_hpid. Multi-VID
+        // HPIDs reference one shared, interned winning set.
+        uint32_t vid_set_idx;
+
+        read_assignment_t() : hpid(0), vid_set_idx(std::numeric_limits<uint32_t>::max()) {}
+        read_assignment_t(int hpid, uint32_t vid_set_idx) : hpid(hpid), vid_set_idx(vid_set_idx) {}
+    };
+
+    std::unordered_map<std::string, read_assignment_t> read_assignments;
+    std::unordered_map<std::string, uint32_t> sv_id_to_idx;
+    std::vector<std::string> sv_id_by_idx;
+    std::unordered_map<int, std::vector<uint32_t>> vid_idxs_by_hpid;
+    std::vector<std::vector<uint32_t>> interned_vid_sets;
 
     // OAR/ORR consistency joins two observations that can arrive in either order on different genotyping threads:
     // a variant classifies an assigned-away read as ALT or REF, and the assigned variant later finds it consistent.
@@ -163,6 +175,11 @@ struct evidence_map_t {
     evidence_map_t() {}
 
     void load(const std::string& alt_reads_association_fname, const std::string& vcf_fname, config_t& config) {
+        read_assignments.clear();
+        sv_id_to_idx.clear();
+        sv_id_by_idx.clear();
+        vid_idxs_by_hpid.clear();
+        interned_vid_sets.clear();
         
         htsFile* vcf_file = bcf_open(vcf_fname.c_str(), "r");
         if (vcf_file == NULL) {
@@ -198,6 +215,28 @@ struct evidence_map_t {
         hts_close(vcf_file);
         bcf_hdr_destroy(vcf_header);
         bcf_destroy(vcf_record);
+
+        for (const auto& entry : sv_hpid_map) {
+            uint32_t vid_idx = sv_id_by_idx.size();
+            sv_id_to_idx.emplace(entry.first, vid_idx);
+            sv_id_by_idx.push_back(entry.first);
+            vid_idxs_by_hpid[entry.second].push_back(vid_idx);
+        }
+        for (auto& entry : vid_idxs_by_hpid) {
+            std::sort(entry.second.begin(), entry.second.end());
+        }
+
+        std::map<std::vector<uint32_t>, uint32_t> vid_set_to_idx;
+        auto intern_vid_set = [&](std::vector<uint32_t> vid_idxs) {
+            std::sort(vid_idxs.begin(), vid_idxs.end());
+            vid_idxs.erase(std::unique(vid_idxs.begin(), vid_idxs.end()), vid_idxs.end());
+            auto existing = vid_set_to_idx.find(vid_idxs);
+            if (existing != vid_set_to_idx.end()) return existing->second;
+            uint32_t set_idx = interned_vid_sets.size();
+            interned_vid_sets.push_back(vid_idxs);
+            vid_set_to_idx.emplace(std::move(vid_idxs), set_idx);
+            return set_idx;
+        };
 
         std::ifstream alt_reads_association_fin(alt_reads_association_fname);
         if (!alt_reads_association_fin) {
@@ -271,19 +310,29 @@ struct evidence_map_t {
             }
         }
         std::unordered_map<std::string, std::vector<sv_with_bp_t>> read_to_multiple_svs; // only for reads with multiple best associations
+        // Only multi-VID HPIDs need a temporary per-read VID collection. For a
+        // singleton HPID the VID is derived from the HPID without per-read storage.
+        std::unordered_map<std::string, std::vector<uint32_t>> unique_read_vid_idxs;
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score) {
             sv_id = remove_svid_dup_suffix(sv_id);
             const best_assoc_t& best_assoc = read_to_best_assoc_map[read_name];
             bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
             if (passes_min_epr == best_assoc.passes_min_epr && score == best_assoc.score) {
                 if (best_assoc.unique) {
-                    read_to_hpid_map[read_name] = sv_hpid_map[sv_id];
-                    read_to_sv_ids_map[read_name].insert(sv_id);
+                    int hpid = sv_hpid_map[sv_id];
+                    read_assignments[read_name] = read_assignment_t(hpid, std::numeric_limits<uint32_t>::max());
+                    if (vid_idxs_by_hpid[hpid].size() > 1) {
+                        unique_read_vid_idxs[read_name].push_back(sv_id_to_idx.at(sv_id));
+                    }
                 } else {
                     read_to_multiple_svs[read_name].push_back({sv_id, bp});
                 }
             }
         }
+        for (auto& entry : unique_read_vid_idxs) {
+            read_assignments[entry.first].vid_set_idx = intern_vid_set(std::move(entry.second));
+        }
+        unique_read_vid_idxs.clear();
 
         // Now, assign non-uniquely assigned reads
         std::mt19937 gen(config.seed);
@@ -342,32 +391,56 @@ struct evidence_map_t {
                 }
             }
 
-            read_to_hpid_map[read_name] = assigned_hpid;
+            uint32_t assigned_vid_set_idx = std::numeric_limits<uint32_t>::max();
+            std::vector<uint32_t> assigned_vid_idxs;
             for (const auto& sv_w_bp : sv_w_bps) {
                 if (sv_hpid_map[sv_w_bp.first] == assigned_hpid) {
-                    read_to_sv_ids_map[read_name].insert(sv_w_bp.first);
+                    assigned_vid_idxs.push_back(sv_id_to_idx.at(sv_w_bp.first));
                 }
             }
+            if (vid_idxs_by_hpid[assigned_hpid].size() > 1) {
+                assigned_vid_set_idx = intern_vid_set(std::move(assigned_vid_idxs));
+            }
+            read_assignments[read_name] = read_assignment_t(assigned_hpid, assigned_vid_set_idx);
         }
+    }
+
+    const std::vector<uint32_t>* get_assigned_vid_idxs(const std::string& read_name) const {
+        auto assignment_it = read_assignments.find(read_name);
+        if (assignment_it == read_assignments.end()) return NULL;
+        const read_assignment_t& assignment = assignment_it->second;
+        if (assignment.vid_set_idx == std::numeric_limits<uint32_t>::max()) {
+            auto hpid_vids_it = vid_idxs_by_hpid.find(assignment.hpid);
+            return hpid_vids_it == vid_idxs_by_hpid.end() ? NULL : &hpid_vids_it->second;
+        }
+        return &interned_vid_sets[assignment.vid_set_idx];
     }
 
     bool is_read_assigned_to_different_sv(bam1_t* read, sv_t* sv) {
         std::string read_name = read_name_with_suffix(read);
-        if (!read_to_hpid_map.count(read_name)) return false;
-        return read_to_hpid_map[read_name] != sv->hpid;
+        auto assignment_it = read_assignments.find(read_name);
+        return assignment_it != read_assignments.end() && assignment_it->second.hpid != sv->hpid;
     }
 
     // Check assignment for reads represented without their original BAM record, preserving the /1 or /2 suffix in the lookup key.
     bool is_read_assigned_to_different_sv(const bp_support_read_t& read, sv_t* sv) {
         std::string read_name = read_name_with_suffix(read);
-        if (!read_to_hpid_map.count(read_name)) return false;
-        return read_to_hpid_map[read_name] != sv->hpid;
+        auto assignment_it = read_assignments.find(read_name);
+        return assignment_it != read_assignments.end() && assignment_it->second.hpid != sv->hpid;
     }
 
     bool is_read_assigned_to_this_sv(const bp_support_read_t& read, sv_t* sv) {
         std::string read_name = read_name_with_suffix(read);
-        if (!read_to_hpid_map.count(read_name)) return false;
-        return read_to_hpid_map[read_name] == sv->hpid;
+        auto assignment_it = read_assignments.find(read_name);
+        return assignment_it != read_assignments.end() && assignment_it->second.hpid == sv->hpid;
+    }
+
+    bool is_read_assigned_to_sv_id(const bp_support_read_t& read, const std::string& sv_id) const {
+        std::string read_name = read_name_with_suffix(read);
+        auto vid_it = sv_id_to_idx.find(remove_svid_dup_suffix(sv_id));
+        if (vid_it == sv_id_to_idx.end()) return false;
+        const std::vector<uint32_t>* assigned_vid_idxs = get_assigned_vid_idxs(read_name);
+        return assigned_vid_idxs && std::binary_search(assigned_vid_idxs->begin(), assigned_vid_idxs->end(), vid_it->second);
     }
 
     // Explicitly insert one OAR*C read, or upgrade its flags if it was already inserted. The caller must hold other_read_support_mtx.
@@ -416,11 +489,20 @@ struct evidence_map_t {
         }
     }
 
+    const std::string& get_sv_id(const std::string& sv_id) const {
+        return sv_id;
+    }
+
+    const std::string& get_sv_id(uint32_t vid_idx) const {
+        return sv_id_by_idx[vid_idx];
+    }
+
     // Remember that an assigned-away read supports this variant's ALT breakpoint. If the assigned
     // variant has already reported consistency, populate OAR*C immediately; otherwise record_assigned_read_consistency does it later.
+    template <typename VidContainer>
     void register_oar_support_core(sv_t::sample_info_t& sample_info, int bp_n,
         const std::string& read_name, const int* supporting_hpid,
-        const std::set<std::string>* supporting_sv_ids) {
+        const VidContainer* supporting_vids) {
         std::lock_guard<std::mutex> lock(other_read_support_mtx);
 
         auto existing_targets = oar_targets_by_read.find(read_name);
@@ -452,7 +534,7 @@ struct evidence_map_t {
                 throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
             }
         }
-        if (target_added && supporting_sv_ids) {
+        if (target_added && supporting_vids) {
             std::unordered_map<std::string, int>* reads_by_vid;
             if (bp_n == 1) {
                 reads_by_vid = &sample_info.oar_bp1_reads_by_vid;
@@ -461,8 +543,8 @@ struct evidence_map_t {
             } else {
                 throw std::runtime_error("Invalid OAR breakpoint number " + std::to_string(bp_n) + ".");
             }
-            for (const std::string& sv_id : *supporting_sv_ids) {
-                (*reads_by_vid)[sv_id]++;
+            for (const auto& vid : *supporting_vids) {
+                (*reads_by_vid)[get_sv_id(vid)]++;
             }
         }
 
@@ -471,16 +553,14 @@ struct evidence_map_t {
     }
 
     void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n, const std::string& read_name) {
-        auto assigned_hpid_it = read_to_hpid_map.find(read_name);
-        const int* supporting_hpid = assigned_hpid_it == read_to_hpid_map.end() ? NULL : &assigned_hpid_it->second;
-        auto assigned_sv_ids_it = read_to_sv_ids_map.find(read_name);
-        const std::set<std::string>* supporting_sv_ids = assigned_sv_ids_it == read_to_sv_ids_map.end() ? NULL : &assigned_sv_ids_it->second;
-        register_oar_support_core(sample_info, bp_n, read_name, supporting_hpid, supporting_sv_ids);
+        auto assignment_it = read_assignments.find(read_name);
+        const int* supporting_hpid = assignment_it == read_assignments.end() ? NULL : &assignment_it->second.hpid;
+        const std::vector<uint32_t>* supporting_vid_idxs = get_assigned_vid_idxs(read_name);
+        register_oar_support_core(sample_info, bp_n, read_name, supporting_hpid, supporting_vid_idxs);
     }
 
     void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n,
-        const std::string& read_name, int supporting_hpid, const std::string& supporting_sv_id) {
-        const std::set<std::string> supporting_sv_ids = {remove_svid_dup_suffix(supporting_sv_id)};
+        const std::string& read_name, int supporting_hpid, const std::set<std::string>& supporting_sv_ids) {
         register_oar_support_core(sample_info, bp_n, read_name, &supporting_hpid, &supporting_sv_ids);
     }
 
@@ -494,8 +574,8 @@ struct evidence_map_t {
     }
 
     void register_oar_support(sv_t::sample_info_t& sample_info, int bp_n,
-        const bp_support_read_t& read, int supporting_hpid, const std::string& supporting_sv_id) {
-        register_oar_support(sample_info, bp_n, read_name_with_suffix(read), supporting_hpid, supporting_sv_id);
+        const bp_support_read_t& read, int supporting_hpid, const std::set<std::string>& supporting_sv_ids) {
+        register_oar_support(sample_info, bp_n, read_name_with_suffix(read), supporting_hpid, supporting_sv_ids);
     }
 
     // Remember that an assigned-away read supports this variant's REF breakpoint. If the assigned
