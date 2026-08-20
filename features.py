@@ -28,6 +28,8 @@ class AltReadMetrics(NamedTuple):
     oar2_vids: Tuple[str, ...]
     xaas_xars_diff_to_len: float
     has_extension_evidence: bool
+    aas_ars_diff_to_len: float = 0.0
+    has_assembly_evidence: bool = False
 
     def ar(self, bp_idx): return self.ar1 if bp_idx == 0 else self.ar2
     def arc(self, bp_idx): return self.ar1c if bp_idx == 0 else self.ar2c
@@ -74,11 +76,12 @@ class Features:
                             'MAXRRCD', 'MAXRRCED', 'MAXRRED',
                             'OAR1', 'OAR2', 'OAR1ALL', 'OAR2ALL', 'OAR1_ALL_RATIO', 'OAR2_ALL_RATIO',
                             'OTHER_HP_GENOTYPED',
-                            'OTHER1_OVERLAP_MIN_ARCHQ', 'OTHER2_OVERLAP_MIN_ARCHQ',
-                            'OTHER1_OVERLAP_MIN_AR_OVER_NAR', 'OTHER2_OVERLAP_MIN_AR_OVER_NAR',
-                            'OTHER1_OVERLAP_MIN_ARC_OVER_NARC', 'OTHER2_OVERLAP_MIN_ARC_OVER_NARC',
-                            'OTHER1_OVERLAP_MIN_ARE_OVER_NARE', 'OTHER2_OVERLAP_MIN_ARE_OVER_NARE',
-                            'OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN', 'OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN',
+                            'OTHER1_MIN_ARCHQ', 'OTHER2_MIN_ARCHQ',
+                            'OTHER1_MIN_AR_OVER_NAR', 'OTHER2_MIN_AR_OVER_NAR',
+                            'OTHER1_MIN_ARC_OVER_NARC', 'OTHER2_MIN_ARC_OVER_NARC',
+                            'OTHER1_MIN_ARE_OVER_NARE', 'OTHER2_MIN_ARE_OVER_NARE',
+                            'OTHER1_AAS_ARS_DIFF_TO_LEN', 'OTHER2_AAS_ARS_DIFF_TO_LEN',
+                            'OTHER1_XAAS_XARS_DIFF_TO_LEN', 'OTHER2_XAAS_XARS_DIFF_TO_LEN',
                             'OAR1C', 'OAR2C', 'OAR1CHQ', 'OAR2CHQ', 'OAR1C_HQ_RATIO', 'OAR2C_HQ_RATIO', 'OAR1E', 'OAR2E',
                             'NAR1', 'NAR2', 'NAR1C', 'NAR2C', 'NAR1CHQ', 'NAR2CHQ', 'NAR1C_HQ_RATIO', 'NAR2C_HQ_RATIO',
                             'NAR1CE', 'NAR2CE', 'NAR1E', 'NAR2E',
@@ -100,12 +103,17 @@ class Features:
                             'AR1_OVER_NAR1', 'AR2_OVER_NAR2', 'AR1C_OVER_NAR1C', 'AR2C_OVER_NAR2C',
                             'AR1CE_OVER_NAR1CE', 'AR2CE_OVER_NAR2CE', 'AR1E_OVER_NAR1E', 'AR2E_OVER_NAR2E']
 
-    fmt_features_names = [  'AXR1', 'AXR2', 'AXR1HQ', 'AXR2HQ',
-                            'EXSS1_1', 'EXSS1_2', 'EXSS2_1', 'EXSS2_2',
-                            'EXSS1_RATIO1', 'EXSS1_RATIO2', 'EXSS2_RATIO1', 'EXSS2_RATIO2',
-                            'EXAS_EXRS_DIFF_TO_LEN',
-                            'EXSSC1_IA_RATIO', 'EXSSC2_IA_RATIO', 'EXSSC1_IA_DIFF', 'EXSSC2_IA_DIFF',
-                            'MEXL', 'mEXL', 'EXL',
+    fmt_features_names = [  'ASS1_1', 'ASS1_2', 'ASS2_1', 'ASS2_2',
+                            'ASS1_RATIO1', 'ASS1_RATIO2', 'ASS2_RATIO1', 'ASS2_RATIO2',
+                            'AAS_ARS_DIFF_TO_LEN',
+                            'ASSC1_IA_RATIO', 'ASSC2_IA_RATIO', 'ASSC1_IA_DIFF', 'ASSC2_IA_DIFF',
+                            'MAL', 'mAL', 'AL',
+                            'AXR1', 'AXR2', 'AXR1HQ', 'AXR2HQ',
+                            'XASS1_1', 'XASS1_2', 'XASS2_1', 'XASS2_2',
+                            'XASS1_RATIO1', 'XASS1_RATIO2', 'XASS2_RATIO1', 'XASS2_RATIO2',
+                            'XAAS_XARS_DIFF_TO_LEN',
+                            'XASSC1_IA_RATIO', 'XASSC2_IA_RATIO', 'XASSC1_IA_DIFF', 'XASSC2_IA_DIFF',
+                            'MXAL', 'mXAL', 'XAL',
                             'MDLF', 'MDSP', 'MDSF', 'MDRF', 'MDSP_OVER_MDLF', 'MDSF_OVER_MDRF',
                             'MDLFHQ', 'MDSPHQ', 'MDSFHQ', 'MDRFHQ', 'MDSP_OVER_MDLF_HQ', 'MDSF_OVER_MDRF_HQ',
                             'MDLC', 'MDRC', 'MDLCHQ', 'MDRCHQ',
@@ -208,9 +216,9 @@ class Features:
                     vids.append(Features.normalize_sv_id(vid))
         return tuple(vids)
 
-    def select_alt_read_metrics_for_oar_vids(record, sample, key, bp_idx, alt_reads_by_vid):
+    def select_alt_read_metrics_for_oar_vids(sample, key, bp_idx, alt_reads_by_vid):
         if alt_reads_by_vid is None:
-            return 0, 0, 0, 0, 0, 0, 0, 0, 0, Features.NAN
+            return 0, 0, 0, 0, 0, 0, 0, 0, 0, Features.NAN, Features.NAN
 
         candidates = []
         for vid in Features.get_oar_vids(sample, key):
@@ -218,7 +226,7 @@ class Features:
                 candidates.append((values, vid))
 
         if not candidates:
-            return 0, 0, 0, 0, 0, 0, 0, 0, 0, Features.NAN
+            return 0, 0, 0, 0, 0, 0, 0, 0, 0, Features.NAN, Features.NAN
 
         # Select one source variant by AR, then ARC, then ARE. ARCHQ is carried from that variant but does not affect selection.
         selected, _ = min(candidates, key=lambda x: (-x[0].ar(bp_idx), -x[0].arc(bp_idx), -x[0].are(bp_idx), x[1]))
@@ -231,23 +239,73 @@ class Features:
         min_ar_over_nar = min(selected.ar1/max(1, selected.ar1 + (oar1.ar1 if oar1 else 0) + selected.rr1), selected.ar2/max(1, selected.ar2 + (oar2.ar2 if oar2 else 0) + selected.rr2))
         min_arc_over_narc = min(selected.ar1c/max(1, selected.ar1c + (oar1.ar1c if oar1 else 0) + selected.rr1c), selected.ar2c/max(1, selected.ar2c + (oar2.ar2c if oar2 else 0) + selected.rr2c))
         min_are_over_nare = min(selected.ar1e/max(1, selected.ar1e + (oar1.ar1e if oar1 else 0) + selected.rr1e), selected.ar2e/max(1, selected.ar2e + (oar2.ar2e if oar2 else 0) + selected.rr2e))
-        overlaps = record.chrom == selected.chrom and record.start < selected.stop and selected.start < record.stop
-        overlap_xaas_xars_diff_to_len = selected.xaas_xars_diff_to_len if overlaps and selected.has_extension_evidence else Features.NAN
-        return selected.ar(bp_idx), selected.arc(bp_idx), selected.archq(bp_idx), selected.are(bp_idx), int(selected.hp_genotyped), min(selected.ar1chq, selected.ar2chq) if overlaps else 0, min_ar_over_nar if overlaps else 0, min_arc_over_narc if overlaps else 0, min_are_over_nare if overlaps else 0, overlap_xaas_xars_diff_to_len
+        xaas_xars_diff_to_len = selected.xaas_xars_diff_to_len if selected.has_extension_evidence else Features.NAN
+        aas_ars_diff_to_len = selected.aas_ars_diff_to_len if selected.has_assembly_evidence else Features.NAN
+        return selected.ar(bp_idx), selected.arc(bp_idx), selected.archq(bp_idx), selected.are(bp_idx), int(selected.hp_genotyped), min(selected.ar1chq, selected.ar2chq), min_ar_over_nar, min_arc_over_narc, min_are_over_nare, xaas_xars_diff_to_len, aas_ars_diff_to_len
 
-    def xaas_xars_diff_to_len(record):
+    def consensus_alt_ref_score_diff_to_len(record, prefix):
         sample = record.samples[0]
-        xaas1 = Features.get_number_value(sample, 'XAAS', 0)
-        xaas2 = Features.get_number_value(sample, 'XAAS2', 0)
-        xars1 = Features.get_number_value(sample, 'XARS', 0)
-        xars2 = Features.get_number_value(sample, 'XARS2', 0)
+        aas1 = Features.get_number_value(sample, prefix+'AAS', 0)
+        aas2 = Features.get_number_value(sample, prefix+'AAS2', 0)
+        ars1 = Features.get_number_value(sample, prefix+'ARS', 0)
+        ars2 = Features.get_number_value(sample, prefix+'ARS2', 0)
         svinslen = len(Features.get_svinsseq(record))
         edit_distance = Features.get_edit_distance(record, svinslen)
-        return (xaas1-xars1+xaas2-xars2)/max(1, edit_distance)
+        return (aas1-ars1+aas2-ars2)/max(1, edit_distance)
+
+    def aas_ars_diff_to_len(record):
+        return Features.consensus_alt_ref_score_diff_to_len(record, '')
+
+    def xaas_xars_diff_to_len(record):
+        return Features.consensus_alt_ref_score_diff_to_len(record, 'X')
+
+    def has_assembly_evidence(record):
+        sample = record.samples[0]
+        return 'AL' in sample or 'AL2' in sample
 
     def has_extension_evidence(record):
         sample = record.samples[0]
         return 'XAL' in sample or 'XAL2' in sample
+
+    def add_consensus_alignment_features(features, sample, prefix, max_is, read_len, edit_distance):
+        al1 = Features.get_number_value(sample, prefix+'AL', Features.NAN)
+        al2 = Features.get_number_value(sample, prefix+'AL2', Features.NAN)
+        normalised_als = [al/(max_is+read_len) for al in (al1, al2) if math.isfinite(al)]
+        if normalised_als:
+            features['M'+prefix+'AL'] = max(normalised_als)
+            features['m'+prefix+'AL'] = min(normalised_als) if len(normalised_als) == 2 else Features.NAN
+            features[prefix+'AL'] = sum(normalised_als)
+        else:
+            features['M'+prefix+'AL'] = Features.NAN
+            features['m'+prefix+'AL'] = Features.NAN
+            features[prefix+'AL'] = Features.NAN
+
+        aas1 = Features.get_number_value(sample, prefix+'AAS', 0)
+        aas2 = Features.get_number_value(sample, prefix+'AAS2', 0)
+        ars1 = Features.get_number_value(sample, prefix+'ARS', 0)
+        ars2 = Features.get_number_value(sample, prefix+'ARS2', 0)
+        features[prefix+'AAS_'+prefix+'ARS_DIFF_TO_LEN'] = (aas1-ars1+aas2-ars2)/max(1, edit_distance)
+
+        ass1_1, ass1_2 = Features.get_number_value(sample, prefix+'ASS', [Features.NAN, Features.NAN])
+        features[prefix+'ASS1_1'] = ass1_1/(max_is+read_len)
+        features[prefix+'ASS1_2'] = ass1_2/(max_is+read_len)
+        features[prefix+'ASS1_RATIO1'] = ass1_1/max(1, al1)
+        features[prefix+'ASS1_RATIO2'] = ass1_2/max(1, al1)
+
+        ass2_1, ass2_2 = Features.get_number_value(sample, prefix+'ASS2', [Features.NAN, Features.NAN])
+        features[prefix+'ASS2_1'] = ass2_1/(max_is+read_len)
+        features[prefix+'ASS2_2'] = ass2_2/(max_is+read_len)
+        features[prefix+'ASS2_RATIO1'] = ass2_1/max(1, al2)
+        features[prefix+'ASS2_RATIO2'] = ass2_2/max(1, al2)
+
+        assc1_1, assc1_2 = Features.get_number_value(sample, prefix+'ASSC', [Features.NAN, Features.NAN])
+        assc2_1, assc2_2 = Features.get_number_value(sample, prefix+'ASSC2', [Features.NAN, Features.NAN])
+        asscia1_1, asscia1_2 = Features.get_number_value(sample, prefix+'ASSCIA', [Features.NAN, Features.NAN])
+        asscia2_1, asscia2_2 = Features.get_number_value(sample, prefix+'ASSC2IA', [Features.NAN, Features.NAN])
+        features[prefix+'ASSC1_IA_RATIO'] = (assc1_1+assc1_2)/max(1, asscia1_1+asscia1_2)
+        features[prefix+'ASSC2_IA_RATIO'] = (assc2_1+assc2_2)/max(1, asscia2_1+asscia2_2)
+        features[prefix+'ASSC1_IA_DIFF'] = (asscia1_1+asscia1_2-assc1_1-assc1_2)/max(1, ass1_1+ass1_2)
+        features[prefix+'ASSC2_IA_DIFF'] = (asscia2_1+asscia2_2-assc2_1-assc2_2)/max(1, ass2_1+ass2_2)
 
     def generate_id(record):
         svinsseq = Features.get_svinsseq(record)
@@ -593,9 +651,9 @@ class Features:
         features['ARER'] = ar1_exact_rev + ar2_exact_rev
         features['MAXARED'] = max(features['AREF'], features['ARER'])
 
-        oar1, oar1c, oar1chq, oar1e, oar1_hp_genotyped, other1_overlap_min_archq, other1_overlap_min_ar_over_nar, other1_overlap_min_arc_over_narc, other1_overlap_min_are_over_nare, other1_overlap_xaas_xars_diff_to_len = Features.select_alt_read_metrics_for_oar_vids(record, sample, 'OAR1VID', 0, alt_reads_by_vid)
+        oar1, oar1c, oar1chq, oar1e, oar1_hp_genotyped, other1_min_archq, other1_min_ar_over_nar, other1_min_arc_over_narc, other1_min_are_over_nare, other1_xaas_xars_diff_to_len, other1_aas_ars_diff_to_len = Features.select_alt_read_metrics_for_oar_vids(sample, 'OAR1VID', 0, alt_reads_by_vid)
         oar1all = Features.get_number_value(sample, 'OAR1ALL', 0)
-        oar2, oar2c, oar2chq, oar2e, oar2_hp_genotyped, other2_overlap_min_archq, other2_overlap_min_ar_over_nar, other2_overlap_min_arc_over_narc, other2_overlap_min_are_over_nare, other2_overlap_xaas_xars_diff_to_len = Features.select_alt_read_metrics_for_oar_vids(record, sample, 'OAR2VID', 1, alt_reads_by_vid)
+        oar2, oar2c, oar2chq, oar2e, oar2_hp_genotyped, other2_min_archq, other2_min_ar_over_nar, other2_min_arc_over_narc, other2_min_are_over_nare, other2_xaas_xars_diff_to_len, other2_aas_ars_diff_to_len = Features.select_alt_read_metrics_for_oar_vids(sample, 'OAR2VID', 1, alt_reads_by_vid)
         oar2all = Features.get_number_value(sample, 'OAR2ALL', 0)
         if not has_ar2:
             oar2 = oar1
@@ -604,21 +662,23 @@ class Features:
             oar2chq = oar1chq
             oar2e = oar1e
             oar2_hp_genotyped = oar1_hp_genotyped
-            other2_overlap_min_archq = other1_overlap_min_archq
-            other2_overlap_min_ar_over_nar = other1_overlap_min_ar_over_nar
-            other2_overlap_min_arc_over_narc = other1_overlap_min_arc_over_narc
-            other2_overlap_min_are_over_nare = other1_overlap_min_are_over_nare
-            other2_overlap_xaas_xars_diff_to_len = other1_overlap_xaas_xars_diff_to_len
+            other2_min_archq = other1_min_archq
+            other2_min_ar_over_nar = other1_min_ar_over_nar
+            other2_min_arc_over_narc = other1_min_arc_over_narc
+            other2_min_are_over_nare = other1_min_are_over_nare
+            other2_xaas_xars_diff_to_len = other1_xaas_xars_diff_to_len
+            other2_aas_ars_diff_to_len = other1_aas_ars_diff_to_len
 
         features['OAR1'] = Features.piecewise_normalise(oar1, min_depth, max_depth)
         features['OAR1ALL'] = Features.piecewise_normalise(oar1all, min_depth, max_depth)
         features['OAR1_ALL_RATIO'] = oar1/max(1, oar1all)
         features['OTHER_HP_GENOTYPED'] = max(oar1_hp_genotyped, oar2_hp_genotyped)
-        features['OTHER1_OVERLAP_MIN_ARC_OVER_NARC'] = other1_overlap_min_arc_over_narc
-        features['OTHER1_OVERLAP_MIN_ARCHQ'] = Features.piecewise_normalise(other1_overlap_min_archq, min_depth, max_depth)
-        features['OTHER1_OVERLAP_MIN_AR_OVER_NAR'] = other1_overlap_min_ar_over_nar
-        features['OTHER1_OVERLAP_MIN_ARE_OVER_NARE'] = other1_overlap_min_are_over_nare
-        features['OTHER1_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = other1_overlap_xaas_xars_diff_to_len
+        features['OTHER1_MIN_ARC_OVER_NARC'] = other1_min_arc_over_narc
+        features['OTHER1_MIN_ARCHQ'] = Features.piecewise_normalise(other1_min_archq, min_depth, max_depth)
+        features['OTHER1_MIN_AR_OVER_NAR'] = other1_min_ar_over_nar
+        features['OTHER1_MIN_ARE_OVER_NARE'] = other1_min_are_over_nare
+        features['OTHER1_AAS_ARS_DIFF_TO_LEN'] = other1_aas_ars_diff_to_len
+        features['OTHER1_XAAS_XARS_DIFF_TO_LEN'] = other1_xaas_xars_diff_to_len
         features['OAR1C'] = Features.piecewise_normalise(oar1c, min_depth, max_depth)
         features['OAR1CHQ'] = Features.piecewise_normalise(oar1chq, min_depth, max_depth)
         features['OAR1C_HQ_RATIO'] = oar1chq/max(1, oar1c)
@@ -626,11 +686,12 @@ class Features:
         features['OAR2'] = Features.piecewise_normalise(oar2, min_depth, max_depth)
         features['OAR2ALL'] = Features.piecewise_normalise(oar2all, min_depth, max_depth)
         features['OAR2_ALL_RATIO'] = oar2/max(1, oar2all)
-        features['OTHER2_OVERLAP_MIN_ARC_OVER_NARC'] = other2_overlap_min_arc_over_narc
-        features['OTHER2_OVERLAP_MIN_ARCHQ'] = Features.piecewise_normalise(other2_overlap_min_archq, min_depth, max_depth)
-        features['OTHER2_OVERLAP_MIN_AR_OVER_NAR'] = other2_overlap_min_ar_over_nar
-        features['OTHER2_OVERLAP_MIN_ARE_OVER_NARE'] = other2_overlap_min_are_over_nare
-        features['OTHER2_OVERLAP_EXAS_EXRS_DIFF_TO_LEN'] = other2_overlap_xaas_xars_diff_to_len
+        features['OTHER2_MIN_ARC_OVER_NARC'] = other2_min_arc_over_narc
+        features['OTHER2_MIN_ARCHQ'] = Features.piecewise_normalise(other2_min_archq, min_depth, max_depth)
+        features['OTHER2_MIN_AR_OVER_NAR'] = other2_min_ar_over_nar
+        features['OTHER2_MIN_ARE_OVER_NARE'] = other2_min_are_over_nare
+        features['OTHER2_AAS_ARS_DIFF_TO_LEN'] = other2_aas_ars_diff_to_len
+        features['OTHER2_XAAS_XARS_DIFF_TO_LEN'] = other2_xaas_xars_diff_to_len
         features['OAR2C'] = Features.piecewise_normalise(oar2c, min_depth, max_depth)
         features['OAR2CHQ'] = Features.piecewise_normalise(oar2chq, min_depth, max_depth)
         features['OAR2C_HQ_RATIO'] = oar2chq/max(1, oar2c)
@@ -1045,46 +1106,8 @@ class Features:
         features['AXR1'], features['AXR2'] = axr1, axr2
         features['AXR1HQ'], features['AXR2HQ'] = axr1hq, axr2hq
 
-        xal1 = Features.get_number_value(sample, 'XAL', Features.NAN)
-        xal2 = Features.get_number_value(sample, 'XAL2', Features.NAN)
-        xal_norm_factor = max_is + read_len
-        normalised_xals = [xal / xal_norm_factor for xal in (xal1, xal2) if np.isfinite(xal)]
-        if normalised_xals:
-            features['MEXL'] = max(normalised_xals)
-            features['mEXL'] = min(normalised_xals) if len(normalised_xals) == 2 else Features.NAN
-            features['EXL'] = sum(normalised_xals)
-        else:
-            features['MEXL'] = Features.NAN
-            features['mEXL'] = Features.NAN
-            features['EXL'] = Features.NAN
-
-        xaas1 = Features.get_number_value(sample, 'XAAS', 0)
-        xaas2 = Features.get_number_value(sample, 'XAAS2', 0)
-        xars1 = Features.get_number_value(sample, 'XARS', 0)
-        xars2 = Features.get_number_value(sample, 'XARS2', 0)
-
-        features['EXAS_EXRS_DIFF_TO_LEN'] = (xaas1-xars1+xaas2-xars2)/max(1, edit_distance)
-
-        xass1_1, xass1_2 = Features.get_number_value(sample, 'XASS', [Features.NAN, Features.NAN])
-        features['EXSS1_1'] = xass1_1/(max_is+read_len)
-        features['EXSS1_2'] = xass1_2/(max_is+read_len)
-        features['EXSS1_RATIO1'] = xass1_1/max(1, xal1)
-        features['EXSS1_RATIO2'] = xass1_2/max(1, xal1)
-
-        xass2_1, xass2_2 = Features.get_number_value(sample, 'XASS2', [Features.NAN, Features.NAN])
-        features['EXSS2_1'] = xass2_1/(max_is+read_len)
-        features['EXSS2_2'] = xass2_2/(max_is+read_len)
-        features['EXSS2_RATIO1'] = xass2_1/max(1, xal2)
-        features['EXSS2_RATIO2'] = xass2_2/max(1, xal2)
-
-        xassc1_1, xassc1_2 = Features.get_number_value(sample, 'XASSC', [Features.NAN, Features.NAN])
-        xassc2_1, xassc2_2 = Features.get_number_value(sample, 'XASSC2', [Features.NAN, Features.NAN])
-        xasscia1_1, xasscia1_2 = Features.get_number_value(sample, 'XASSCIA', [Features.NAN, Features.NAN])
-        xasscia2_1, xasscia2_2 = Features.get_number_value(sample, 'XASSC2IA', [Features.NAN, Features.NAN])
-        features['EXSSC1_IA_RATIO'] = (xassc1_1+xassc1_2)/max(1, xasscia1_1+xasscia1_2)
-        features['EXSSC2_IA_RATIO'] = (xassc2_1+xassc2_2)/max(1, xasscia2_1+xasscia2_2)
-        features['EXSSC1_IA_DIFF'] = (xasscia1_1+xasscia1_2-xassc1_1-xassc1_2)/max(1, xass1_1+xass1_2)
-        features['EXSSC2_IA_DIFF'] = (xasscia2_1+xasscia2_2-xassc2_1-xassc2_2)/max(1, xass2_1+xass2_2)
+        Features.add_consensus_alignment_features(features, sample, '', max_is, read_len, edit_distance)
+        Features.add_consensus_alignment_features(features, sample, 'X', max_is, read_len, edit_distance)
 
         feature_values = []
         for feature_name in feature_names:
@@ -1212,12 +1235,15 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, ignore_gts = False, feature_name
         ar2e = Features.get_number_value(candidate_sample, 'AR2E', ar1e)
         candidate_xaas_xars_diff_to_len = Features.xaas_xars_diff_to_len(candidate)
         candidate_has_extension_evidence = Features.has_extension_evidence(candidate)
+        candidate_aas_ars_diff_to_len = Features.aas_ars_diff_to_len(candidate)
+        candidate_has_assembly_evidence = Features.has_assembly_evidence(candidate)
         candidate_id = Features.normalize_sv_id(candidate.id)
         alt_reads_by_vid[candidate_id].append(AltReadMetrics(
             ar1=ar1, ar2=ar2, ar1c=ar1c, ar2c=ar2c, ar1chq=ar1chq, ar2chq=ar2chq, ar1e=ar1e, ar2e=ar2e,
             hp_genotyped=Features.gt_as_homopolymer(candidate), chrom=candidate.chrom, start=candidate.start, stop=candidate.stop,
             rr1=rr1, rr2=rr2, rr1c=rr1c, rr2c=rr2c, rr1e=rr1e, rr2e=rr2e, oar1_vids=oar1_vids, oar2_vids=oar2_vids,
-            xaas_xars_diff_to_len=candidate_xaas_xars_diff_to_len, has_extension_evidence=candidate_has_extension_evidence))
+            xaas_xars_diff_to_len=candidate_xaas_xars_diff_to_len, has_extension_evidence=candidate_has_extension_evidence,
+            aas_ars_diff_to_len=candidate_aas_ars_diff_to_len, has_assembly_evidence=candidate_has_assembly_evidence))
     vcf_reader.close()
     vcf_reader = pysam.VariantFile(vcf_fname)
 
