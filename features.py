@@ -270,7 +270,8 @@ class Features:
     def add_consensus_alignment_features(features, sample, prefix, max_is, read_len, edit_distance):
         al1 = Features.get_number_value(sample, prefix+'AL', Features.NAN)
         al2 = Features.get_number_value(sample, prefix+'AL2', Features.NAN)
-        normalised_als = [al/(max_is+read_len) for al in (al1, al2) if math.isfinite(al)]
+        length_normalisation_factor = max_is+read_len if prefix == 'X' else read_len
+        normalised_als = [al/length_normalisation_factor for al in (al1, al2) if math.isfinite(al)]
         if normalised_als:
             features['M'+prefix+'AL'] = max(normalised_als)
             features['m'+prefix+'AL'] = min(normalised_als) if len(normalised_als) == 2 else Features.NAN
@@ -287,14 +288,14 @@ class Features:
         features[prefix+'AAS_'+prefix+'ARS_DIFF_TO_LEN'] = (aas1-ars1+aas2-ars2)/max(1, edit_distance)
 
         ass1_1, ass1_2 = Features.get_number_value(sample, prefix+'ASS', [Features.NAN, Features.NAN])
-        features[prefix+'ASS1_1'] = ass1_1/(max_is+read_len)
-        features[prefix+'ASS1_2'] = ass1_2/(max_is+read_len)
+        features[prefix+'ASS1_1'] = ass1_1/length_normalisation_factor
+        features[prefix+'ASS1_2'] = ass1_2/length_normalisation_factor
         features[prefix+'ASS1_RATIO1'] = ass1_1/max(1, al1)
         features[prefix+'ASS1_RATIO2'] = ass1_2/max(1, al1)
 
         ass2_1, ass2_2 = Features.get_number_value(sample, prefix+'ASS2', [Features.NAN, Features.NAN])
-        features[prefix+'ASS2_1'] = ass2_1/(max_is+read_len)
-        features[prefix+'ASS2_2'] = ass2_2/(max_is+read_len)
+        features[prefix+'ASS2_1'] = ass2_1/length_normalisation_factor
+        features[prefix+'ASS2_2'] = ass2_2/length_normalisation_factor
         features[prefix+'ASS2_RATIO1'] = ass2_1/max(1, al2)
         features[prefix+'ASS2_RATIO2'] = ass2_2/max(1, al2)
 
