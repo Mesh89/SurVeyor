@@ -514,6 +514,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* al_tag = "##FORMAT=<ID=AL,Number=1,Type=Integer,Description=\"Length of the alternative allele consensus.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, al_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "MFAL");
+	const char* mfal_tag = "##FORMAT=<ID=MFAL,Number=2,Type=Integer,Description=\"Maximum feasible lengths of the alternative allele consensuses for breakpoints 1 and 2, based on the spans of distinguishable ALT-read start positions.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, mfal_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "AL2");
 	const char* al2_tag = "##FORMAT=<ID=AL2,Number=1,Type=Integer,Description=\"Length of the alternative allele consensus for the second breakpoint (only for insertions).\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, al2_tag, &len));

@@ -789,6 +789,16 @@ std::vector<hts_pos_t> get_diff_reads_expected_positions(std::vector<char*>& ref
     return positions;
 }
 
+// Return the span covered by all distinguishable reads on the ALT allele.
+// Positions are read starts, so the rightmost read contributes read_len bases.
+int get_max_feasible_alt_len(const std::vector<hts_pos_t>& distinguishable_positions, int read_len) {
+    if (distinguishable_positions.empty() || read_len <= 0) {
+        return sv_t::sample_info_t::NOT_COMPUTED;
+    }
+    auto bounds = std::minmax_element(distinguishable_positions.begin(), distinguishable_positions.end());
+    return *bounds.second - *bounds.first + read_len;
+}
+
 std::vector<int> get_consistent_reads_start_positions(const std::vector<bool>& is_consistent_read,
     std::vector<int>& start_positions) {
     std::vector<int> consistent_positions;

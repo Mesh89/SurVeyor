@@ -263,6 +263,8 @@ struct sv_t {
         std::vector<int> gt;
         double expected_alt1_reads_frac = EXPECTED_ALT_READS_FREQ_NOT_COMPUTED;
         double expected_alt2_reads_frac = EXPECTED_ALT_READS_FREQ_NOT_COMPUTED;
+        int max_feasible_alt1_len = NOT_COMPUTED;
+        int max_feasible_alt2_len = NOT_COMPUTED;
 
         bp_consensus_info_t alt_bp1, alt_bp2;
         bp_consensus_info_t ref_bp1, ref_bp2;
