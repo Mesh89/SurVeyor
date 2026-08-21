@@ -188,9 +188,6 @@ struct sv_t {
     hts_pos_t start, end;
     std::string ins_seq, inferred_ins_seq;
     int mh_len = 0;
-    double expected_alt1_reads_frac = EXPECTED_ALT_READS_FREQ_NOT_COMPUTED;
-    double expected_alt2_reads_frac = EXPECTED_ALT_READS_FREQ_NOT_COMPUTED;
-
     std::shared_ptr<anchor_aln_t> left_anchor_aln, right_anchor_aln;
     std::shared_ptr<consensus_t> rc_consensus, lc_consensus;
     std::vector<std::shared_ptr<sv_t>> aux_indels;
@@ -264,6 +261,8 @@ struct sv_t {
         static const int NOT_COMPUTED = -1;
 
         std::vector<int> gt;
+        double expected_alt1_reads_frac = EXPECTED_ALT_READS_FREQ_NOT_COMPUTED;
+        double expected_alt2_reads_frac = EXPECTED_ALT_READS_FREQ_NOT_COMPUTED;
 
         bp_consensus_info_t alt_bp1, alt_bp2;
         bp_consensus_info_t ref_bp1, ref_bp2;

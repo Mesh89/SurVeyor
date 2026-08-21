@@ -438,7 +438,12 @@ class Features:
             features['INS_SEQ_COV_PREFIX_LEN'] = i/len(svinsseq)
             features['INS_SEQ_COV_SUFFIX_LEN'] = (len(svinsseq)-i-1)/len(svinsseq)
 
-        exp_alt_reads_freq1, exp_alt_reads_freq2 = info['EXP_ALT_READS_FREQ']
+        if 'EARF' in sample:
+            exp_alt_reads_freq1, exp_alt_reads_freq2 = sample['EARF']
+        if exp_alt_reads_freq1 is None:
+            exp_alt_reads_freq1 = Features.NAN
+        if exp_alt_reads_freq2 is None:
+            exp_alt_reads_freq2 = Features.NAN
         features['EXP_ALT_READS_FREQ1'], features['EXP_ALT_READS_FREQ2'] = exp_alt_reads_freq1, exp_alt_reads_freq2
 
         if model_name == "HP":

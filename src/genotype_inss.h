@@ -109,8 +109,8 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     std::vector<hts_pos_t> ref_lens = {ref_bp1_w_aux_len, ref_bp2_w_aux_len};
     std::vector<hts_pos_t> alt1_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_bp1_seq, alt_bp1_len, stats.read_len);
     std::vector<hts_pos_t> alt2_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_bp2_seq, alt_bp2_len, stats.read_len);
-    ins->expected_alt1_reads_frac = (double) alt1_ref_diff_reads_expected_positions.size() / std::max(1, alt_bp1_len - stats.read_len + 1);
-    ins->expected_alt2_reads_frac = (double) alt2_ref_diff_reads_expected_positions.size() / std::max(1, alt_bp2_len - stats.read_len + 1);
+    ins->sample_info.expected_alt1_reads_frac = (double) alt1_ref_diff_reads_expected_positions.size() / std::max(1, alt_bp1_len - stats.read_len + 1);
+    ins->sample_info.expected_alt2_reads_frac = (double) alt2_ref_diff_reads_expected_positions.size() / std::max(1, alt_bp2_len - stats.read_len + 1);
 
     std::stringstream l_region, r_region;
     l_region << ins->chr << ":" << ref_bp1_start << "-" << ref_bp1_end;

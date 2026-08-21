@@ -150,7 +150,7 @@ void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     std::vector<hts_pos_t> ref_lens = {ref_len};
     int alt_len = strlen(alt_seqs[alt_with_most_reads]);
     std::vector<hts_pos_t> alt_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_seqs[alt_with_most_reads], alt_len, stats.read_len);
-    dup->expected_alt1_reads_frac = (double) alt_ref_diff_reads_expected_positions.size() / std::max(1, alt_len - stats.read_len + 1);
+    dup->sample_info.expected_alt1_reads_frac = (double) alt_ref_diff_reads_expected_positions.size() / std::max(1, alt_len - stats.read_len + 1);
 
     std::string alt_consensus_seq, ref_consensus_seq;
     double alt_avg_score, ref_avg_score;
@@ -280,7 +280,7 @@ void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTr
     std::vector<char*> ref_seqs = {contig_seq+ref_bp1_start, contig_seq+ref_bp2_start};
     std::vector<hts_pos_t> ref_lens = {ref_bp1_len, ref_bp2_len};
     std::vector<hts_pos_t> alt_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_seq, alt_len, stats.read_len);
-    dup->expected_alt1_reads_frac = (double) alt_ref_diff_reads_expected_positions.size() / std::max(hts_pos_t(1), alt_len - stats.read_len + 1);
+    dup->sample_info.expected_alt1_reads_frac = (double) alt_ref_diff_reads_expected_positions.size() / std::max(hts_pos_t(1), alt_len - stats.read_len + 1);
 
     std::stringstream l_region, r_region;
     l_region << dup->chr << ":" << ref_bp1_start << "-" << ref_bp1_end;

@@ -415,13 +415,18 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     } else {
         bcf_update_info_int32(out_hdr, sv->vcf_entry, "HP_REF_RANGE", NULL, 0);
     }
-    if (sv->expected_alt1_reads_frac != sv_t::EXPECTED_ALT_READS_FREQ_NOT_COMPUTED) {
-        float exp_alt_reads_freq[] = {(float) sv->expected_alt1_reads_frac, (float) sv->expected_alt2_reads_frac};
-        bcf_update_info_float(out_hdr, sv->vcf_entry, "EXP_ALT_READS_FREQ", exp_alt_reads_freq, 2);
-    }
-
     // update FORMAT fields
     bcf_update_genotypes(out_hdr, sv->vcf_entry, sv->sample_info.gt.data(), sv->sample_info.gt.size());
+
+    if (sv->sample_info.expected_alt1_reads_frac != sv_t::EXPECTED_ALT_READS_FREQ_NOT_COMPUTED) {
+        float earf[] = {(float) sv->sample_info.expected_alt1_reads_frac, 0.0f};
+        if (sv->sample_info.expected_alt2_reads_frac == sv_t::EXPECTED_ALT_READS_FREQ_NOT_COMPUTED) {
+            bcf_float_set_missing(earf[1]);
+        } else {
+            earf[1] = (float) sv->sample_info.expected_alt2_reads_frac;
+        }
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "EARF", earf, 2);
+    }
 
     reset_record_bp_consensus_info(out_hdr, sv->vcf_entry, "A", 1);
     reset_record_bp_consensus_info(out_hdr, sv->vcf_entry, "A", 2);

@@ -335,6 +335,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* gt_tag = "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, gt_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "EARF");
+	const char* earf_tag = "##FORMAT=<ID=EARF,Number=2,Type=Float,Description=\"Expected frequencies of reads supporting ALT breakpoints 1 and 2.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, earf_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "FT");
 	const char* ft_tag = "##FORMAT=<ID=FT,Number=1,Type=String,Description=\"Filter. PASS indicates a reliable call. Any other value means the call is not reliable.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ft_tag, &len));
@@ -802,9 +806,6 @@ bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name,
 
 	const char* aux_snps_tag = "##INFO=<ID=AUX_SNPS,Number=1,Type=String,Description=\"Auxiliary SNPs supporting the variant.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, aux_snps_tag, &len));
-
-	const char* exp_alt_freq_tag = "##INFO=<ID=EXP_ALT_READS_FREQ,Number=2,Type=Float,Description=\"Expected frequency of reads supporting the ALT bp1 and bp2 allele.\">";
-	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, exp_alt_freq_tag, &len));
 
 	// add ALT
 	const char* del_alt_tag = "##ALT=<ID=DEL,Description=\"Deletion\">";

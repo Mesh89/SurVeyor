@@ -555,7 +555,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
     for (int i = 0; i < hp_indels.size(); i++) {
         std::vector<hts_pos_t> alt_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(
             ref_seqs, ref_lens, alt_alleles[i].get(), alt_allele_lens[i], stats.read_len);
-        hp_indels[i]->expected_alt1_reads_frac = (double) alt_ref_diff_reads_expected_positions.size() /
+        hp_indels[i]->sample_info.expected_alt1_reads_frac = (double) alt_ref_diff_reads_expected_positions.size() /
             std::max(hts_pos_t(1), hts_pos_t(alt_allele_lens[i]) - stats.read_len + 1);
     }
 
