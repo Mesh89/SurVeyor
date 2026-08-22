@@ -225,8 +225,8 @@ struct base_score_t {
     base_score_t(char base) : base(base) {}
 };
 bool operator < (const base_score_t& bs1, const base_score_t& bs2) {
-    if (bs1.freq != bs2.freq) return bs1.freq < bs2.freq;
-    return bs1.qual < bs2.qual;
+    if (bs1.qual != bs2.qual) return bs1.qual < bs2.qual;
+    return bs1.freq < bs2.freq;
 }
 
 std::string build_full_consensus_seq(std::vector<std::string>& seqs, std::vector<uint8_t*>& quals, 
