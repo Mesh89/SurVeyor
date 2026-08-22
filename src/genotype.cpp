@@ -427,11 +427,12 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         }
         bcf_update_format_float(out_hdr, sv->vcf_entry, "EARF", earf, 2);
     }
-    if (sv->sample_info.max_feasible_alt1_len != sv_t::sample_info_t::NOT_COMPUTED) {
-        int32_t mfal[] = {sv->sample_info.max_feasible_alt1_len, bcf_int32_missing};
-        if (sv->sample_info.max_feasible_alt2_len != sv_t::sample_info_t::NOT_COMPUTED) {
-            mfal[1] = sv->sample_info.max_feasible_alt2_len;
-        }
+    const bool mfal1_computed = sv->sample_info.max_feasible_alt1_len != sv_t::sample_info_t::NOT_COMPUTED;
+    const bool mfal2_computed = sv->sample_info.max_feasible_alt2_len != sv_t::sample_info_t::NOT_COMPUTED;
+    if (mfal1_computed || mfal2_computed) {
+        int32_t mfal[] = {bcf_int32_missing, bcf_int32_missing};
+        if (mfal1_computed) mfal[0] = sv->sample_info.max_feasible_alt1_len;
+        if (mfal2_computed) mfal[1] = sv->sample_info.max_feasible_alt2_len;
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "MFAL", mfal, 2);
     } else {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "MFAL", NULL, 0);
