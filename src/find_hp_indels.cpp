@@ -2,7 +2,6 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
-#include <functional>
 #include <future>
 #include <iostream>
 #include <map>
@@ -25,19 +24,33 @@
 #include "sam_utils.h"
 #include "hp_read_info.h"
 #include "vcf_utils.h"
+#include "consensus.h"
 
 const int MIN_REF_HP_LEN = 5;
 const int MIN_SUPPORTING_READS = 3;
 const hts_pos_t CHUNK_SIZE = 1000000;
 
-using mate_map_t = std::unordered_map<std::string, std::pair<std::string, int>>;
+struct mate_info_t {
+    std::string seq, qual;
+    int mapq;
+};
+
+using mate_map_t = std::unordered_map<std::string, mate_info_t>;
 using max_3p_error_rates_t = std::map<int, double>;
+
+struct hp_read_observation_t {
+    std::string seq;
+    std::vector<uint8_t> quals;
+    int left_tail_len;
+    bool is_reverse;
+};
 
 struct hp_run_t {
     hts_pos_t beg, end;
     char base;
     int usable_reads = 0;
     std::unordered_map<int, int> hp_len_counts;
+    std::unordered_map<int, std::vector<hp_read_observation_t>> observations_by_hp_len;
     int left_side_5p_reads = 0, right_side_5p_reads = 0;
     int left_side_5p_indel_reads = 0, right_side_5p_indel_reads = 0;
 
@@ -117,7 +130,7 @@ void read_mates(int contig_id) {
         std::string qname, read_seq, qual;
         int mapq;
         while (fin >> qname >> read_seq >> qual >> mapq) {
-            mateseqs_w_mapq[contig_id][qname] = {read_seq, mapq};
+            mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
         }
     }
     active_threads_per_chr[contig_id]++;
@@ -131,8 +144,164 @@ void release_mates(int contig_id) {
     }
 }
 
-void add_rescued_hp_read(hp_run_t& hp_run,
-    const std::pair<std::string, int>& mate,
+struct hp_positional_consensus_t {
+    std::string seq;
+    std::vector<int> coverage;
+    std::vector<int> read_offsets;
+    int trim_beg = 0;
+    int hp_beg = 0, hp_end = 0;
+    int callable_beg = 0, callable_end = 0;
+};
+
+hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_read_observation_t>& observations, int hp_len) {
+
+    hp_positional_consensus_t consensus;
+    if (observations.empty()) return consensus;
+
+    int hp_anchor = 0;
+    for (const auto& observation : observations) {
+        hp_anchor = std::max(hp_anchor, observation.left_tail_len);
+    }
+    consensus.hp_beg = hp_anchor;
+    consensus.hp_end = hp_anchor + hp_len;
+    consensus.callable_beg = consensus.hp_beg;
+    consensus.callable_end = consensus.hp_end;
+
+    int consensus_len = 0;
+    std::vector<std::string> seqs;
+    std::vector<const uint8_t*> quals;
+    std::vector<hts_pos_t> read_offsets;
+    for (const auto& observation : observations) {
+        int offset = hp_anchor - observation.left_tail_len;
+        consensus.read_offsets.push_back(offset);
+        read_offsets.push_back(offset);
+        seqs.push_back(observation.seq);
+        quals.push_back(observation.quals.data());
+        consensus_len = std::max(consensus_len, offset + (int) observation.seq.length());
+        if (observation.is_reverse) {
+            consensus.callable_end = std::max(consensus.callable_end, offset + (int) observation.seq.length());
+        } else {
+            consensus.callable_beg = std::min(consensus.callable_beg, offset);
+        }
+    }
+
+    int left_5p_reads = 0, right_5p_reads = 0;
+    for (const hp_read_observation_t& observation : observations) {
+        if (observation.is_reverse) right_5p_reads++;
+        else left_5p_reads++;
+    }
+    for (int read_idx = 0; read_idx < observations.size(); read_idx++) {
+        int offset = consensus.read_offsets[read_idx];
+        if (left_5p_reads >= MIN_SUPPORTING_READS && observations[read_idx].is_reverse) {
+            int left_flank_end = std::min((int) seqs[read_idx].length(), consensus.hp_beg - offset);
+            std::fill(seqs[read_idx].begin(), seqs[read_idx].begin() + std::max(0, left_flank_end), 'N');
+        }
+        if (right_5p_reads >= MIN_SUPPORTING_READS && !observations[read_idx].is_reverse) {
+            int right_flank_beg = std::max(0, consensus.hp_end - offset);
+            std::fill(seqs[read_idx].begin() + std::min((int) seqs[read_idx].length(), right_flank_beg), seqs[read_idx].end(), 'N');
+        }
+    }
+
+    positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_offsets);
+    consensus.seq = positional_consensus.seq;
+    consensus.coverage = positional_consensus.coverage;
+
+    int trim_end = consensus_len;
+    while (consensus.trim_beg < trim_end && consensus.coverage[consensus.trim_beg] < MIN_SUPPORTING_READS) {
+        consensus.trim_beg++;
+    }
+    while (trim_end > consensus.trim_beg && consensus.coverage[trim_end - 1] < MIN_SUPPORTING_READS) {
+        trim_end--;
+    }
+    consensus.seq = consensus.seq.substr(consensus.trim_beg, trim_end - consensus.trim_beg);
+    consensus.coverage = std::vector<int>(consensus.coverage.begin() + consensus.trim_beg, consensus.coverage.begin() + trim_end);
+    consensus.hp_beg -= consensus.trim_beg;
+    consensus.hp_end -= consensus.trim_beg;
+    consensus.callable_beg = std::max(0, consensus.callable_beg - consensus.trim_beg);
+    consensus.callable_end = std::min((int) consensus.seq.length(), consensus.callable_end - consensus.trim_beg);
+    return consensus;
+}
+
+void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t& hp_run, int alt_hp_len, const std::vector<hp_read_observation_t>& observations,
+    const std::string& contig_name, char* contig_seq, hts_pos_t contig_len, config_t& config, stats_t& stats, StripedSmithWaterman::Aligner& aligner,
+    const StripedSmithWaterman::Filter& filter) {
+
+    hp_positional_consensus_t consensus = build_hp_positional_consensus(observations, alt_hp_len);
+    if (consensus.seq.empty() || consensus.hp_beg < 0 || consensus.hp_end > (int) consensus.seq.size()) return;
+
+    hts_pos_t extend = std::max<hts_pos_t>(stats.read_len, consensus.seq.size());
+    hts_pos_t ref_beg = std::max<hts_pos_t>(0, hp_run.beg - extend);
+    hts_pos_t ref_end = std::min<hts_pos_t>(contig_len, hp_run.end + extend);
+    int left_flank_len = hp_run.beg - ref_beg;
+    int right_flank_len = ref_end - hp_run.end;
+    std::string alt_reference(contig_seq + ref_beg, left_flank_len);
+    alt_reference += std::string(alt_hp_len, hp_run.base);
+    alt_reference.append(contig_seq + hp_run.end, right_flank_len);
+    int alt_hp_beg = left_flank_len;
+    int alt_hp_end = alt_hp_beg + alt_hp_len;
+
+    StripedSmithWaterman::Alignment aln;
+    if (!aligner.Align(consensus.seq.c_str(), alt_reference.c_str(), alt_reference.size(), filter, &aln, 0) ||
+        aln.cigar.empty() || aln.ref_begin < 0) {
+        return;
+    }
+    if (is_clipped(aln, config.min_clip_len)) return;
+    if (aln.ref_begin > alt_hp_beg || aln.ref_end < alt_hp_end - 1) return;
+
+    auto alt_base_to_genomic = [&](int alt_pos) -> hts_pos_t {
+        if (alt_pos < alt_hp_beg) return ref_beg + alt_pos;
+        return hp_run.end + (alt_pos - alt_hp_end);
+    };
+
+    std::shared_ptr<sv_t> alt_hp = std::make_shared<deletion_t>(contig_name, ref_beg + alt_hp_beg - 1, ref_beg + alt_hp_end - 1,
+        "", nullptr, nullptr, nullptr, nullptr);
+    detect_svs_from_aln(aln, contig_name, ref_beg, consensus.seq, alt_hp, 0, 0, stats, config);
+
+    hp_alignment_summary_t aln_summary = summarize_hp_alignment(normalized_cigar(aln), aln.ref_begin, consensus.seq,
+        {alt_hp_beg, alt_hp_end}, hp_run.base);
+    std::pair<hts_pos_t, hts_pos_t> callable_range = get_highq_ref_range(aln.cigar, aln.ref_begin,
+        consensus.seq.length(), consensus.callable_beg, consensus.seq.length() - consensus.callable_end);
+    callable_range.first = std::min<hts_pos_t>(callable_range.first, alt_hp_beg);
+    callable_range.second = std::max<hts_pos_t>(callable_range.second, alt_hp_end);
+    hp_indel->junction_remap_ref_beg = ref_beg + callable_range.first;
+    hp_indel->junction_remap_ref_end = hp_run.end + callable_range.second - alt_hp_end;
+
+    for (snp_t snp : alt_hp->aux_snps) {
+        int alt_pos = snp.pos - ref_beg;
+        if (alt_hp_beg <= alt_pos && alt_pos < alt_hp_end) continue;
+        auto qpos_it = std::find(aln_summary.qpos_to_rpos.begin(), aln_summary.qpos_to_rpos.end(), alt_pos);
+        if (qpos_it == aln_summary.qpos_to_rpos.end()) continue;
+        int qpos = qpos_it - aln_summary.qpos_to_rpos.begin();
+        snp.pos = alt_base_to_genomic(alt_pos);
+        if (consensus.callable_beg <= qpos && qpos < consensus.callable_end) {
+            hp_indel->aux_snps.push_back(snp);
+        }
+    }
+    for (std::shared_ptr<sv_t> aux_indel : alt_hp->aux_indels) {
+        int alt_beg = aux_indel->start + 1 - ref_beg;
+        int alt_end = aux_indel->end + 1 - ref_beg;
+        int qpos = aux_indel->left_anchor_aln->seq_len;
+        if (aux_indel->svtype() == "INS") {
+            if (alt_hp_beg <= alt_beg && alt_beg <= alt_hp_end) continue;
+            hts_pos_t genomic_boundary = alt_base_to_genomic(alt_beg);
+            if (genomic_boundary > 0 && qpos >= consensus.callable_beg && qpos + aux_indel->ins_seq.length() <= consensus.callable_end) {
+                aux_indel->start = aux_indel->end = genomic_boundary - 1;
+                hp_indel->aux_indels.push_back(aux_indel);
+            }
+        } else {
+            if (alt_beg < alt_hp_end && alt_end > alt_hp_beg) continue;
+            hts_pos_t genomic_beg = alt_base_to_genomic(alt_beg);
+            hts_pos_t genomic_end = alt_base_to_genomic(alt_end - 1) + 1;
+            if (genomic_beg > 0 && consensus.callable_beg < qpos && qpos < consensus.callable_end) {
+                aux_indel->start = genomic_beg - 1;
+                aux_indel->end = genomic_end - 1;
+                hp_indel->aux_indels.push_back(aux_indel);
+            }
+        }
+    }
+}
+
+void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
     bool anchor_is_reverse, char* contig_seq, hts_pos_t contig_len,
     int read_len, int min_clip_len, double max_seq_error, StripedSmithWaterman::Aligner& aligner,
     const StripedSmithWaterman::Filter& filter, const max_3p_error_rates_t& max_3p_error_rates) {
@@ -143,8 +312,12 @@ void add_rescued_hp_read(hp_run_t& hp_run,
     std::string ref_allele(contig_seq + allele_beg, allele_end - allele_beg);
     hts_pair_pos_t allele_hp_range = {hp_run.beg - allele_beg, hp_run.end - allele_beg};
 
-    std::string mate_seq = mate.first;
-    if (!anchor_is_reverse) rc(mate_seq);
+    std::string mate_seq = mate.seq;
+    std::vector<uint8_t> mate_quals = decode_qualities(mate.qual);
+    if (!anchor_is_reverse) {
+        rc(mate_seq);
+        std::reverse(mate_quals.begin(), mate_quals.end());
+    }
     StripedSmithWaterman::Alignment aln;
     if (!aligner.Align(mate_seq.c_str(), ref_allele.c_str(), ref_allele.length(), filter, &aln, 0)) {
         return;
@@ -158,18 +331,24 @@ void add_rescued_hp_read(hp_run_t& hp_run,
 
     bool has_no_left_indel = five_p_evidence_permits_iterative_hp_len_estimation(hp_run.left_side_5p_reads, hp_run.left_side_5p_indel_reads);
     bool has_no_right_indel = five_p_evidence_permits_iterative_hp_len_estimation(hp_run.right_side_5p_reads, hp_run.right_side_5p_indel_reads);
+    bp_support_read_t rescued_read;
+    rescued_read.mapq = mate.mapq;
+    rescued_read.seq = mate_seq;
+    rescued_read.mate_is_reverse = anchor_is_reverse;
     hp_read_info_t hp_read_info = calculate_hp_read_info(aln, mate_seq,
-        allele_hp_range, hp_run.base, &ref_allele[0], ref_allele.length(), aln_as_rev, bp_support_read_t(), 0,
+        allele_hp_range, hp_run.base, &ref_allele[0], ref_allele.length(), aln_as_rev, rescued_read, 0,
         has_no_left_indel, has_no_right_indel, max_seq_error);
     if (!is_usable_hp_read(hp_read_info, min_clip_len, max_seq_error, max_3p_error_rates)) return;
     hp_run.usable_reads++;
     hp_run.hp_len_counts[hp_read_info.hp_len]++;
+    bool is_reverse = !hp_read_info.read.mate_is_reverse;
+    int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
+    hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({mate_seq, mate_quals, left_tail_len, is_reverse});
 }
-
 
 std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t contig_id, std::string contig_name,
     char* contig_seq, hts_pos_t contig_len, hts_pos_t chunk_beg, hts_pos_t chunk_end,
-    const config_t* config, const stats_t* stats, bam_pool_t* bam_pool,
+    config_t* config, stats_t* stats, bam_pool_t* bam_pool,
     StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter,
     const max_3p_error_rates_t& max_3p_error_rates) {
 
@@ -250,6 +429,12 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error, max_3p_error_rates)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
+                bool is_reverse = !hp_read_info.read.mate_is_reverse;
+                int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
+                const uint8_t* bam_quals = bam_get_qual(read.get());
+                std::vector<uint8_t> quals(bam_quals, bam_quals + read->core.l_qseq);
+                std::replace(quals.begin(), quals.end(), uint8_t(255), uint8_t(0));
+                hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({hp_read_info.read.seq, quals, left_tail_len, is_reverse});
             }
 
             if (read->core.qual < min_anchor_mapq || !is_dc_pair(read.get()) || mateseqs_w_mapq_chr.empty()) continue;
@@ -302,6 +487,11 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 hp_indel->junction_remap_ref_end = hp_indel->end + 1;
                 hp_indel->hp_ref_beg = hp_run.beg;
                 hp_indel->hp_ref_end = hp_run.end;
+                auto observations_it = hp_run.observations_by_hp_len.find(alt_hp_len);
+                if (observations_it != hp_run.observations_by_hp_len.end()) {
+                    call_aux_from_hp_consensus(hp_indel, hp_run, alt_hp_len, observations_it->second,
+                        contig_name, contig_seq, contig_len, *config, *stats, aligner, filter);
+                }
                 hp_indels.push_back(hp_indel);
             }
         }

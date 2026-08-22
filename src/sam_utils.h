@@ -309,6 +309,13 @@ std::string get_qual_ascii(bam1_t* r, bool fastq_seq = false) {
 	if (fastq_seq && bam_is_rev(r)) qual_ascii = std::string(qual_ascii.rbegin(), qual_ascii.rend());
 	return qual_ascii;
 }
+std::vector<uint8_t> decode_qualities(const std::string& qual) {
+    std::vector<uint8_t> qualities;
+    qualities.reserve(qual.size());
+    for (char q : qual) qualities.push_back(std::max(0, (int) (uint8_t) q - 33));
+    return qualities;
+}
+
 
 std::string get_cigar_string(bam1_t* r) {
     std::string cigar_str;

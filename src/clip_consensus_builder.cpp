@@ -14,6 +14,7 @@
 #include "vcf_utils.h"
 #include "utils.h"
 #include "assemble.h"
+#include "consensus.h"
 #include "../libs/cptl_stl.h"
 
 std::mutex mtx;
@@ -216,90 +217,6 @@ int compute_read_score(bam1_t* r, int match_score, int mismatch_score, int gap_o
 	int mismatches = x_bases + mismatches_in_m;
 	score += match_score*matches + mismatch_score*mismatches;
 	return score;
-}
-
-struct base_score_t {
-    int freq = 0, qual = 0;
-    char base;
-
-    base_score_t(char base) : base(base) {}
-};
-bool operator < (const base_score_t& bs1, const base_score_t& bs2) {
-    if (bs1.qual != bs2.qual) return bs1.qual < bs2.qual;
-    return bs1.freq < bs2.freq;
-}
-
-std::string build_full_consensus_seq(std::vector<std::string>& seqs, std::vector<uint8_t*>& quals, 
-    std::vector<hts_pos_t> read_start_offsets, int& lowq_prefix, int& lowq_suffix) {
-
-    // if not already sorted, sort by start offset
-    if (!std::is_sorted(read_start_offsets.begin(), read_start_offsets.end())) {
-        std::vector<int> order(seqs.size());
-        for (int i = 0; i < order.size(); i++) order[i] = i;
-        std::sort(order.begin(), order.end(), [&read_start_offsets](int i1, int i2) {
-            return read_start_offsets[i1] < read_start_offsets[i2];
-        });
-        std::vector<std::string> sorted_seqs;
-        std::vector<uint8_t*> sorted_quals;
-        std::vector<hts_pos_t> sorted_read_start_offsets;
-        for (int i : order) {
-            sorted_seqs.push_back(seqs[i]);
-            sorted_quals.push_back(quals[i]);
-            sorted_read_start_offsets.push_back(read_start_offsets[i]);
-        }
-        seqs = sorted_seqs;
-        quals = sorted_quals;
-        read_start_offsets = sorted_read_start_offsets;
-    }
-
-    hts_pos_t consensus_len = 0;
-    for (int i = 0; i < read_start_offsets.size(); i++) {
-        if (consensus_len < read_start_offsets[i] + seqs[i].length()) {
-            consensus_len = read_start_offsets[i] + seqs[i].length();
-        }
-    }
-    std::string consensus(consensus_len, 'N');
-
-    std::vector<hts_pos_t> read_end_offsets;
-    for (int i = 0; i < seqs.size(); i++) {
-        hts_pos_t start_offset = read_start_offsets[i];
-        hts_pos_t end_offset = start_offset + seqs[i].length() - 1;
-        read_end_offsets.push_back(end_offset);
-    }
-
-    int s = 0;
-    lowq_prefix = 0, lowq_suffix = 0;
-    bool low_prefix_done = false;
-    for (int i = 0; i < consensus_len; i++) {
-        while (s < seqs.size() && read_end_offsets[s] < i) s++;
-
-        base_score_t base_scores[5] = { base_score_t('A'), base_score_t('C'), base_score_t('G'), base_score_t('T'), base_score_t('N') };
-        for (int j = s; j < seqs.size() && read_start_offsets[j] <= i; j++) {
-            if (read_end_offsets[j] < i) continue;
-
-            char nucl = seqs[j][i - read_start_offsets[j]];
-            uint8_t qual = quals[j][i - read_start_offsets[j]];
-            base_scores[nt_map[(uint8_t)nucl]].freq++;
-            base_scores[nt_map[(uint8_t)nucl]].qual += qual;
-        }
-
-        base_score_t best_base_score = max(base_scores[0], base_scores[1], base_scores[2], base_scores[3]);
-        consensus[i] = best_base_score.base;
-        
-        // determine length of low-quality prefix and suffix
-        // low-quality prefix is the last position from the start where coverage is < 3 AND max base freq is < 2
-        if (base_scores[0].freq + base_scores[1].freq + base_scores[2].freq + base_scores[3].freq < 3) {
-            // not enough coverage
-            if (!low_prefix_done && best_base_score.freq < 2) {
-                lowq_prefix = i + 1;
-            } else if (lowq_suffix == 0 && best_base_score.freq < 2) {
-                lowq_suffix = consensus_len - i;
-            }
-        } else {
-            low_prefix_done = true;
-        }
-    }
-    return consensus;
 }
 
 // Use kmers to select reads that are likely to be part of the same haplotype
