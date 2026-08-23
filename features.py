@@ -85,7 +85,7 @@ class Features:
                             'OAR1C', 'OAR2C', 'OAR1CHQ', 'OAR2CHQ', 'OAR1C_HQ_RATIO', 'OAR2C_HQ_RATIO', 'OAR1E', 'OAR2E',
                             'NAR1', 'NAR2', 'NAR1C', 'NAR2C', 'NAR1CHQ', 'NAR2CHQ', 'NAR1C_HQ_RATIO', 'NAR2C_HQ_RATIO',
                             'NAR1CE', 'NAR2CE', 'NAR1E', 'NAR2E',
-                            'ER', 'ERHQ',
+                            'ER1_DEVIATION', 'ER2_DEVIATION', 'ER_HQ_RATIO',
                             'AR1CMSPAN_1', 'AR1CMSPAN_2', 'AR1CMHQSPAN_1', 'AR1CMHQSPAN_2',
                             'AR2CMSPAN_1', 'AR2CMSPAN_2', 'AR2CMHQSPAN_1', 'AR2CMHQSPAN_2',
                             'RR1CMSPAN_1', 'RR1CMSPAN_2', 'RR1CMHQSPAN_1', 'RR1CMHQSPAN_2',
@@ -178,8 +178,12 @@ class Features:
         else:
             v = default
         if isinstance(v, list) or isinstance(v, tuple):
-            return [float(x)/norm_factor for x in v]
+            if isinstance(default, (list, tuple)):
+                return [float(default[i] if x is None else x)/norm_factor for i, x in enumerate(v)]
+            return [float(default if x is None else x)/norm_factor for x in v]
         else:
+            if v is None:
+                v = default
             return float(v)/norm_factor
 
     def exact_read_ratio(exact_reads, reads):
@@ -271,7 +275,10 @@ class Features:
         al1 = Features.get_number_value(sample, prefix+'AL', Features.NAN)
         al2 = Features.get_number_value(sample, prefix+'AL2', Features.NAN)
         length_normalisation_factor = max_is+read_len if prefix == 'X' else read_len
-        normalised_als = [al/length_normalisation_factor for al in (al1, al2) if math.isfinite(al)]
+        al_normalisation_factors = [length_normalisation_factor, length_normalisation_factor]
+        if prefix == '':
+            al_normalisation_factors = Features.get_number_value(sample, 'MFAL', [read_len, read_len])
+        normalised_als = [al/al_normalisation_factors[i] for i, al in enumerate((al1, al2)) if math.isfinite(al)]
         if normalised_als:
             features['M'+prefix+'AL'] = max(normalised_als)
             features['m'+prefix+'AL'] = min(normalised_als) if len(normalised_als) == 2 else Features.NAN
@@ -288,14 +295,14 @@ class Features:
         features[prefix+'AAS_'+prefix+'ARS_DIFF_TO_LEN'] = (aas1-ars1+aas2-ars2)/max(1, edit_distance)
 
         ass1_1, ass1_2 = Features.get_number_value(sample, prefix+'ASS', [Features.NAN, Features.NAN])
-        features[prefix+'ASS1_1'] = ass1_1/length_normalisation_factor
-        features[prefix+'ASS1_2'] = ass1_2/length_normalisation_factor
+        features[prefix+'ASS1_1'] = ass1_1/al_normalisation_factors[0]
+        features[prefix+'ASS1_2'] = ass1_2/al_normalisation_factors[0]
         features[prefix+'ASS1_RATIO1'] = ass1_1/max(1, al1)
         features[prefix+'ASS1_RATIO2'] = ass1_2/max(1, al1)
 
         ass2_1, ass2_2 = Features.get_number_value(sample, prefix+'ASS2', [Features.NAN, Features.NAN])
-        features[prefix+'ASS2_1'] = ass2_1/length_normalisation_factor
-        features[prefix+'ASS2_2'] = ass2_2/length_normalisation_factor
+        features[prefix+'ASS2_1'] = ass2_1/al_normalisation_factors[1]
+        features[prefix+'ASS2_2'] = ass2_2/al_normalisation_factors[1]
         features[prefix+'ASS2_RATIO1'] = ass2_1/max(1, al2)
         features[prefix+'ASS2_RATIO2'] = ass2_2/max(1, al2)
 
@@ -866,8 +873,11 @@ class Features:
 
         er = Features.get_number_value(sample, 'ER', 0)
         erhq = Features.get_number_value(sample, 'ERHQ', 0)
-        features['ER'] = Features.piecewise_normalise(er, min_depth, max_depth)
-        features['ERHQ'] = Features.piecewise_normalise(erhq, min_depth, max_depth)
+        er1_total = er+ar1+rr1
+        er2_total = er+ar2+rr2
+        features['ER1_DEVIATION'] = er/er1_total - (1-exp_alt_reads_freq1) if er1_total > 0 else Features.NAN
+        features['ER2_DEVIATION'] = er/er2_total - (1-exp_alt_reads_freq2) if er2_total > 0 else Features.NAN
+        features['ER_HQ_RATIO'] = erhq/er if er > 0 else Features.NAN
 
         features['AR1_RR1_CAS_Z_SCORE'] = Features.calculate_z_score(ar1cas, ar1css, ar1c, rr1cas, rr1css, rr1c)
         features['AR2_RR2_CAS_Z_SCORE'] = Features.calculate_z_score(ar2cas, ar2css, ar2c, rr2cas, rr2css, rr2c)
