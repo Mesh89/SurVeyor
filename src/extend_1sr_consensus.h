@@ -251,7 +251,7 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			uint64_t nv = nucl_bm[seq[j]];
 			kmer = ((kmer << 2) | nv);
 
-			if (j >= min_overlap && !hp_prefix[j]) {
+			if (j + 1 >= min_overlap && !hp_prefix[j]) {
 				kmer_to_idx[kmer].emplace_back(i, j);
 			}
 		}
@@ -446,7 +446,7 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 			read_starts.push_back(0); // dummy value
 		}
 
-		if (ext_read->end > target_start && ext_read->start < target_end) {
+		if (ext_read->end >= target_start && ext_read->start <= target_end) {
 			read_seqs.push_back(ext_read->sequence);
 			read_mapqs.push_back(ext_read->mapq);
 			read_starts.push_back(ext_read->start);
