@@ -822,18 +822,12 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
         bool is_ref_allele = allele_cluster.allele_idx == ref_allele_idx;
 
         for (int best_allele_idx : best_allele_idxs) {
-            const char* allele_seq = is_ref_allele ? ref_allele.get() : alt_alleles[best_allele_idx].get();
-            hts_pos_t allele_len = is_ref_allele ? ref_allele_len : alt_allele_lens[best_allele_idx];
-            hts_pair_pos_t allele_hp_range = is_ref_allele ? ref_allele_hp_range : alt_allele_hp_ranges[best_allele_idx];
-            bool allele_has_aux_indels = is_ref_allele ? 0 : !hp_indels[best_allele_idx]->aux_indels.empty();
-
             std::vector<bool> is_exact_match;
             for (const hp_read_info_t& hp_read_info : cluster) {
                 bool hp_len_match = hp_read_info.hp_len == hp_run_lens[best_allele_idx];
-                bool has_unexplained_outside_hp = has_unexplained_indel_outside_hp(
-                    hp_read_info, allele_has_aux_indels, allele_seq, allele_len, allele_hp_range, aligner);
-                bool exact_match = hp_len_match && !has_unexplained_outside_hp &&
-                    (!is_ref_allele || !hp_read_info.hp_run_extends_into_3p_tail);
+                // For HP ALT alleles, AR1E reflects an exact HP-length match; indels
+                // outside the HP run do not disqualify the read from the E count.
+                bool exact_match = hp_len_match && (!is_ref_allele || !hp_read_info.hp_run_extends_into_3p_tail);
                 is_exact_match.push_back(exact_match);
             }
 

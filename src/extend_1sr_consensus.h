@@ -589,7 +589,8 @@ void break_cycles(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >
 
 void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalTree<ext_read_t*>& candidate_reads_itree,
 		hts_pos_t target_start, hts_pos_t target_end, hts_pos_t contig_len,
-		const int high_confidence_mapq, stats_t& stats, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq) {
+		const int high_confidence_mapq, stats_t& stats, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq,
+		int max_extension_len = INT32_MAX) {
 
 	if (consensus->extended_to_right) return;
 
@@ -637,14 +638,18 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	// 0 is the consensus, we start from there
 	edge_t e = best_edges[0];
 	std::string ext_consensus = consensus->sequence;
+	int extension_len = 0;
 	int last_appended_len = -1, second_last_appended_len = -1;
-	while (e.overlap) {
+	while (e.overlap && extension_len < max_extension_len) {
 		int appended_len = read_seqs[e.next].length()-e.overlap;
-		ext_consensus += read_seqs[e.next].substr(e.overlap);
+		int accepted_len = std::min(appended_len, max_extension_len-extension_len);
+		ext_consensus += read_seqs[e.next].substr(e.overlap, accepted_len);
+		extension_len += accepted_len;
 		second_last_appended_len = last_appended_len;
-		last_appended_len = appended_len;
+		last_appended_len = accepted_len;
 		consensus->right_ext_reads++;
 		if (read_mapqs[e.next] >= high_confidence_mapq) consensus->hq_right_ext_reads++;
+		if (accepted_len < appended_len) break;
 		e = best_edges[e.next];
 	}
 	if (second_last_appended_len >= 0) {
@@ -666,7 +671,8 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 
 void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTree<ext_read_t*>& candidate_reads_itree,
 		hts_pos_t target_start, hts_pos_t target_end, hts_pos_t contig_len,
-		const int high_confidence_mapq, stats_t& stats, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq) {
+		const int high_confidence_mapq, stats_t& stats, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq,
+		int max_extension_len = INT32_MAX) {
 
 	if (consensus->extended_to_left) return;
 
@@ -714,15 +720,19 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	edge_t e = best_edges[0];
 	std::string ext_consensus = consensus->sequence;
 	std::stringstream path_ss;
+	int extension_len = 0;
 	int last_prepended_len = -1, second_last_prepended_len = -1;
-	while (e.overlap) {
+	while (e.overlap && extension_len < max_extension_len) {
 		int prepended_len = read_seqs[e.next].length()-e.overlap;
-		std::string prepended_seq = read_seqs[e.next].substr(0, prepended_len);
+		int accepted_len = std::min(prepended_len, max_extension_len-extension_len);
+		std::string prepended_seq = read_seqs[e.next].substr(prepended_len-accepted_len, accepted_len);
 		ext_consensus = prepended_seq + ext_consensus;
+		extension_len += accepted_len;
 		second_last_prepended_len = last_prepended_len;
-		last_prepended_len = prepended_len;
+		last_prepended_len = accepted_len;
 		consensus->left_ext_reads++;
 		if (read_mapqs[e.next] >= high_confidence_mapq) consensus->hq_left_ext_reads++;
+		if (accepted_len < prepended_len) break;
 		e = best_edges[e.next];
 	}
 	if (second_last_prepended_len >= 0) {

@@ -23,6 +23,7 @@
 #include "vcf_utils.h"
 
 constexpr double MIN_EPR = 0.05;
+constexpr hts_pos_t GENOTYPE_CONSENSUS_EXTENSION = 500;
 
 struct alignment_targets_t {
     char* alt_seq = NULL;
