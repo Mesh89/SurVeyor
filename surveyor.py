@@ -1,5 +1,5 @@
 import sys, os, argparse, hashlib, pysam, timeit, shutil, shlex
-from run_classifier import Classifier
+from run_classifier_c import Classifier
 
 VERSION = "0.13"
 
@@ -467,7 +467,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
 
     Classifier.run_classifier(workdir + "/intermediate_results/calls-with-fmt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/stats.txt", ml_model, threads=cmd_args.threads)
 
-    reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s" % (workdir + "/intermediate_results/calls-raw.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.reconciled.vcf.gz", sample_name)
+    reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s %d" % (workdir + "/intermediate_results/calls-raw.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.reconciled.vcf.gz", sample_name, cmd_args.threads)
     run_cmd(reconcile_vcf_gt_cmd)
 
     write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s/intermediate_results/calls-with-gt.reconciled.vcf.gz %s/calls-genotyped.smvars %s/calls-genotyped.stvars %s %s" % (workdir, workdir, workdir, reference_fname, workdir)
@@ -492,7 +492,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
             separate_ins_to_dup(final_iter_fmt_file, workdir + "/training-data.reassigned.INS_TO_DUP.vcf.gz", workdir + "/training-data.reassigned.vcf.gz")
 
         reconciled_file = final_iter_gt_file.replace(".vcf.gz", ".reconciled.vcf.gz")
-        reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s" % (workdir + "/intermediate_results/calls-raw.vcf.gz", final_iter_gt_file, reconciled_file, sample_name)
+        reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s %d" % (workdir + "/intermediate_results/calls-raw.vcf.gz", final_iter_gt_file, reconciled_file, sample_name, cmd_args.threads)
         run_cmd(reconcile_vcf_gt_cmd)
 
         write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s %s/calls-genotyped.reassigned.smvars %s/calls-genotyped.reassigned.stvars %s %s" % (reconciled_file, workdir, workdir, reference_fname, workdir)
