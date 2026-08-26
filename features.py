@@ -40,6 +40,7 @@ class AltReadMetrics(NamedTuple):
 class Features:
 
     NAN = np.nan
+    GENOTYPE_CONSENSUS_EXTENSION = 500
 
     info_features_names = [ 'START_STOP_DIST', 'SVLEN', 'SVINSLEN', 'EDIT_DISTANCE',
                             'SV_REF_PREFIX_A_RATIO', 'SV_REF_PREFIX_C_RATIO', 'SV_REF_PREFIX_G_RATIO', 'SV_REF_PREFIX_T_RATIO', 'MAX_SV_REF_PREFIX_BASE_RATIO',
@@ -103,17 +104,14 @@ class Features:
                             'AR1_OVER_NAR1', 'AR2_OVER_NAR2', 'AR1C_OVER_NAR1C', 'AR2C_OVER_NAR2C',
                             'AR1CE_OVER_NAR1CE', 'AR2CE_OVER_NAR2CE', 'AR1E_OVER_NAR1E', 'AR2E_OVER_NAR2E']
 
-    fmt_features_names = [  'ASS1_1', 'ASS1_2', 'ASS2_1', 'ASS2_2',
-                            'ASS1_RATIO1', 'ASS1_RATIO2', 'ASS2_RATIO1', 'ASS2_RATIO2',
+    fmt_features_names = [  'ASS1_LEFT_RATIO', 'ASS1_RIGHT_RATIO', 'ASS2_LEFT_RATIO', 'ASS2_RIGHT_RATIO',
                             'AAS_ARS_DIFF_TO_LEN',
                             'ASSC1_IA_RATIO', 'ASSC2_IA_RATIO', 'ASSC1_IA_DIFF', 'ASSC2_IA_DIFF',
-                            'MAL', 'mAL', 'AL',
-                            'AXR1', 'AXR2', 'AXR1HQ', 'AXR2HQ',
-                            'XASS1_1', 'XASS1_2', 'XASS2_1', 'XASS2_2',
-                            'XASS1_RATIO1', 'XASS1_RATIO2', 'XASS2_RATIO1', 'XASS2_RATIO2',
+                            'AL1', 'AL2', 'AL',
+                            'XASS1_LEFT_RATIO', 'XASS1_RIGHT_RATIO', 'XASS2_LEFT_RATIO', 'XASS2_RIGHT_RATIO',
                             'XAAS_XARS_DIFF_TO_LEN',
                             'XASSC1_IA_RATIO', 'XASSC2_IA_RATIO', 'XASSC1_IA_DIFF', 'XASSC2_IA_DIFF',
-                            'MXAL', 'mXAL', 'XAL',
+                            'XAL1', 'XAL2', 'XAL',
                             'MDLF', 'MDSP', 'MDSF', 'MDRF', 'MDSP_OVER_MDLF', 'MDSF_OVER_MDRF',
                             'MDLFHQ', 'MDSPHQ', 'MDSFHQ', 'MDRFHQ', 'MDSP_OVER_MDLF_HQ', 'MDSF_OVER_MDRF_HQ',
                             'MDLC', 'MDRC', 'MDLCHQ', 'MDRCHQ',
@@ -271,21 +269,28 @@ class Features:
         sample = record.samples[0]
         return 'XAL' in sample or 'XAL2' in sample
 
-    def add_consensus_alignment_features(features, sample, prefix, max_is, read_len, edit_distance):
+    def add_consensus_alignment_features(features, sample, prefix, read_len, edit_distance):
         al1 = Features.get_number_value(sample, prefix+'AL', Features.NAN)
         al2 = Features.get_number_value(sample, prefix+'AL2', Features.NAN)
-        length_normalisation_factor = max_is+read_len if prefix == 'X' else read_len
-        al_normalisation_factors = [length_normalisation_factor, length_normalisation_factor]
         if prefix == '':
             al_normalisation_factors = Features.get_number_value(sample, 'MFAL', [read_len, read_len])
-        normalised_als = [al/al_normalisation_factors[i] for i, al in enumerate((al1, al2)) if math.isfinite(al)]
+            normalised_al1 = al1/al_normalisation_factors[0] if math.isfinite(al1) else Features.NAN
+            normalised_al2 = al2/al_normalisation_factors[1] if math.isfinite(al2) else Features.NAN
+        else:
+            unextended_al1 = Features.get_number_value(sample, 'AL', Features.NAN)
+            unextended_al2 = Features.get_number_value(sample, 'AL2', Features.NAN)
+            extension_budget = 2*Features.GENOTYPE_CONSENSUS_EXTENSION
+            normalised_al1 = (al1-unextended_al1)/extension_budget if math.isfinite(al1) and math.isfinite(unextended_al1) else Features.NAN
+            normalised_al2 = (al2-unextended_al2)/extension_budget if math.isfinite(al2) and math.isfinite(unextended_al2) else Features.NAN
+
+        normalised_als = [al for al in (normalised_al1, normalised_al2) if math.isfinite(al)]
         if normalised_als:
-            features['M'+prefix+'AL'] = max(normalised_als)
-            features['m'+prefix+'AL'] = min(normalised_als) if len(normalised_als) == 2 else Features.NAN
+            features[prefix+'AL1'] = normalised_al1
+            features[prefix+'AL2'] = normalised_al2
             features[prefix+'AL'] = sum(normalised_als)
         else:
-            features['M'+prefix+'AL'] = Features.NAN
-            features['m'+prefix+'AL'] = Features.NAN
+            features[prefix+'AL1'] = Features.NAN
+            features[prefix+'AL2'] = Features.NAN
             features[prefix+'AL'] = Features.NAN
 
         aas1 = Features.get_number_value(sample, prefix+'AAS', 0)
@@ -295,16 +300,12 @@ class Features:
         features[prefix+'AAS_'+prefix+'ARS_DIFF_TO_LEN'] = (aas1-ars1+aas2-ars2)/max(1, edit_distance)
 
         ass1_1, ass1_2 = Features.get_number_value(sample, prefix+'ASS', [Features.NAN, Features.NAN])
-        features[prefix+'ASS1_1'] = ass1_1/al_normalisation_factors[0]
-        features[prefix+'ASS1_2'] = ass1_2/al_normalisation_factors[0]
-        features[prefix+'ASS1_RATIO1'] = ass1_1/max(1, al1)
-        features[prefix+'ASS1_RATIO2'] = ass1_2/max(1, al1)
+        features[prefix+'ASS1_LEFT_RATIO'] = ass1_1/max(1, al1)
+        features[prefix+'ASS1_RIGHT_RATIO'] = ass1_2/max(1, al1)
 
         ass2_1, ass2_2 = Features.get_number_value(sample, prefix+'ASS2', [Features.NAN, Features.NAN])
-        features[prefix+'ASS2_1'] = ass2_1/al_normalisation_factors[1]
-        features[prefix+'ASS2_2'] = ass2_2/al_normalisation_factors[1]
-        features[prefix+'ASS2_RATIO1'] = ass2_1/max(1, al2)
-        features[prefix+'ASS2_RATIO2'] = ass2_2/max(1, al2)
+        features[prefix+'ASS2_LEFT_RATIO'] = ass2_1/max(1, al2)
+        features[prefix+'ASS2_RIGHT_RATIO'] = ass2_2/max(1, al2)
 
         assc1_1, assc1_2 = Features.get_number_value(sample, prefix+'ASSC', [Features.NAN, Features.NAN])
         assc2_1, assc2_2 = Features.get_number_value(sample, prefix+'ASSC2', [Features.NAN, Features.NAN])
@@ -385,8 +386,8 @@ class Features:
         if max == min:
             return value - min
         return (value - min) / (max - min)
-    
-    def piecewise_normalise(value, minv, maxv):
+
+    def piecewise_normalise(value, minv, maxv, quantisation=0.025):
         neg = value < 0
         value = abs(value)
         if value <= minv:
@@ -396,8 +397,13 @@ class Features:
         else:
             ret_val = 0.25 + (value - minv) / (maxv - minv) * 0.75
         if neg:
-            return -ret_val
-        return ret_val
+            ret_val = -ret_val
+        return round(ret_val / quantisation) * quantisation
+
+    def normalise_mate_coverage_spans(covered_spans, reads, read_len, quantisation=0.025):
+        left_occupancy = covered_spans[0]/max(1, reads*read_len)
+        right_occupancy = covered_spans[1]/max(1, reads*read_len)
+        return round(left_occupancy/quantisation)*quantisation, round(right_occupancy/quantisation)*quantisation
 
     def calculate_z_score(mean1, stddev1, n1, mean2, stddev2, n2):
         if np.isnan(mean1) or np.isnan(mean2) or n1 == 0 or n2 == 0:
@@ -451,7 +457,8 @@ class Features:
             exp_alt_reads_freq1 = Features.NAN
         if exp_alt_reads_freq2 is None:
             exp_alt_reads_freq2 = Features.NAN
-        features['EXP_ALT_READS_FREQ1'], features['EXP_ALT_READS_FREQ2'] = exp_alt_reads_freq1, exp_alt_reads_freq2
+        features['EXP_ALT_READS_FREQ1'] = np.round(exp_alt_reads_freq1, 2)
+        features['EXP_ALT_READS_FREQ2'] = np.round(exp_alt_reads_freq2, 2)
 
         if model_name == "HP":
             hp_ref_start, hp_ref_end = info['HP_REF_RANGE']
@@ -559,8 +566,10 @@ class Features:
         features['AR1CEMQ'] = ar1ce_max_mq
         features['AR1CE_HQ_RATIO'] = ar1cehq/max(1, ar1ce)
         features['AR1CE_RATIO'] = Features.consistent_exact_read_ratio(ar1ce, ar1c)
-        features['AR1CMSPAN_1'], features['AR1CMSPAN_2'] = Features.get_number_value(sample, 'AR1CMSPAN', [0, 0], max_is)
-        features['AR1CMHQSPAN_1'], features['AR1CMHQSPAN_2'] = Features.get_number_value(sample, 'AR1CMHQSPAN', [0, 0], max_is)
+        ar1cf_count = Features.get_number_value(sample, 'AR1CF', 0)
+        ar1cr_count = Features.get_number_value(sample, 'AR1CR', 0)
+        features['AR1CMSPAN_1'], features['AR1CMSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'AR1CMSPAN', [0, 0]), ar1c, read_len)
+        features['AR1CMHQSPAN_1'], features['AR1CMHQSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'AR1CMHQSPAN', [0, 0]), arc1hq, read_len)
 
         features['AR1HPMODE'] = Features.get_number_value(sample, 'AR1HPMODE', Features.NAN)
         features['AR1CHPMODE'] = Features.get_number_value(sample, 'AR1CHPMODE', Features.NAN)
@@ -630,17 +639,19 @@ class Features:
         features['AR2CEMQ'] = ar2ce_max_mq
         features['AR2CE_HQ_RATIO'] = ar2cehq/max(1, ar2ce)
         features['AR2CE_RATIO'] = Features.consistent_exact_read_ratio(ar2ce, ar2c)
-        features['AR2CMSPAN_1'], features['AR2CMSPAN_2'] = Features.get_number_value(sample, 'AR2CMSPAN', [0, 0], max_is)
-        features['AR2CMHQSPAN_1'], features['AR2CMHQSPAN_2'] = Features.get_number_value(sample, 'AR2CMHQSPAN', [0, 0], max_is)
+        ar2cf_count = Features.get_number_value(sample, 'AR2CF', 0)
+        ar2cr_count = Features.get_number_value(sample, 'AR2CR', 0)
+        features['AR2CMSPAN_1'], features['AR2CMSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'AR2CMSPAN', [0, 0]), ar2c, read_len)
+        features['AR2CMHQSPAN_1'], features['AR2CMHQSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'AR2CMHQSPAN', [0, 0]), arc2hq, read_len)
         if not has_ar2:
             features['AR2CmQ'], features['AR2CMQ'] = features['AR1CmQ'], features['AR1CMQ']
             features['AR2CMSPAN_1'], features['AR2CMSPAN_2'] = features['AR1CMSPAN_1'], features['AR1CMSPAN_2']
             features['AR2CMHQSPAN_1'], features['AR2CMHQSPAN_2'] = features['AR1CMHQSPAN_1'], features['AR1CMHQSPAN_2']
 
-        ar1cf = Features.get_number_value(sample, 'AR1CF', 0, max(1, ar1c))
-        ar1cr = Features.get_number_value(sample, 'AR1CR', 0, max(1, ar1c))
-        ar2cf = Features.get_number_value(sample, 'AR2CF', 0, max(1, ar2c))
-        ar2cr = Features.get_number_value(sample, 'AR2CR', 0, max(1, ar2c))
+        ar1cf = ar1cf_count/max(1, ar1c)
+        ar1cr = ar1cr_count/max(1, ar1c)
+        ar2cf = ar2cf_count/max(1, ar2c)
+        ar2cr = ar2cr_count/max(1, ar2c)
         if not has_ar2: ar2cf, ar2cr = ar1cf, ar1cr
         features['ARCF'] = ar1cf + ar2cf
         features['ARCR'] = ar1cr + ar2cr
@@ -761,8 +772,10 @@ class Features:
         features['RR1CEMQ'] = rr1ce_max_mq
         features['RR1CE_HQ_RATIO'] = rr1cehq/max(1, rr1ce)
         features['RR1CE_RATIO'] = Features.consistent_exact_read_ratio(rr1ce, rr1c)
-        features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.get_number_value(sample, 'RR1CMSPAN', [0, 0], max_is)
-        features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2'] = Features.get_number_value(sample, 'RR1CMHQSPAN', [0, 0], max_is)
+        rr1cf = Features.get_number_value(sample, 'RR1CF', 0)
+        rr1cr = Features.get_number_value(sample, 'RR1CR', 0)
+        features['RR1CMSPAN_1'], features['RR1CMSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'RR1CMSPAN', [0, 0]), rr1c, read_len)
+        features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'RR1CMHQSPAN', [0, 0]), rr1chq, read_len)
 
         features['RR1HPMODE'] = Features.get_number_value(sample, 'RR1HPMODE', Features.NAN)
         features['RR1CHPMODE'] = Features.get_number_value(sample, 'RR1CHPMODE', Features.NAN)
@@ -809,17 +822,15 @@ class Features:
         features['RR2CEMQ'] = rr2ce_max_mq
         features['RR2CE_HQ_RATIO'] = rr2cehq/max(1, rr2ce)
         features['RR2CE_RATIO'] = Features.consistent_exact_read_ratio(rr2ce, rr2c)
-        features['RR2CMSPAN_1'], features['RR2CMSPAN_2'] = Features.get_number_value(sample, 'RR2CMSPAN', [0, 0], max_is)
-        features['RR2CMHQSPAN_1'], features['RR2CMHQSPAN_2'] = Features.get_number_value(sample, 'RR2CMHQSPAN', [0, 0], max_is)
+        rr2cf = Features.get_number_value(sample, 'RR2CF', 0)
+        rr2cr = Features.get_number_value(sample, 'RR2CR', 0)
+        features['RR2CMSPAN_1'], features['RR2CMSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'RR2CMSPAN', [0, 0]), rr2c, read_len)
+        features['RR2CMHQSPAN_1'], features['RR2CMHQSPAN_2'] = Features.normalise_mate_coverage_spans(Features.get_number_value(sample, 'RR2CMHQSPAN', [0, 0]), rr2chq, read_len)
         if not has_rr2:
             features['RR2CmQ'], features['RR2CMQ'] = features['RR1CmQ'], features['RR1CMQ']
             features['RR2CMSPAN_1'], features['RR2CMSPAN_2'] = features['RR1CMSPAN_1'], features['RR1CMSPAN_2']
             features['RR2CMHQSPAN_1'], features['RR2CMHQSPAN_2'] = features['RR1CMHQSPAN_1'], features['RR1CMHQSPAN_2']
 
-        rr1cf = Features.get_number_value(sample, 'RR1CF', 0)
-        rr1cr = Features.get_number_value(sample, 'RR1CR', 0)
-        rr2cf = Features.get_number_value(sample, 'RR2CF', 0)
-        rr2cr = Features.get_number_value(sample, 'RR2CR', 0)
         if not has_rr2: rr2cf, rr2cr = rr1cf, rr1cr
         rr1cf_ratio = rr1cf/max(1, rr1cf + rr1cr)
         rr1cr_ratio = rr1cr/max(1, rr1cf + rr1cr)
@@ -1117,13 +1128,8 @@ class Features:
         features['SSP2_RSP2_1_NM_Z_SCORE'] = Features.calculate_z_score(ssp2nma_1, ssp2nms_1, ssp2, rsp2nma_1, rsp2nms_1, rsp2)
         features['SSP2_RSP2_2_NM_Z_SCORE'] = Features.calculate_z_score(ssp2nma_2, ssp2nms_2, ssp2, rsp2nma_2, rsp2nms_2, rsp2)
 
-        axr1, axr2 = Features.get_number_value(sample, 'AXR', [0, 0], median_depth*max_is)
-        axr1hq, axr2hq = Features.get_number_value(sample, 'AXRHQ', [0, 0], median_depth*max_is)
-        features['AXR1'], features['AXR2'] = axr1, axr2
-        features['AXR1HQ'], features['AXR2HQ'] = axr1hq, axr2hq
-
-        Features.add_consensus_alignment_features(features, sample, '', max_is, read_len, edit_distance)
-        Features.add_consensus_alignment_features(features, sample, 'X', max_is, read_len, edit_distance)
+        Features.add_consensus_alignment_features(features, sample, '', read_len, edit_distance)
+        Features.add_consensus_alignment_features(features, sample, 'X', read_len, edit_distance)
 
         feature_values = []
         for feature_name in feature_names:
