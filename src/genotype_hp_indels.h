@@ -562,7 +562,7 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
 
     // For each read overlapping the reference HP, calculate its observed HP length,
     // 5'/3' tail lengths and 5'/3' tail mismatch counts.
-    StripedSmithWaterman::Alignment alt_aln;
+    StripedSmithWaterman::Alignment alt_aln, candidate_ref_aln;
     StripedSmithWaterman::Filter filter_score_only(false, false, 0, 32767);
     StripedSmithWaterman::Filter filter_default;
 
@@ -611,9 +611,10 @@ void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_
             // when they are aligned better to one of the HP indels
             std::string seq = get_sequence(read);
             for (int i = 0; i < hp_indels.size(); i++) {
-                // if the read is assigned to a different SV, no need to align it, just count and continue
-
-                aligner.Align(seq.c_str(), alt_alleles[i].get(), alt_allele_lens[i], filter_score_only, &alt_aln, 0);
+                aligner.Align(seq.c_str(), candidate_ref_alleles[i].get(), candidate_ref_allele_lens[i], filter_score_only, &candidate_ref_aln, 0);
+                aligner.Align(seq.c_str(), alt_alleles[i].get(), alt_allele_lens[i], filter_default, &alt_aln, 0);
+                bool alt_spans_hp = alt_aln.ref_begin <= alt_allele_hp_ranges[i].beg && alt_aln.ref_end >= alt_allele_hp_ranges[i].end - 1;
+                if (alt_aln.sw_score <= candidate_ref_aln.sw_score || !alt_spans_hp) continue;
                 std::vector<std::shared_ptr<bam1_t>> read_v = { std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1) };
                 std::vector<int> alt_aln_scores = { alt_aln.sw_score };
                 if (evidence_logger) evidence_logger->log_reads_associations(hp_indels[i]->id, 1, read_v, alt_aln_scores);
