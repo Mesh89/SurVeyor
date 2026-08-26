@@ -1,5 +1,6 @@
 #include "htslib/hts.h"
 #include "vcf_utils.h"
+#include <htslib/tbx.h>
 #include <htslib/vcf.h>
 #include <iostream>
 #include <sstream>
@@ -239,4 +240,9 @@ int main(int argc, char** argv) {
     bcf_close(base_fp);
     bcf_hdr_destroy(out_hdr);
     bcf_close(out_fp);
+
+    if (tbx_index_build(out_vcf_fname.c_str(), 0, &tbx_conf_vcf) != 0) {
+        std::cerr << "Error indexing output VCF: " << out_vcf_fname << std::endl;
+        return 1;
+    }
 }

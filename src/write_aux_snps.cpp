@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cstring>
+#include <functional>
+#include <future>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -8,15 +10,16 @@
 #include <fstream>
 
 #include <htslib/sam.h>
+#include <htslib/synced_bcf_reader.h>
 #include <htslib/tbx.h>
 #include <htslib/vcf.h>
+#include "../libs/cptl_stl.h"
 #include "DynamicIntervalTree.h"
 #include "SegTree.h"
 #include "types.h"
 #include "vcf_utils.h"
 
 const hts_pos_t MIN_SV_SIZE = 50;
-std::ofstream merge_identical_log;
 config_t config;
 using par_tree_t = DynamicIntervalTree<hts_pos_t, bool>;
 std::unordered_map<std::string, std::shared_ptr<par_tree_t>> par_regions;
@@ -154,44 +157,6 @@ std::string get_record_id(bcf1_t* record) {
 
 bool is_expanded_aux_indel_record(bcf1_t* record) {
     return get_record_id(record).find(".AUX_INDEL.") != std::string::npos;
-}
-
-std::string get_gt_str(bcf_hdr_t* hdr, bcf1_t* record) {
-    int* gt = nullptr;
-    int ngt = 0;
-    if (bcf_get_genotypes(hdr, record, &gt, &ngt) < 0 || ngt == 0) {
-        free(gt);
-        return ".";
-    }
-
-    std::stringstream ss;
-    for (int i = 0; i < ngt; i++) {
-        if (i > 0) ss << "/";
-        if (bcf_gt_is_missing(gt[i])) {
-            ss << ".";
-        } else {
-            ss << bcf_gt_allele(gt[i]);
-        }
-    }
-    free(gt);
-    return ss.str();
-}
-
-void log_merge_identical_operation(bcf_hdr_t* hdr, const char* operation,
-                                   bcf1_t* first, bcf1_t* second,
-                                   const std::string& detail = "") {
-    if (!merge_identical_log.is_open()) return;
-
-    merge_identical_log
-        << operation
-        << "\tfirst=" << get_record_id(first)
-        << "\tsecond=" << get_record_id(second)
-        << "\tfirst_gt=" << get_gt_str(hdr, first)
-        << "\tsecond_gt=" << get_gt_str(hdr, second);
-    if (!detail.empty()) {
-        merge_identical_log << "\t" << detail;
-    }
-    merge_identical_log << "\n";
 }
 
 int get_required_hpid(bcf_hdr_t* hdr, bcf1_t* record) {
@@ -360,11 +325,7 @@ void add_star_alleles_for_overlapping(bcf_hdr_t* hdr, std::vector<bcf1_t*>& smal
 void merge_variant_records(bcf_hdr_t* hdr, bcf1_t* first, bcf1_t* second) {
     int first_alt_alleles = count_alt_alleles(hdr, first);
     int second_alt_alleles = count_alt_alleles(hdr, second);
-    log_merge_identical_operation(hdr, "start", first, second,
-        "first_ac=" + std::to_string(first_alt_alleles) +
-        "\tsecond_ac=" + std::to_string(second_alt_alleles));
     if (first_alt_alleles == 0 || second_alt_alleles == 0) {
-        log_merge_identical_operation(hdr, "skip_zero_ac", first, second);
         return;
     }
 
@@ -374,18 +335,13 @@ void merge_variant_records(bcf_hdr_t* hdr, bcf1_t* first, bcf1_t* second) {
     // Regardless of EREFA, the second record is set to 0/0, as we do not want multiple identical positive calls
     if (same_record_identity(hdr, first, second)) {
         set_gt(hdr, second, 0, 0);
-        log_merge_identical_operation(hdr, "set_second_0_0", first, second);
         
         int first_erefa = get_format_int32_or_default(hdr, first, "EREFA");
         if (first_erefa == 1) {
-            log_merge_identical_operation(hdr, "skip_erefa", first, second,
-                "EREFA=" + std::to_string(first_erefa));
             return;
         }
         if (first_alt_alleles == 1) concat_record_ids(hdr, first, second);
-        log_merge_identical_operation(hdr, "concat_ids", first, second);
         set_gt(hdr, first, 1, 1);
-        log_merge_identical_operation(hdr, "set_first_1_1", first, second);
 
     }
     // If the first record is a 1/1, but the probability of the second record to exist (EPR) is higher
@@ -393,124 +349,19 @@ void merge_variant_records(bcf_hdr_t* hdr, bcf1_t* first, bcf1_t* second) {
     else if (first_alt_alleles >= 2 && !same_record_identity(hdr, first, second)) {
         float second_epr = get_sv_epr(hdr, second);
         float first_hopr = get_sv_hopr(hdr, first);
-        std::string scores = "second_epr=" + std::to_string(second_epr) +
-            "\tfirst_hopr=" + std::to_string(first_hopr);
         if (second_epr > first_hopr) {
-            log_merge_identical_operation(hdr, "replace_one_alt", first, second, scores);
             set_gt(hdr, first, 0, 1);
             set_gt(hdr, second, 0, 1);
-            log_merge_identical_operation(hdr, "set_for_multiallelic", first, second, scores);
         } else {
             set_gt(hdr, second, 0, 0);
-            log_merge_identical_operation(hdr, "keep_first_multiallelic", first, second, scores);
         }
-    } else {
-        log_merge_identical_operation(hdr, "no_action", first, second);
     }
 
     // bool two_hets = first_alt_alleles == 1 && second_alt_alleles == 1;
     // if (two_hets && ref_support_exceeds_other_alt_support(hdr, second)) return;
 }
 
-// The group is already sorted by decreasing EPR. Keep at most two ALT alleles at
-// each exact position for INS/DEL/SNP groups. The best call is always kept. If the first two
-// calls are identical hets, merge them into a single 1/1 call unless the second
-// call has more REF support than competing ALT support. Otherwise, if the
-// best call is already 1/1, let the second call replace one allele only when its
-// EPR is stronger than the best call's homozygous probability. All later ALT
-// calls are suppressed. Accepted second alleles are folded into the first record
-// as ALT2, and a 0/0 record ends the group because no later record can add an
-// ALT allele.
-void apply_multiallelic_logic_to_group(bcf_hdr_t* hdr, std::vector<bcf1_t*>& variant_group,
-                                       std::vector<bcf1_t*>& records_to_remove) {
-    
-    if (variant_group.empty()) return;
-
-    bcf1_t* first = variant_group[0];
-    int first_alt_alleles = count_alt_alleles(hdr, first);
-    if (first_alt_alleles == 0) return;
-
-    if (variant_group.size() == 1) return;
-
-    bcf1_t* second = variant_group[1];
-    int second_alt_alleles = count_alt_alleles(hdr, second);
-    if (second_alt_alleles == 0) return;
-
-    size_t suppress_from = 2;
-
-    if (first_alt_alleles > 0 && second_alt_alleles > 0 && same_record_identity(hdr, first, second)) {
-        merge_variant_records(hdr, first, second);
-        records_to_remove.push_back(second);
-    } else if (first_alt_alleles >= 2) {
-        float second_epr = get_sv_epr(hdr, second);
-        float first_hopr = get_sv_hopr(hdr, first);
-        if (second_epr > first_hopr) {
-            set_gt(hdr, first, 0, 1);
-            if (second_alt_alleles > 1) {
-                set_gt(hdr, second, 0, 1);
-            }
-            make_record_multiallelic(hdr, first, second);
-            records_to_remove.push_back(second);
-        } else {
-            set_gt(hdr, second, 0, 0);
-            records_to_remove.push_back(second);
-            suppress_from = 2;
-        }
-    } else {
-        if (second_alt_alleles > 1) {
-            set_gt(hdr, second, 0, 1);
-        }
-        make_record_multiallelic(hdr, first, second);
-        records_to_remove.push_back(second);
-    }
-
-    for (size_t i = suppress_from; i < variant_group.size(); i++) {
-        bcf1_t* record = variant_group[i];
-        int alt_alleles = count_alt_alleles(hdr, record);
-        if (alt_alleles == 0) {
-            return;
-        }
-
-        set_gt(hdr, record, 0, 0);
-        records_to_remove.push_back(record);
-    }
-}
-
 void make_multiallelic(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants) {
-    int curr_rid = -1;
-    hts_pos_t curr_pos = -1;
-    std::vector<bcf1_t*> variant_group;
-    std::vector<bcf1_t*> records_to_remove;
-
-    for (bcf1_t* record : small_variants) {
-        if (!variant_group.empty() && (record->rid != curr_rid || record->pos != curr_pos)) {
-            apply_multiallelic_logic_to_group(hdr, variant_group, records_to_remove);
-            variant_group.clear();
-        }
-
-        if (variant_group.empty()) {
-            curr_rid = record->rid;
-            curr_pos = record->pos;
-        }
-
-        std::string svtype = get_sv_type(hdr, record);
-        if (svtype == "INS" || svtype == "DEL" || svtype == "SNP") {
-            variant_group.push_back(record);
-        }
-    }
-
-    apply_multiallelic_logic_to_group(hdr, variant_group, records_to_remove);
-
-    std::unordered_set<bcf1_t*> remove_set(records_to_remove.begin(), records_to_remove.end());
-    for (bcf1_t*& record : small_variants) {
-        if (remove_set.count(record) > 0) {
-            record = nullptr;
-        }
-    }
-    small_variants.erase(std::remove(small_variants.begin(), small_variants.end(), nullptr), small_variants.end());
-}
-
-void make_multiallelic_new(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants) {
     std::unordered_map<std::string, std::vector<std::pair<bcf1_t*, float>>> variants_by_chr;
     std::unordered_map<std::string, hts_pos_t> max_end_by_chr;
 
@@ -561,6 +412,146 @@ void make_multiallelic_new(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants)
     }
 }
 
+struct chrom_variants_t {
+    std::vector<bcf1_t*> input_records;
+    std::unordered_map<int, int> hpid_counts;
+    std::vector<bcf1_t*> records;
+    std::vector<bcf1_t*> small_variants;
+    std::vector<bcf1_t*> svs;
+};
+
+bcf_srs_t* open_region_reader(const std::string& vcf_fname, const std::string& chrom) {
+    bcf_srs_t* reader = bcf_sr_init();
+    bcf_sr_set_opt(reader, BCF_SR_REQUIRE_IDX);
+    std::string region = "{" + chrom + "}";
+    if (bcf_sr_set_regions(reader, region.c_str(), 0) < 0 || !bcf_sr_add_reader(reader, vcf_fname.c_str())) {
+        std::string error = bcf_sr_strerror(reader->errnum);
+        bcf_sr_destroy(reader);
+        throw std::runtime_error("Failed to open " + vcf_fname + " for chromosome " + chrom + ": " + error + ".");
+    }
+    return reader;
+}
+
+void process_variants(int, const std::string& in_vcf_fname, const std::string& chrom, char* chr_seq, bcf_hdr_t* in_vcf_hdr,
+                      chrom_variants_t& variants) {
+    bcf_srs_t* input_reader = open_region_reader(in_vcf_fname, chrom);
+    while (bcf_sr_next_line(input_reader)) {
+        bcf1_t* record = bcf_dup(bcf_sr_get_line(input_reader, 0));
+        variants.input_records.push_back(record);
+        variants.hpid_counts[get_required_hpid(in_vcf_hdr, record)]++;
+    }
+    if (input_reader->errnum) {
+        std::string error = bcf_sr_strerror(input_reader->errnum);
+        bcf_sr_destroy(input_reader);
+        for (bcf1_t* record : variants.input_records) bcf_destroy(record);
+        variants.input_records.clear();
+        throw std::runtime_error("Failed to read variants on chromosome " + chrom + ": " + error + ".");
+    }
+    bcf_sr_destroy(input_reader);
+
+    std::unordered_set<bcf1_t*> aux_records;
+    for (bcf1_t* b : variants.input_records) {
+        variants.records.push_back(b);
+
+        char* s_data = NULL;
+        int len = 0;
+        bcf_get_info_string(in_vcf_hdr, b, "AUX_SNPS", (void**) &s_data, &len);
+        if (len > 0 && !is_expanded_aux_indel_record(b)) {
+            bcf_unpack(b, BCF_UN_ALL);
+            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
+            std::istringstream ss(s_data);
+            std::string snp_str;
+            int i = 0;
+            while (std::getline(ss, snp_str, ',')) {
+                snp_t snp(snp_str);
+                std::string id = std::string(b->d.id) + ".SNP." + std::to_string(i++);
+                std::vector<int> gt = get_bcf_gt(in_vcf_hdr, b);
+                bcf1_t* snp_record = generate_snp(in_vcf_hdr, chrom, snp.pos, chr_seq[snp.pos], snp.alt_base, id, gt);
+                bcf_update_info_int32(in_vcf_hdr, snp_record, "HPID", &parent_hpid, 1);
+                copy_all_fmt(in_vcf_hdr, b, snp_record);
+                variants.records.push_back(snp_record);
+                aux_records.insert(snp_record);
+            }
+            // remove INFO/AUX_SNPS from the original record
+            bcf_update_info_string(in_vcf_hdr, b, "AUX_SNPS", NULL);
+        }
+        free(s_data);
+
+        s_data = NULL;
+        len = 0;
+        bcf_get_info_string(in_vcf_hdr, b, "AUX_INDELS", (void**) &s_data, &len);
+        if (len > 0 && !is_expanded_aux_indel_record(b)) {
+            bcf_unpack(b, BCF_UN_ALL);
+            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
+            std::istringstream ss(s_data);;
+            std::string indel_str;
+            int i = 0;
+            while (variants.hpid_counts[parent_hpid] == 1 && std::getline(ss, indel_str, ',')) {
+                std::stringstream indel_ss(indel_str);
+                std::string start_str, end_str, ins_seq;
+                std::getline(indel_ss, start_str, ':');
+                std::getline(indel_ss, end_str, ':');
+                std::getline(indel_ss, ins_seq, ':');
+                hts_pos_t start = std::stoll(start_str)-1;
+                hts_pos_t end = std::stoll(end_str)-1;
+                std::shared_ptr<sv_t> indel;
+                if (start == end) {
+                    // insertion
+                    indel = std::make_shared<insertion_t>(chrom, start, end, ins_seq, nullptr, nullptr, nullptr, nullptr);
+                } else {
+                    // deletion
+                    indel = std::make_shared<deletion_t>(chrom, start, end, ins_seq, nullptr, nullptr, nullptr, nullptr);
+                }
+                indel->id = std::string(b->d.id) + ".INDEL." + std::to_string(i++);
+                indel->hpid = parent_hpid;
+                std::vector<int> gt = get_bcf_gt(in_vcf_hdr, b);
+                indel->sample_info.gt = gt;
+                bcf1_t* indel_record = bcf_init();
+                sv2bcf(in_vcf_hdr, indel_record, indel.get(), chr_seq);
+                copy_all_fmt(in_vcf_hdr, b, indel_record);
+                copy_hp_info(in_vcf_hdr, b, indel_record);
+                variants.records.push_back(indel_record);
+                aux_records.insert(indel_record);
+            }
+            // remove INFO/AUX_INDELS from the original record
+            bcf_update_info_string(in_vcf_hdr, b, "AUX_INDELS", NULL);
+        }
+        free(s_data);
+    }
+    variants.input_records.clear();
+
+    // sort by pos and then by non-ascending EPR
+    std::stable_sort(variants.records.begin(), variants.records.end(),
+        [in_vcf_hdr](bcf1_t* b1, bcf1_t* b2) {
+            if (std::tie(b1->rid, b1->pos) != std::tie(b2->rid, b2->pos)) {
+                return std::tie(b1->rid, b1->pos) < std::tie(b2->rid, b2->pos);
+            }
+            return get_sv_epr(in_vcf_hdr, b1) > get_sv_epr(in_vcf_hdr, b2);
+        });
+
+    remove_lower_priority_duplicates(in_vcf_hdr, variants.records, aux_records);
+
+    for (bcf1_t* record : variants.records) {
+        if (is_haploid_region(chrom, record->pos, get_sv_end(in_vcf_hdr, record)) && count_alt_alleles(in_vcf_hdr, record) > 0) {
+            set_gt(in_vcf_hdr, record, 1, 1);
+        }
+    }
+
+    divide_variants_by_svsize(in_vcf_hdr, variants.records, variants.small_variants, variants.svs);
+
+    // add_star_alleles_for_overlapping(in_vcf_hdr, variants.small_variants);
+    make_multiallelic(in_vcf_hdr, variants.small_variants);
+}
+
+void destroy_variants(int, chrom_variants_t& variants) {
+    for (bcf1_t* record : variants.records) {
+        bcf_destroy(record);
+    }
+    variants.records.clear();
+    variants.small_variants.clear();
+    variants.svs.clear();
+}
+
 int main(int argc, char* argv[]) {
     std::string in_vcf_fname = argv[1];
     std::string out_smvars_prefix = argv[2];
@@ -580,137 +571,48 @@ int main(int argc, char* argv[]) {
     }
     std::string out_smvars_vcf_fname = out_smvars_prefix + ".vcf.gz";
     std::string out_stvars_vcf_fname = out_stvars_prefix + ".vcf.gz";
-    std::string merge_identical_log_fname = out_smvars_prefix + ".merge-identical.log";
-
-    merge_identical_log.open(merge_identical_log_fname);
-    if (!merge_identical_log) {
-        throw std::runtime_error("Failed to open " + merge_identical_log_fname + " for writing.");
-    }
-    merge_identical_log << "operation\tfirst\tsecond\tfirst_gt\tsecond_gt\tdetails\n";
 
     chr_seqs_map_t chr_seqs;
     chr_seqs.read_fasta_into_map(reference_fname);
 
-    // count the number of records for each HPID in the input VCF
-    // greater than 1 means that the parent record was already expanded in expand_aux_haplotypes.cpp
-    // so we should not expand it again here, i.e., create aux INDEL records for it
-    std::unordered_map<int, int> hpid_counts;
-    htsFile* count_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
-    bcf_hdr_t* count_vcf_hdr = bcf_hdr_read(count_vcf_file);
-    bcf1_t* count_record = bcf_init();
-    while (bcf_read(count_vcf_file, count_vcf_hdr, count_record) == 0) {
-        hpid_counts[get_required_hpid(count_vcf_hdr, count_record)]++;
-    }
-    bcf_destroy(count_record);
-    bcf_hdr_destroy(count_vcf_hdr);
-    hts_close(count_vcf_file);
-
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
+    if (in_vcf_file == NULL) {
+        throw std::runtime_error("Failed to open " + in_vcf_fname + " for reading.");
+    }
     bcf_hdr_t* in_vcf_hdr = bcf_hdr_read(in_vcf_file);
+    int n_chroms = 0;
+    const char** chrom_names = bcf_hdr_seqnames(in_vcf_hdr, &n_chroms);
+    std::vector<chrom_variants_t> variants_by_chrom(n_chroms);
+    hts_close(in_vcf_file);
 
-    std::vector<bcf1_t*> vcf_records;
-    std::unordered_set<bcf1_t*> aux_records;
-	bcf1_t* r = bcf_init();
-	while (bcf_read(in_vcf_file, in_vcf_hdr, r) == 0) {
-        bcf1_t* b = bcf_dup(r);
-		vcf_records.push_back(b);
-
-        char* s_data = NULL;
-        int len = 0;
-        bcf_get_info_string(in_vcf_hdr, b, "AUX_SNPS", (void**) &s_data, &len);
-        if (len > 0 && !is_expanded_aux_indel_record(b)) {
-            bcf_unpack(b, BCF_UN_ALL);
-            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
-            std::istringstream ss(s_data);
-            std::string snp_str;
-            int i = 0;
-            while (std::getline(ss, snp_str, ',')) {
-                snp_t snp(snp_str);
-                std::string contig_name = bcf_seqname(in_vcf_hdr, b);
-                char* chr_seq = chr_seqs.get_seq(contig_name);
-                std::string id = std::string(b->d.id) + ".SNP." + std::to_string(i++);
-                std::vector<int> gt = get_bcf_gt(in_vcf_hdr, b);
-                bcf1_t* snp_record = generate_snp(in_vcf_hdr, bcf_seqname(in_vcf_hdr, b), snp.pos,
-                    chr_seq[snp.pos], snp.alt_base, id, gt);
-                bcf_update_info_int32(in_vcf_hdr, snp_record, "HPID", &parent_hpid, 1);
-                copy_all_fmt(in_vcf_hdr, b, snp_record);
-                vcf_records.push_back(snp_record);
-                aux_records.insert(snp_record);
-            }
-            // remove INFO/AUX_SNPS from the original record
-            bcf_update_info_string(in_vcf_hdr, b, "AUX_SNPS", NULL);
-        }
-        free(s_data);
-
-        s_data = NULL;
-        len = 0;
-        bcf_get_info_string(in_vcf_hdr, b, "AUX_INDELS", (void**) &s_data, &len);
-        if (len > 0 && !is_expanded_aux_indel_record(b)) {
-            bcf_unpack(b, BCF_UN_ALL);
-            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
-            std::istringstream ss(s_data);;
-            std::string indel_str;
-            int i = 0;
-            while (hpid_counts[parent_hpid] == 1 && std::getline(ss, indel_str, ',')) {
-                std::stringstream indel_ss(indel_str);
-                std::string start_str, end_str, ins_seq;
-                std::getline(indel_ss, start_str, ':');
-                std::getline(indel_ss, end_str, ':');
-                std::getline(indel_ss, ins_seq, ':');
-                std::string contig_name = bcf_seqname(in_vcf_hdr, b);
-                hts_pos_t start = std::stoll(start_str)-1;
-                hts_pos_t end = std::stoll(end_str)-1;
-                std::shared_ptr<sv_t> indel;
-                if (start == end) {
-                    // insertion
-                    indel = std::make_shared<insertion_t>(contig_name, start, end, ins_seq, nullptr, nullptr, nullptr, nullptr);
-                } else {
-                    // deletion
-                    indel = std::make_shared<deletion_t>(contig_name, start, end, ins_seq, nullptr, nullptr, nullptr, nullptr);
-                }
-                indel->id = std::string(b->d.id) + ".INDEL." + std::to_string(i++);
-                indel->hpid = parent_hpid;
-                std::vector<int> gt = get_bcf_gt(in_vcf_hdr, b);
-                indel->sample_info.gt = gt;
-                bcf1_t* indel_record = bcf_init();
-                sv2bcf(in_vcf_hdr, indel_record, indel.get(), chr_seqs.get_seq(contig_name));
-                copy_all_fmt(in_vcf_hdr, b, indel_record);
-                copy_hp_info(in_vcf_hdr, b, indel_record);
-                vcf_records.push_back(indel_record);
-                aux_records.insert(indel_record);
-            }
-            // remove INFO/AUX_INDELS from the original record
-            bcf_update_info_string(in_vcf_hdr, b, "AUX_INDELS", NULL);
-        }
-        free(s_data);
+    ctpl::thread_pool thread_pool(config.threads);
+    std::vector<std::future<void>> futures;
+    for (int rid = 0; rid < n_chroms; rid++) {
+        std::string chrom = chrom_names[rid];
+        std::future<void> future = thread_pool.push(process_variants, in_vcf_fname, chrom, chr_seqs.get_seq(chrom), in_vcf_hdr, std::ref(variants_by_chrom[rid]));
+        futures.push_back(std::move(future));
     }
-
-    // sort by pos and then by non-ascending EPR
-    std::stable_sort(vcf_records.begin(), vcf_records.end(),
-        [in_vcf_hdr](bcf1_t* b1, bcf1_t* b2) {
-            if (std::tie(b1->rid, b1->pos) != std::tie(b2->rid, b2->pos)) {
-                return std::tie(b1->rid, b1->pos) < std::tie(b2->rid, b2->pos);
-            }
-            return get_sv_epr(in_vcf_hdr, b1) > get_sv_epr(in_vcf_hdr, b2);
-        });
-
-    remove_lower_priority_duplicates(in_vcf_hdr, vcf_records, aux_records);
-
-    for (bcf1_t* record : vcf_records) {
-        std::string chr = bcf_seqname_safe(in_vcf_hdr, record);
-        if (is_haploid_region(chr, record->pos, get_sv_end(in_vcf_hdr, record)) && count_alt_alleles(in_vcf_hdr, record) > 0) {
-            set_gt(in_vcf_hdr, record, 1, 1);
-        }
+    thread_pool.stop(true);
+    for (int i = 0; i < futures.size(); i++) {
+        futures[i].get();
     }
+    futures.clear();
 
     std::vector<bcf1_t*> small_variants, svs;
-    divide_variants_by_svsize(in_vcf_hdr, vcf_records, small_variants, svs);
-
-    // make_multiallelic(in_vcf_hdr, small_variants);
-    // add_star_alleles_for_overlapping(in_vcf_hdr, small_variants);
-    make_multiallelic_new(in_vcf_hdr, small_variants);
+    for (int rid = 0; rid < n_chroms; rid++) {
+        chrom_variants_t& variants = variants_by_chrom[rid];
+        small_variants.insert(small_variants.end(), variants.small_variants.begin(), variants.small_variants.end());
+        svs.insert(svs.end(), variants.svs.begin(), variants.svs.end());
+    }
+    free(chrom_names);
 
     htsFile* out_smvars_vcf_file = bcf_open(out_smvars_vcf_fname.c_str(), "wz");
+    if (out_smvars_vcf_file == NULL) {
+        throw std::runtime_error("Failed to open " + out_smvars_vcf_fname + " for writing.");
+    }
+    if (hts_set_threads(out_smvars_vcf_file, config.threads) != 0) {
+        throw std::runtime_error("Failed to enable multithreaded compression for " + out_smvars_vcf_fname + ".");
+    }
     if (bcf_hdr_write(out_smvars_vcf_file, in_vcf_hdr) != 0) {
         throw std::runtime_error("Failed to write the VCF header to " + out_smvars_vcf_fname + ".");
     }
@@ -723,6 +625,12 @@ int main(int argc, char* argv[]) {
     index_vcf(out_smvars_vcf_fname);
 
     htsFile* out_stvars_vcf_file = bcf_open(out_stvars_vcf_fname.c_str(), "wz");
+    if (out_stvars_vcf_file == NULL) {
+        throw std::runtime_error("Failed to open " + out_stvars_vcf_fname + " for writing.");
+    }
+    if (hts_set_threads(out_stvars_vcf_file, config.threads) != 0) {
+        throw std::runtime_error("Failed to enable multithreaded compression for " + out_stvars_vcf_fname + ".");
+    }
     if (bcf_hdr_write(out_stvars_vcf_file, in_vcf_hdr) != 0) {
         throw std::runtime_error("Failed to write the VCF header to " + out_stvars_vcf_fname + ".");
     }
@@ -734,11 +642,18 @@ int main(int argc, char* argv[]) {
     hts_close(out_stvars_vcf_file);
     index_vcf(out_stvars_vcf_fname);
 
-    for (bcf1_t* vcf_record : vcf_records) {
-        bcf_destroy(vcf_record);
+    small_variants.clear();
+    svs.clear();
+    ctpl::thread_pool cleanup_thread_pool(config.threads);
+    for (int rid = 0; rid < n_chroms; rid++) {
+        if (variants_by_chrom[rid].records.empty()) continue;
+        std::future<void> future = cleanup_thread_pool.push(destroy_variants, std::ref(variants_by_chrom[rid]));
+        futures.push_back(std::move(future));
     }
-    bcf_destroy(r);
+    cleanup_thread_pool.stop(true);
+    for (int i = 0; i < futures.size(); i++) {
+        futures[i].get();
+    }
 
     bcf_hdr_destroy(in_vcf_hdr);
-    hts_close(in_vcf_file);
 }
