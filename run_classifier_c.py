@@ -6,11 +6,9 @@ import tempfile
 import timeit
 
 import numpy as np
-import pysam
 import xgboost as xgb
 
-import features
-from training_manifest import load_training_set_sha256, set_training_set_vcf_header
+from training_manifest import load_training_set_sha256
 
 
 class Classifier:
@@ -24,10 +22,20 @@ class Classifier:
             return build_extractor_path
         raise RuntimeError("extract_features was not found. Build SurVeyor before running run_classifier_c.py.")
 
+    def get_writer_path():
+        surveyor_path = os.path.dirname(os.path.realpath(__file__))
+        writer_path = os.path.join(surveyor_path, "bin", "write_classifier_vcf")
+        if os.path.isfile(writer_path):
+            return writer_path
+        build_writer_path = os.path.join(surveyor_path, "build", "bin", "write_classifier_vcf")
+        if os.path.isfile(build_writer_path):
+            return build_writer_path
+        raise RuntimeError("write_classifier_vcf was not found. Build SurVeyor before running run_classifier_c.py.")
+
     def load_feature_bundle(feature_bundle_fname):
-        test_data, test_variant_ids = dict(), dict()
+        test_data, test_variant_ids, test_record_keys = dict(), dict(), dict()
         with open(feature_bundle_fname, "rb") as feature_bundle:
-            if feature_bundle.read(8) != b"SVFEAT1\0":
+            if feature_bundle.read(8) != b"SVFEAT2\0":
                 raise RuntimeError("Invalid C++ feature bundle.")
             n_models = struct.unpack("<I", feature_bundle.read(4))[0]
             for _ in range(n_models):
@@ -36,62 +44,21 @@ class Classifier:
                 n_variants = struct.unpack("<Q", feature_bundle.read(8))[0]
                 n_features = struct.unpack("<I", feature_bundle.read(4))[0]
                 variant_ids = np.fromfile(feature_bundle, dtype="<u8", count=n_variants)
+                record_keys = np.fromfile(feature_bundle, dtype="<u8", count=n_variants)
                 feature_values = np.fromfile(feature_bundle, dtype="<f8", count=n_variants*n_features).reshape((n_variants, n_features))
                 if n_variants > 0:
                     test_data[model_name] = feature_values
                     test_variant_ids[model_name] = variant_ids
-        return test_data, test_variant_ids
+                    test_record_keys[model_name] = record_keys
+        return test_data, test_variant_ids, test_record_keys
 
-    def get_info_string(record, key):
-        if key not in record.info:
-            return ""
-        value = record.info[key]
-        if isinstance(value, (list, tuple)):
-            return ",".join(str(x) for x in value)
-        return str(value)
-
-    def generate_id(record, model_name):
-        canonical_id = "%s:%d-%d:%s:%d:%s:%s:%s:%s:%s" % (
-            record.chrom, record.pos, record.stop, features.Features.get_svtype(record), features.Features.get_svlen(record),
-            features.Features.get_svinsseq(record), Classifier.get_info_string(record, "AUX_SNPS"), Classifier.get_info_string(record, "AUX_INDELS"),
-            record.id if record.id is not None else ".", model_name)
-        variant_id = 14695981039346656037
-        for byte in canonical_id.encode("utf-8"):
-            variant_id = ((variant_id ^ byte)*1099511628211) & 0xffffffffffffffff
-        return variant_id
-
-    def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, out_vcf_fname, stats_fname, threads):
-        stats = features.load_stats(stats_fname)
-        vcf_writer = pysam.VariantFile(out_vcf_fname, 'wz', header=vcf_header, threads=threads)
-        for record in vcf_reader.fetch():
-            if not features.Features.skips_ml_genotyping(record):
-                record.filter.clear()
-                record.samples[0]['EPR'] = None
-                record.samples[0]['HOPR'] = None
-                record.samples[0]['EXPR'] = None
-                record.samples[0]['EREFA'] = None
-                max_is, read_len = features.get_stat(stats, 'max_is', record.chrom), features.get_stat(stats, 'read_len', record.chrom)
-                model_name = features.Features.get_model_name(record, max_is, read_len)
-                record_id = Classifier.generate_id(record, model_name)
-                if record_id in svid_to_gt:
-                    gt = (svid_to_gt[record_id]//2, 1 if svid_to_gt[record_id] >= 1 else 0)
-                    if model_name in ("DUP_LARGE", "DUP_LARGE_NOEXL", "INS_TO_DUP_LARGE"):
-                        if gt[1] == 1:
-                            gt = (None, 1)
-                    record.samples[0]['GT'] = gt
-                    record.samples[0]['EPR'] = float(svid_to_epr[record_id])
-                    if svid_to_gt[record_id] >= 1:
-                        record.samples[0]['HOPR'] = float(svid_to_hopr[record_id])
-                    if record_id in svid_to_expr:
-                        record.samples[0]['EXPR'] = float(svid_to_expr[record_id])
-                    if record_id in svid_to_erefa:
-                        record.samples[0]['EREFA'] = int(svid_to_erefa[record_id])
-                else:
-                    record.samples[0]['GT'] = (None, None)
-                vcf_writer.write(record)
-            else:
-                vcf_writer.write(record)
-        vcf_writer.close()
+    def write_prediction_bundle(predictions_fname, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, svid_to_record_key, svid_to_model_name):
+        with open(predictions_fname, "wb") as predictions_file:
+            predictions_file.write(b"SVPRED1\0")
+            predictions_file.write(struct.pack("<Q", len(svid_to_gt)))
+            for variant_id, gt in svid_to_gt.items():
+                force_missing_ref = int(gt >= 1 and svid_to_model_name[variant_id] in ("DUP_LARGE", "DUP_LARGE_NOEXL", "INS_TO_DUP_LARGE"))
+                predictions_file.write(struct.pack("<Qbbfffb", svid_to_record_key[variant_id], int(gt), force_missing_ref, float(svid_to_epr[variant_id]), float(svid_to_hopr.get(variant_id, np.nan)), float(svid_to_expr.get(variant_id, np.nan)), int(svid_to_erefa.get(variant_id, -1))))
 
     def run_classifier(in_vcf, out_vcf, stats_fname, model_dir, threads=1):
         cmd = "Classifier.run_classifier %s %s %s %s --threads %d" % (in_vcf, out_vcf, stats_fname, model_dir, threads)
@@ -105,12 +72,13 @@ class Classifier:
         with tempfile.TemporaryDirectory(prefix=".surveyor-features-", dir=output_dir) as temp_dir:
             feature_bundle_fname = os.path.join(temp_dir, "features.bin")
             subprocess.run([Classifier.get_extractor_path(), in_vcf, stats_fname, os.path.join(model_dir, "yes_or_no"), feature_bundle_fname, str(threads)], check=True)
-            test_data, test_variant_ids = Classifier.load_feature_bundle(feature_bundle_fname)
+            test_data, test_variant_ids, test_record_keys = Classifier.load_feature_bundle(feature_bundle_fname)
         print("Feature parsing was run in %.2f seconds" % (timeit.default_timer()-parse_start_time))
 
         classification_start_time = timeit.default_timer()
         svid_to_gt = dict()
         svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa = dict(), dict(), dict(), dict()
+        svid_to_record_key, svid_to_model_name = dict(), dict()
         for model_name in test_data:
             model_file = os.path.join(model_dir, "yes_or_no", model_name+'.ubj')
             classifier = xgb.XGBClassifier(n_jobs=threads)
@@ -120,6 +88,8 @@ class Classifier:
             for i in range(len(predictions)):
                 svid_to_gt[test_variant_ids[model_name][i]] = predictions[i]
                 svid_to_epr[test_variant_ids[model_name][i]] = eprs[i][1]
+                svid_to_record_key[test_variant_ids[model_name][i]] = test_record_keys[model_name][i]
+                svid_to_model_name[test_variant_ids[model_name][i]] = model_name
 
             positive_mask = predictions == 1
             positive_data = test_data[model_name][positive_mask]
@@ -155,19 +125,11 @@ class Classifier:
         print("Classification was run in %.2f seconds" % (timeit.default_timer()-classification_start_time))
 
         write_start_time = timeit.default_timer()
-        vcf_reader = pysam.VariantFile(in_vcf, threads=threads)
-        header = vcf_reader.header
-        if 'EPR' not in header.formats:
-            header.add_line('##FORMAT=<ID=EPR,Number=1,Type=Float,Description="Probability of the SV existing in the sample, according to the ML model.">')
-        if 'HOPR' not in header.formats:
-            header.add_line('##FORMAT=<ID=HOPR,Number=1,Type=Float,Description="Probability of an existing SV to be homozygous, according to the ML model.">')
-        if 'EXPR' not in header.formats:
-            header.add_line('##FORMAT=<ID=EXPR,Number=1,Type=Float,Description="Probability of the SV to be represented exactly, according to the ML model.">')
-        if 'EREFA' not in header.formats:
-            header.add_line('##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description="Whether the EREFA-stage classifier requires the other allele to be reference.">')
-        if training_set_sha256 is not None:
-            set_training_set_vcf_header(header, training_set_sha256)
-        Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, out_vcf, stats_fname, threads)
+        output_dir = os.path.dirname(os.path.abspath(out_vcf))
+        with tempfile.TemporaryDirectory(prefix=".surveyor-predictions-", dir=output_dir) as temp_dir:
+            predictions_fname = os.path.join(temp_dir, "predictions.bin")
+            Classifier.write_prediction_bundle(predictions_fname, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, svid_to_record_key, svid_to_model_name)
+            subprocess.run([Classifier.get_writer_path(), in_vcf, predictions_fname, out_vcf, training_set_sha256 if training_set_sha256 is not None else ".", str(threads)], check=True)
         print("VCF writing was run in %.2f seconds" % (timeit.default_timer()-write_start_time))
 
 

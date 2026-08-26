@@ -54,6 +54,7 @@ struct selected_alt_read_metrics_t {
 struct model_data_t {
     std::vector<std::string> feature_names;
     std::vector<uint64_t> variant_ids;
+    std::vector<uint64_t> record_keys;
     std::vector<double> values;
 };
 
@@ -696,15 +697,18 @@ std::map<std::string, model_data_t> process_chrom(const std::string& vcf_fname, 
     std::map<std::string, model_data_t> models = model_definitions;
     bcf_srs_t* reader = open_region_reader(vcf_fname, chrom);
     bcf_hdr_t* hdr = reader->readers[0].header;
+    uint64_t record_idx = 0;
     while (bcf_sr_next_line(reader)) {
         bcf1_t* record = bcf_sr_get_line(reader, 0);
         bcf_unpack(record, BCF_UN_ALL);
+        uint64_t record_key = (uint64_t(uint32_t(record->rid))<<32)|record_idx++;
         if (get_svtype(hdr, record).find("INV") == 0) continue;
         std::string model_name = get_model_name(hdr, record, get_stat(stats, "max_is", chrom), get_stat(stats, "read_len", chrom));
         auto model_it = models.find(model_name);
         if (model_it == models.end()) { bcf_sr_destroy(reader); throw std::runtime_error("No .features file found for model " + model_name + "."); }
         std::vector<double> values = record_to_features(hdr, record, stats, model_it->second.feature_names, alt_reads_by_vid);
         model_it->second.variant_ids.push_back(generate_id(hdr, record, model_name));
+        model_it->second.record_keys.push_back(record_key);
         model_it->second.values.insert(model_it->second.values.end(), values.begin(), values.end());
     }
     bcf_sr_destroy(reader);
@@ -732,13 +736,14 @@ void extract_features(const std::string& vcf_fname, const std::string& stats_fna
             model_data_t& dest = models.at(model_entry.first);
             model_data_t& src = model_entry.second;
             dest.variant_ids.insert(dest.variant_ids.end(), src.variant_ids.begin(), src.variant_ids.end());
+            dest.record_keys.insert(dest.record_keys.end(), src.record_keys.begin(), src.record_keys.end());
             dest.values.insert(dest.values.end(), src.values.begin(), src.values.end());
         }
     }
 
     std::ofstream out(output_fname, std::ios::binary);
     if (!out) throw std::runtime_error("Failed to create " + output_fname + ".");
-    const char magic[8] = {'S', 'V', 'F', 'E', 'A', 'T', '1', '\0'};
+    const char magic[8] = {'S', 'V', 'F', 'E', 'A', 'T', '2', '\0'};
     out.write(magic, sizeof(magic));
     uint32_t n_models = models.size();
     out.write((char*)&n_models, sizeof(n_models));
@@ -750,6 +755,7 @@ void extract_features(const std::string& vcf_fname, const std::string& stats_fna
         out.write((char*)&name_len, sizeof(name_len)); out.write(model_name.data(), name_len);
         out.write((char*)&n_variants, sizeof(n_variants)); out.write((char*)&n_features, sizeof(n_features));
         if (n_variants > 0) out.write((char*)model.variant_ids.data(), n_variants*sizeof(uint64_t));
+        if (n_variants > 0) out.write((char*)model.record_keys.data(), n_variants*sizeof(uint64_t));
         if (!model.values.empty()) out.write((char*)model.values.data(), model.values.size()*sizeof(double));
     }
     if (!out) throw std::runtime_error("Failed while writing " + output_fname + ".");
