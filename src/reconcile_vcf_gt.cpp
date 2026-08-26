@@ -163,8 +163,8 @@ void copy_all_format_to_base(bcf_hdr_t* base_hdr, htsFile* base_fp, const std::u
 }
 
 int main(int argc, char** argv) {
-    if (argc != 5) {
-        std::cerr << "Usage: " << argv[0] << " <base_vcf> <gt_vcf> <out_vcf> <sample>" << std::endl;
+    if (argc != 5 && argc != 6) {
+        std::cerr << "Usage: " << argv[0] << " <base_vcf> <gt_vcf> <out_vcf> <sample> [threads]" << std::endl;
         return 1;
     }
 
@@ -172,6 +172,7 @@ int main(int argc, char** argv) {
     std::string gt_vcf_fname = argv[2];
     std::string out_vcf_fname = argv[3];
     std::string sample = argv[4];
+    int n_threads = argc == 6 ? std::max(1, std::stoi(argv[5])) : 4;
 
     // Load gt_vcf records, keeping the one with the highest EPR per ID
     auto gt_records = load_gt_vcf(gt_vcf_fname);
@@ -220,6 +221,10 @@ int main(int argc, char** argv) {
     htsFile* out_fp = bcf_open(out_vcf_fname.c_str(), "wz");
     if (!out_fp) {
         std::cerr << "Error opening " << out_vcf_fname << std::endl;
+        exit(1);
+    }
+    if (hts_set_threads(out_fp, n_threads) != 0) {
+        std::cerr << "Error enabling multithreaded compression for " << out_vcf_fname << std::endl;
         exit(1);
     }
     if (bcf_hdr_write(out_fp, out_hdr) < 0) {
