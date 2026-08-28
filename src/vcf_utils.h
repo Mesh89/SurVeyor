@@ -1441,6 +1441,13 @@ std::shared_ptr<sv_t> bcf_to_sv(bcf_hdr_t* hdr, bcf1_t* b) {
 		free(f_data);
 	}
 
+	data = NULL;
+	len = 0;
+	if (bcf_get_format_int32(hdr, b, "TD", &data, &len) > 0 && len > 0 && data[0] != bcf_int32_missing && data[0] != bcf_int32_vector_end) {
+		sv->sample_info.too_deep = data[0];
+	}
+	free(data);
+
 	return sv;
 }
 

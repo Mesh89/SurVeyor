@@ -127,6 +127,7 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     bam1_t* read = bam_init1();
 
     std::vector<std::shared_ptr<bam1_t>> alt_bp1_better_reads, alt_bp2_better_reads, ref_bp1_better_reads, ref_bp2_better_reads;
+    std::vector<std::string> er_reads;
     std::vector<int> alt_bp1_better_read_positions, alt_bp2_better_read_positions;
     std::vector<int> alt_bp1_better_scores, alt_bp2_better_scores;
     hts_pos_t alt_bp1_pos = alt_lf_len;
@@ -149,7 +150,6 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         if (only_allow_alt && (!can_align_to_alt || !is_hidden_split_read(read, config))) continue;
 
         std::string seq = get_sequence(read);
-        bool ref_is_exact_match = is_perfectly_aligned(read);
 
         // do not consider pathologically deep regions
         aln_reads++;
@@ -162,96 +162,94 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
             alt_bp2_better_scores.clear();
             ref_bp1_better_reads.clear();
             ref_bp2_better_reads.clear();
+            er_reads.clear();
             ins->sample_info.alt_ref_equal_reads = 0;
             ins->sample_info.alt_ref_equal_reads_highmq = 0;
             evidence_map->clear_other_read_support_for_too_deep(ins->sample_info);
             break;
         }
-        
-        // align to ALT
-        alt1_aln = align_fast(aligner, seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, ref_is_exact_match);
-        alt2_aln = align_fast(aligner, seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_pos, ref_is_exact_match);
-        bool alt1_covers_bp1 = alt1_aln.ref_begin <= alt_bp1_pos && alt1_aln.ref_end >= alt_bp1_pos;
-        bool alt2_covers_bp2 = alt2_aln.ref_begin <= alt_bp2_pos && alt2_aln.ref_end >= alt_bp2_pos;
-        
-        // align to REF (two breakpoints)
-        bool ref1_covers_bp1, ref2_covers_bp2;
-        if (ref_is_exact_match) {
-            ref1_aln.Clear();
-            ref2_aln.Clear();
-            ref1_aln.sw_score = read->core.l_qseq;
-            ref2_aln.sw_score = read->core.l_qseq;
-            ref1_covers_bp1 = read->core.pos <= ins_start && bam_endpos(read) > ins_start;
-            ref2_covers_bp2 = read->core.pos <= ins_end && bam_endpos(read) > ins_end;
-        } else {
-            aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_w_aux_len, filter_with_pos, &ref1_aln, 0);
-            aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_w_aux_len, filter_with_pos, &ref2_aln, 0);
-            ref1_covers_bp1 = ref1_aln.ref_begin <= ref_bp1_w_aux_pos && ref1_aln.ref_end >= ref_bp1_w_aux_pos;
-            ref2_covers_bp2 = ref2_aln.ref_begin <= ref_bp2_w_aux_pos && ref2_aln.ref_end >= ref_bp2_w_aux_pos;
-        }
 
-        StripedSmithWaterman::Alignment& alt_aln = alt1_aln.sw_score >= alt2_aln.sw_score ? alt1_aln : alt2_aln;
-        StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
-        bool alt_or_ref_read = false;
-        bool add_alt_bp1_better_read = false;
-        bool add_alt_bp2_better_read = false;
-        bool add_ref_bp1_better_read = false;
-        bool add_ref_bp2_better_read = false;
-        if (alt_aln.sw_score > ref_aln.sw_score) {
-            if (alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
-                add_alt_bp1_better_read = true;
-                alt_or_ref_read = true;
-            }
-            if (alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
-                add_alt_bp2_better_read = true;
-                alt_or_ref_read = true;
-            }
-        } else if (!only_allow_alt && alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln, config.min_clip_len)) {
-            if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_covers_bp1) {
-                add_ref_bp1_better_read = true;
-                alt_or_ref_read = true;
-            }
-            if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_covers_bp2) {
-                add_ref_bp2_better_read = true;
-                alt_or_ref_read = true;
-            }
-        } else if (!only_allow_alt && alt_aln.sw_score == ref_aln.sw_score) {
+        int cached_alt_bp1_pos = reassign_evidence ? evidence_map->get_read_alt_pos(read, ins, 1) : -1;
+        int cached_alt_bp2_pos = reassign_evidence ? evidence_map->get_read_alt_pos(read, ins, 2) : -1;
+        bool cached_alt_read = cached_alt_bp1_pos >= 0 || cached_alt_bp2_pos >= 0;
+        bool cached_ref_bp1_read = reassign_evidence && evidence_map->is_read_ref(read, ins, 1);
+        bool cached_ref_bp2_read = reassign_evidence && evidence_map->is_read_ref(read, ins, 2);
+        bool cached_ref_read = cached_ref_bp1_read || cached_ref_bp2_read;
+        bool cached_er_read = reassign_evidence && evidence_map->is_read_er(read, ins);
+        bool alt_or_ref_read = cached_alt_read || cached_ref_read;
+        bool add_alt_bp1_better_read = cached_alt_bp1_pos >= 0;
+        bool add_alt_bp2_better_read = cached_alt_bp2_pos >= 0;
+        bool add_ref_bp1_better_read = cached_ref_bp1_read;
+        bool add_ref_bp2_better_read = cached_ref_bp2_read;
+        if (cached_er_read) {
             ins->sample_info.alt_ref_equal_reads++;
-            if (read->core.qual >= config.high_confidence_mapq) {
-                ins->sample_info.alt_ref_equal_reads_highmq++;
+            if (read->core.qual >= config.high_confidence_mapq) ins->sample_info.alt_ref_equal_reads_highmq++;
+        } else if (!cached_alt_read && !cached_ref_read) {
+            bool ref_is_exact_match = is_perfectly_aligned(read);
+
+            // align to ALT
+            alt1_aln = align_fast(aligner, seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_pos, ref_is_exact_match);
+            alt2_aln = align_fast(aligner, seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_pos, ref_is_exact_match);
+            bool alt1_covers_bp1 = alt1_aln.ref_begin <= alt_bp1_pos && alt1_aln.ref_end >= alt_bp1_pos;
+            bool alt2_covers_bp2 = alt2_aln.ref_begin <= alt_bp2_pos && alt2_aln.ref_end >= alt_bp2_pos;
+
+            // align to REF (two breakpoints)
+            bool ref1_covers_bp1, ref2_covers_bp2;
+            if (ref_is_exact_match) {
+                ref1_aln.Clear();
+                ref2_aln.Clear();
+                ref1_aln.sw_score = read->core.l_qseq;
+                ref2_aln.sw_score = read->core.l_qseq;
+                ref1_covers_bp1 = read->core.pos <= ins_start && bam_endpos(read) > ins_start;
+                ref2_covers_bp2 = read->core.pos <= ins_end && bam_endpos(read) > ins_end;
+            } else {
+                aligner.Align(seq.c_str(), ref_bp1_w_aux_seq, ref_bp1_w_aux_len, filter_with_pos, &ref1_aln, 0);
+                aligner.Align(seq.c_str(), ref_bp2_w_aux_seq, ref_bp2_w_aux_len, filter_with_pos, &ref2_aln, 0);
+                ref1_covers_bp1 = ref1_aln.ref_begin <= ref_bp1_w_aux_pos && ref1_aln.ref_end >= ref_bp1_w_aux_pos;
+                ref2_covers_bp2 = ref2_aln.ref_begin <= ref_bp2_w_aux_pos && ref2_aln.ref_end >= ref_bp2_w_aux_pos;
+            }
+
+            StripedSmithWaterman::Alignment& alt_aln = alt1_aln.sw_score >= alt2_aln.sw_score ? alt1_aln : alt2_aln;
+            StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
+            if (alt_aln.sw_score > ref_aln.sw_score) {
+                if (alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
+                    add_alt_bp1_better_read = true;
+                    alt_or_ref_read = true;
+                }
+                if (alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
+                    add_alt_bp2_better_read = true;
+                    alt_or_ref_read = true;
+                }
+            } else if (!only_allow_alt && alt_aln.sw_score < ref_aln.sw_score && !is_clipped(ref_aln, config.min_clip_len)) {
+                if (ref1_aln.sw_score >= ref2_aln.sw_score && ref1_covers_bp1) {
+                    add_ref_bp1_better_read = true;
+                    alt_or_ref_read = true;
+                }
+                if (ref1_aln.sw_score <= ref2_aln.sw_score && ref2_covers_bp2) {
+                    add_ref_bp2_better_read = true;
+                    alt_or_ref_read = true;
+                }
+            } else if (!only_allow_alt && alt_aln.sw_score == ref_aln.sw_score) {
+                ins->sample_info.alt_ref_equal_reads++;
+                if (read->core.qual >= config.high_confidence_mapq) ins->sample_info.alt_ref_equal_reads_highmq++;
+                if (evidence_logger) er_reads.push_back(read_name_with_suffix(read));
             }
         }
 
-        // OAR reads remain excluded from AR; ORR reads continue into the regular RR statistics below.
+        // OAR/ORR are propagated by the read owner; assigned-away ALT reads remain excluded from AR and REF reads continue into RR.
         if (alt_or_ref_read && reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) {
-            if (add_alt_bp1_better_read) {
-                ins->sample_info.oar_bp1_reads++;
-                evidence_map->register_oar_support(ins->sample_info, 1, read);
-            }
-            if (add_alt_bp2_better_read) {
-                ins->sample_info.oar_bp2_reads++;
-                evidence_map->register_oar_support(ins->sample_info, 2, read);
-            }
-            if (add_ref_bp1_better_read) {
-                ins->sample_info.orr_bp1_reads++;
-                evidence_map->register_orr_support(ins->sample_info, 1, read);
-            }
-            if (add_ref_bp2_better_read) {
-                ins->sample_info.orr_bp2_reads++;
-                evidence_map->register_orr_support(ins->sample_info, 2, read);
-            }
             if (add_alt_bp1_better_read || add_alt_bp2_better_read) continue;
         }
 
         if (add_alt_bp1_better_read) {
             alt_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-            alt_bp1_better_scores.push_back(alt1_aln.sw_score);
-            alt_bp1_better_read_positions.push_back(alt1_aln.ref_begin);
+            alt_bp1_better_scores.push_back(cached_alt_read ? 0 : alt1_aln.sw_score);
+            alt_bp1_better_read_positions.push_back(cached_alt_read ? cached_alt_bp1_pos : alt1_aln.ref_begin);
         }
         if (add_alt_bp2_better_read) {
             alt_bp2_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-            alt_bp2_better_scores.push_back(alt2_aln.sw_score);
-            alt_bp2_better_read_positions.push_back(alt2_aln.ref_begin);
+            alt_bp2_better_scores.push_back(cached_alt_read ? 0 : alt2_aln.sw_score);
+            alt_bp2_better_read_positions.push_back(cached_alt_read ? cached_alt_bp2_pos : alt2_aln.ref_begin);
         }
         if (add_ref_bp1_better_read) {
             ref_bp1_better_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
@@ -261,8 +259,11 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
         }
     }
 
-    if (evidence_logger) evidence_logger->log_reads_associations(ins->id, 1, alt_bp1_better_reads, alt_bp1_better_scores);
-    if (evidence_logger) evidence_logger->log_reads_associations(ins->id, 2, alt_bp2_better_reads, alt_bp2_better_scores);
+    if (evidence_logger) evidence_logger->log_reads_associations(ins->chr, ins->id, 1, alt_bp1_better_reads, alt_bp1_better_scores, alt_bp1_better_read_positions);
+    if (evidence_logger) evidence_logger->log_reads_associations(ins->chr, ins->id, 2, alt_bp2_better_reads, alt_bp2_better_scores, alt_bp2_better_read_positions);
+    if (evidence_logger) evidence_logger->log_ref_reads_associations(ins->chr, ins->id, 1, ref_bp1_better_reads);
+    if (evidence_logger) evidence_logger->log_ref_reads_associations(ins->chr, ins->id, 2, ref_bp2_better_reads);
+    if (evidence_logger) evidence_logger->log_er_reads_associations(ins->chr, ins->id, er_reads);
 
     std::string alt_bp1_consensus_seq, alt_bp2_consensus_seq, ref_bp1_consensus_seq, ref_bp2_consensus_seq;
     double alt_bp1_avg_score, alt_bp2_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
@@ -278,31 +279,13 @@ void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTree<ext_r
     ins->sample_info.alt2_occ_ratio = occ_ratio(alt_bp2_better_read_positions_consistent, alt2_ref_diff_reads_expected_positions.size());
 
     if (reassign_evidence) {
-        std::vector<bam1_t*> alt_better_reads_consistent;
-        std::unordered_map<std::string, bool> alt_better_read_is_exact;
-        std::unordered_set<std::string> seen;
         for (int i = 0; i < alt_bp1_better_reads.size(); i++) {
-            if (!alt_bp1_is_consistent_read[i]) continue;
             const auto& r = alt_bp1_better_reads[i];
-            std::string read_name = read_name_with_suffix(r.get());
-            alt_better_read_is_exact[read_name] |= alt_bp1_is_exact_read[i];
-            if (!seen.count(read_name)) {
-                seen.insert(read_name);
-                alt_better_reads_consistent.push_back(r.get());
-            }
+            evidence_map->record_assigned_alt_read(ins, r.get(), alt_bp1_is_consistent_read[i], get_mq(r.get()) >= config.high_confidence_mapq, alt_bp1_is_exact_read[i]);
         }
         for (int i = 0; i < alt_bp2_better_reads.size(); i++) {
-            if (!alt_bp2_is_consistent_read[i]) continue;
             const auto& r = alt_bp2_better_reads[i];
-            std::string read_name = read_name_with_suffix(r.get());
-            alt_better_read_is_exact[read_name] |= alt_bp2_is_exact_read[i];
-            if (!seen.count(read_name)) {
-                seen.insert(read_name);
-                alt_better_reads_consistent.push_back(r.get());
-            }
-        }
-        for (bam1_t* r : alt_better_reads_consistent) {
-            evidence_map->record_assigned_read_consistency(r, get_mq(r) >= config.high_confidence_mapq, alt_better_read_is_exact[read_name_with_suffix(r)]);
+            evidence_map->record_assigned_alt_read(ins, r.get(), alt_bp2_is_consistent_read[i], get_mq(r.get()) >= config.high_confidence_mapq, alt_bp2_is_exact_read[i]);
         }
     }
 

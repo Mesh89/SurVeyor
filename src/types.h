@@ -252,11 +252,6 @@ struct sv_t {
 
     };
 
-    struct other_read_info_t {
-        bool hq = false;
-        bool exact = false;
-    };
-
     struct sample_info_t {
         static const int NOT_COMPUTED = -1;
 
@@ -272,7 +267,13 @@ struct sv_t {
         bp_pairs_info_t bp1_stray_pairs, bp2_stray_pairs; // pairs that are discordant and yet do not support the SV
 
         int oar_bp1_reads = 0, oar_bp2_reads = 0;
+        int oar_bp1_consistent_reads = 0, oar_bp2_consistent_reads = 0;
+        int oar_bp1_consistent_hq_reads = 0, oar_bp2_consistent_hq_reads = 0;
+        int oar_bp1_exact_reads = 0, oar_bp2_exact_reads = 0;
         int orr_bp1_reads = 0, orr_bp2_reads = 0;
+        int orr_bp1_consistent_reads = 0, orr_bp2_consistent_reads = 0;
+        int orr_bp1_consistent_hq_reads = 0, orr_bp2_consistent_hq_reads = 0;
+        int orr_bp1_exact_reads = 0, orr_bp2_exact_reads = 0;
 
         // Number of reads assigned away to each destination haplotype, separately by ALT breakpoint.
         std::unordered_map<int, int> oar_bp1_reads_by_hpid;
@@ -281,12 +282,6 @@ struct sv_t {
         // Number of reads attributed to each best-scoring variant within the selected destination haplotype.
         std::unordered_map<std::string, int> oar_bp1_reads_by_vid;
         std::unordered_map<std::string, int> oar_bp2_reads_by_vid;
-
-        // OAR*C and ORR*C sources of truth keyed by suffixed read id; hq and exact derive CHQ and E.
-        std::unordered_map<std::string, other_read_info_t> oar_bp1_consistent_reads;
-        std::unordered_map<std::string, other_read_info_t> oar_bp2_consistent_reads;
-        std::unordered_map<std::string, other_read_info_t> orr_bp1_consistent_reads;
-        std::unordered_map<std::string, other_read_info_t> orr_bp2_consistent_reads;
 
         int alt_ref_equal_reads = 0, alt_ref_equal_reads_highmq = 0;
         int alt_lext_reads = 0, hq_alt_lext_reads = 0, alt_rext_reads = 0, hq_alt_rext_reads = 0;

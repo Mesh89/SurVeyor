@@ -1,4 +1,5 @@
 #include "genotype.h"
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -229,27 +230,7 @@ bool genotype_when_reassigning_evidence(const sv_t* sv) {
     return config.training_mode || sv->sample_info.epr >= MIN_EPR;
 }
 
-int get_other_read_count(const std::unordered_map<std::string, sv_t::other_read_info_t>& reads) {
-    return static_cast<int>(reads.size());
-}
-
-int get_other_read_hq_count(const std::unordered_map<std::string, sv_t::other_read_info_t>& reads) {
-    int count = 0;
-    for (const auto& kv : reads) {
-        if (kv.second.hq) count++;
-    }
-    return count;
-}
-
-int get_other_read_exact_count(const std::unordered_map<std::string, sv_t::other_read_info_t>& reads) {
-    int count = 0;
-    for (const auto& kv : reads) {
-        if (kv.second.exact) count++;
-    }
-    return count;
-}
-
-void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const std::string& prefix, int bp_number, bool computed, int reads, const std::unordered_map<std::string, sv_t::other_read_info_t>& consistent_reads) {
+void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const std::string& prefix, int bp_number, bool computed, int reads, int consistent, int consistent_hq, int exact) {
     const std::string tag = prefix + std::to_string(bp_number);
     const std::string consistent_tag = tag + "C";
     const std::string consistent_hq_tag = tag + "CHQ";
@@ -266,14 +247,8 @@ void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const 
 
     bcf_update_format_int32(out_hdr, record, tag.c_str(), &reads, 1);
     if (prefix == "OAR") bcf_update_format_int32(out_hdr, record, (tag + "ALL").c_str(), &reads, 1);
-
-    int consistent = get_other_read_count(consistent_reads);
     bcf_update_format_int32(out_hdr, record, consistent_tag.c_str(), &consistent, 1);
-
-    int consistent_hq = get_other_read_hq_count(consistent_reads);
     bcf_update_format_int32(out_hdr, record, consistent_hq_tag.c_str(), &consistent_hq, 1);
-
-    int exact = get_other_read_exact_count(consistent_reads);
     bcf_update_format_int32(out_hdr, record, exact_tag.c_str(), &exact, 1);
 }
 
@@ -462,16 +437,16 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     int erhq = sv->sample_info.alt_ref_equal_reads_highmq;
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "ERHQ", &erhq, 1);
 
-    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 1, true, sv->sample_info.oar_bp1_reads, sv->sample_info.oar_bp1_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 1, true, sv->sample_info.oar_bp1_reads, sv->sample_info.oar_bp1_consistent_reads, sv->sample_info.oar_bp1_consistent_hq_reads, sv->sample_info.oar_bp1_exact_reads);
     update_oar_max_fields(out_hdr, sv->vcf_entry, 1, true,
         sv->sample_info.oar_bp1_reads_by_hpid, sv->sample_info.oar_bp1_reads_by_vid);
-    update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 1, true, sv->sample_info.orr_bp1_reads, sv->sample_info.orr_bp1_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 1, true, sv->sample_info.orr_bp1_reads, sv->sample_info.orr_bp1_consistent_reads, sv->sample_info.orr_bp1_consistent_hq_reads, sv->sample_info.orr_bp1_exact_reads);
 
     const bool bp2_computed = sv->sample_info.ref_bp2.reads_info.computed;
-    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 2, bp2_computed, sv->sample_info.oar_bp2_reads, sv->sample_info.oar_bp2_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "OAR", 2, bp2_computed, sv->sample_info.oar_bp2_reads, sv->sample_info.oar_bp2_consistent_reads, sv->sample_info.oar_bp2_consistent_hq_reads, sv->sample_info.oar_bp2_exact_reads);
     update_oar_max_fields(out_hdr, sv->vcf_entry, 2, bp2_computed,
         sv->sample_info.oar_bp2_reads_by_hpid, sv->sample_info.oar_bp2_reads_by_vid);
-    update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 2, bp2_computed, sv->sample_info.orr_bp2_reads, sv->sample_info.orr_bp2_consistent_reads);
+    update_other_read_support_fields(out_hdr, sv->vcf_entry, "ORR", 2, bp2_computed, sv->sample_info.orr_bp2_reads, sv->sample_info.orr_bp2_consistent_reads, sv->sample_info.orr_bp2_consistent_hq_reads, sv->sample_info.orr_bp2_exact_reads);
 
     int td = sv->sample_info.too_deep;
     bcf_update_format_int32(out_hdr, sv->vcf_entry, "TD", &td, 1);
@@ -1143,7 +1118,7 @@ int main(int argc, char* argv[]) {
     std::string sample_name = argv[6];
 
     bool reassign_evidence = false;
-    std::string alt_reads_association_fname = workdir + "/alt_reads_to_sv_associations.txt";
+    std::string alt_reads_association_dir = workdir + "/reads_to_sv_associations";
     std::string alt_pairs_association_fname = workdir + "/alt_pairs_to_sv_associations.txt";
     for (int i = 7; i < argc; i++) {
         std::string arg = argv[i];
@@ -1153,7 +1128,7 @@ int main(int argc, char* argv[]) {
             if (++i >= argc) {
                 throw std::runtime_error("Missing path after --alt-read-associations.");
             }
-            alt_reads_association_fname = argv[i];
+            alt_reads_association_dir = argv[i];
         } else if (arg == "--alt-pair-associations") {
             if (++i >= argc) {
                 throw std::runtime_error("Missing path after --alt-pair-associations.");
@@ -1167,11 +1142,6 @@ int main(int argc, char* argv[]) {
     contig_map.load(workdir);
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
-
-    evidence_map_t* evidence_map = new evidence_map_t();
-    if (reassign_evidence) {
-        evidence_map->load(alt_reads_association_fname, in_vcf_fname, config);
-    }
 
     chr_seqs.read_fasta_into_map(reference_fname);
     bam_pool = new bam_pool_t(config.threads, bam_fname, reference_fname);
@@ -1212,6 +1182,7 @@ int main(int argc, char* argv[]) {
     std::unordered_map<std::string, std::vector<std::shared_ptr<duplication_t>>> dups_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<insertion_t>>> inss_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<inversion_t>>> invs_by_chr;
+    std::unordered_map<std::string, std::vector<sv_t*>> svs_by_chr;
     while (bcf_read(in_vcf_file, in_vcf_header, vcf_record) == 0) {
         std::shared_ptr<sv_t> sv = bcf_to_sv(in_vcf_header, vcf_record);
         if (sv == nullptr) {
@@ -1224,6 +1195,7 @@ int main(int argc, char* argv[]) {
         }
 
         sv->vcf_entry = bcf_dup(vcf_record);
+        svs_by_chr[sv->chr].push_back(sv.get());
         if (should_genotype_as_hp_indel(sv.get(), chr_seqs.get_seq(sv->chr), chr_seqs.get_len(sv->chr))) {
             hp_by_chr[sv->chr].push_back(sv);
         } else if (sv->svtype() == "DEL") {
@@ -1237,6 +1209,25 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    evidence_map_t empty_evidence_map;
+    std::unordered_map<std::string, std::unique_ptr<evidence_map_t>> evidence_maps_by_chr;
+    if (reassign_evidence) {
+        auto evidence_map_load_start = std::chrono::steady_clock::now();
+        for (auto& entry : svs_by_chr) {
+            std::string alt_association_fname = alt_reads_association_dir + "/" + entry.first + ".alt.txt";
+            std::string ref_association_fname = alt_reads_association_dir + "/" + entry.first + ".ref.txt";
+            std::string er_association_fname = alt_reads_association_dir + "/" + entry.first + ".er.txt";
+            std::ifstream alt_association_fin(alt_association_fname), ref_association_fin(ref_association_fname), er_association_fin(er_association_fname);
+            bool has_alt_associations = bool(alt_association_fin), has_ref_associations = bool(ref_association_fin), has_er_associations = bool(er_association_fin);
+            if (!has_alt_associations && !has_ref_associations && !has_er_associations) continue;
+            std::unique_ptr<evidence_map_t> evidence_map(new evidence_map_t());
+            evidence_map->load(has_alt_associations ? alt_association_fname : "", has_ref_associations ? ref_association_fname : "", has_er_associations ? er_association_fname : "", entry.second, config);
+            evidence_maps_by_chr.emplace(entry.first, std::move(evidence_map));
+        }
+        double evidence_map_load_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - evidence_map_load_start).count();
+        std::cout << "Evidence maps loaded in " << evidence_map_load_seconds << " seconds" << std::endl;
+    }
+
     int* imap = NULL;
     htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "wz");
     bcf_hdr_t* out_vcf_header = bcf_subset_header(in_vcf_header, sample_name, imap);
@@ -1247,7 +1238,7 @@ int main(int argc, char* argv[]) {
 
     evidence_logger_t* evidence_logger = NULL;
     if (!reassign_evidence) {
-        evidence_logger = new evidence_logger_t(alt_reads_association_fname, alt_pairs_association_fname);
+        evidence_logger = new evidence_logger_t(alt_reads_association_dir, alt_pairs_association_fname);
     }
 
     // genotype chrs in descending order of svs
@@ -1257,6 +1248,8 @@ int main(int argc, char* argv[]) {
 
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
     	std::string contig_name = contig_map.get_name(contig_id);
+        auto evidence_map_it = evidence_maps_by_chr.find(contig_name);
+        evidence_map_t* evidence_map = evidence_map_it == evidence_maps_by_chr.end() ? &empty_evidence_map : evidence_map_it->second.get();
 
         std::vector<std::shared_ptr<sv_t>>& hps = hp_by_chr[contig_name];
         std::vector<hts_pair_pos_t> ref_hp_ranges;
