@@ -35,7 +35,7 @@ double K(int n,double d)
 }
 
 
-double ks_test (std::vector<double> sample1, std::vector<double> sample2) {
+double ks_test (const std::vector<double>& sample1, std::vector<double> sample2) {
 
     unsigned int n1, n2, n_approx;
     // sample sizes
@@ -45,7 +45,8 @@ double ks_test (std::vector<double> sample1, std::vector<double> sample2) {
     int D, Dmin, Dmax, s;
     // used in computing this value d
 
-    std::vector<double>::iterator it1, it2;
+    std::vector<double>::const_iterator it1;
+    std::vector<double>::iterator it2;
 
     // Determine sample sizes
     n1 = sample1.size();
@@ -55,7 +56,6 @@ double ks_test (std::vector<double> sample1, std::vector<double> sample2) {
     n_approx = (unsigned) ceil(float(n1*n2)/(n1+n2));
 
     // Sort samples
-    std::sort(sample1.begin(), sample1.end());
     std::sort(sample2.begin(), sample2.end());
 
     // We divide the range 0..1 into n1*n2 intervals of equal size 1/(n1*n2).

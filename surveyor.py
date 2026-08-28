@@ -456,6 +456,9 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
     run_cmd(insertions_to_duplications_cmd)
 
     mkdir_clean(workdir + "/reads_to_sv_associations")
+    generate_read_evidence_cmd = SURVEYOR_PATH + "/bin/generate_read_evidence %s/intermediate_results/calls-for-genotyping.vcf.gz %s %s %s" % (workdir, bam_fname, reference_fname, workdir)
+    run_cmd(generate_read_evidence_cmd)
+
     genotype_cmd = SURVEYOR_PATH + "/bin/genotype %s/intermediate_results/calls-for-genotyping.vcf.gz %s/intermediate_results/calls-with-fmt.vcf.gz %s %s %s %s" % (workdir, workdir, bam_fname, reference_fname, workdir, sample_name)
     run_cmd(genotype_cmd)
 

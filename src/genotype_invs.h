@@ -511,12 +511,13 @@ bool is_small_inv(inversion_t* inv, stats_t& stats, config_t& config) {
 
 void genotype_invs(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<inversion_t*> invs,
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
-    bam_pool_t* bam_pool, std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq_chr) {
+    bam_pool_t* bam_pool) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 
     int contig_id = contig_map.get_id(contig_name);
-    read_mates(contig_id);
+    auto chromosome_data = acquire_chromosome_data(contig_id);
+    auto mateseqs_w_mapq_chr = chromosome_data.first;
 
     std::vector<hts_pair_pos_t> target_ivals;
     for (inversion_t* inv : invs) {
@@ -607,7 +608,7 @@ void genotype_invs(int id, std::string contig_name, char* contig_seq, int contig
         }
     }
 
-    release_mates(contig_id);
+    release_chromosome_data(contig_id);
 }
 
 #endif // GENOTYPE_INVS_H

@@ -192,15 +192,9 @@ struct evidence_logger_t {
     std::unordered_map<std::string, std::unique_ptr<std::ofstream>> alt_reads_to_sv_associations;
     std::list<std::string> alt_reads_association_lru;
     std::unordered_map<std::string, std::list<std::string>::iterator> alt_reads_association_lru_iters;
-    std::ofstream alt_pairs_to_sv_associations;
     std::mutex mtx;
 
-    evidence_logger_t(const std::string& alt_reads_association_dir, const std::string& alt_pairs_association_fname) : alt_reads_association_dir(alt_reads_association_dir) {
-        alt_pairs_to_sv_associations.open(alt_pairs_association_fname);
-        if (!alt_pairs_to_sv_associations) {
-            throw std::runtime_error("Unable to open file " + alt_pairs_association_fname + ".");
-        }
-    }
+    evidence_logger_t(const std::string& alt_reads_association_dir) : alt_reads_association_dir(alt_reads_association_dir) {}
 
     std::ofstream& get_reads_association_file(const std::string& chr, const std::string& suffix) {
         std::string file_key = chr + suffix;
@@ -224,11 +218,6 @@ struct evidence_logger_t {
         alt_reads_association_lru.push_front(file_key);
         alt_reads_association_lru_iters[file_key] = alt_reads_association_lru.begin();
         return file_ref;
-    }
-
-    void log_pair_association(const std::string& sv_id, bam1_t* pair) {
-        std::lock_guard<std::mutex> lock(mtx);
-        alt_pairs_to_sv_associations << sv_id << " " << bam_get_qname(pair) << std::endl;
     }
 
     void log_reads_associations(const std::string& chr, std::string sv_id, int bp_n, std::vector<std::shared_ptr<bam1_t>>& reads, std::vector<int>& scores, std::vector<int>& positions, int alt_idx = -1) {
@@ -273,14 +262,24 @@ struct evidence_logger_t {
     evidence_logger_t& operator=(const evidence_logger_t&) = delete;
 };
 
+enum class evidence_mode_t {
+    CACHED,
+    REASSIGN
+};
+
+inline bool reassigns_evidence(evidence_mode_t evidence_mode) {
+    return evidence_mode == evidence_mode_t::REASSIGN;
+}
+
 struct evidence_map_t {
     struct read_alt_association_t {
         sv_t* sv;
         int bp;
         int pos;
         int alt_idx;
+        int score;
 
-        read_alt_association_t(sv_t* sv, int bp, int pos, int alt_idx) : sv(sv), bp(bp), pos(pos), alt_idx(alt_idx) {}
+        read_alt_association_t(sv_t* sv, int bp, int pos, int alt_idx, int score) : sv(sv), bp(bp), pos(pos), alt_idx(alt_idx), score(score) {}
     };
 
     struct read_alt_associations_t {
@@ -322,7 +321,7 @@ struct evidence_map_t {
 
     evidence_map_t() {}
 
-    void load(const std::string& alt_reads_association_fname, const std::string& ref_reads_association_fname, const std::string& er_reads_association_fname, const std::vector<sv_t*>& svs, config_t& config) {
+    void load(const std::string& alt_reads_association_fname, const std::string& ref_reads_association_fname, const std::string& er_reads_association_fname, const std::vector<sv_t*>& svs, config_t& config, bool resolve_assignments) {
         read_assignments.clear();
         read_alt_associations.clear();
         read_ref_associations.clear();
@@ -335,20 +334,22 @@ struct evidence_map_t {
         std::unordered_map<std::string, int> sv_hpid_map;
         std::unordered_map<std::string, sv_t*> sv_by_exact_id;
         for (sv_t* sv : svs) {
-            std::string id = remove_svid_dup_suffix(sv->id);
-            sv_epr_map[id] = sv->sample_info.epr;
-            sv_hpid_map[id] = sv->hpid;
             sv_by_exact_id[sv->id] = sv;
+            if (resolve_assignments) {
+                std::string id = remove_svid_dup_suffix(sv->id);
+                sv_epr_map[id] = sv->sample_info.epr;
+                sv_hpid_map[id] = sv->hpid;
+            }
         }
 
-        for (const auto& entry : sv_hpid_map) {
-            uint32_t vid_idx = sv_id_by_idx.size();
-            sv_id_to_idx.emplace(entry.first, vid_idx);
-            sv_id_by_idx.push_back(entry.first);
-            vid_idxs_by_hpid[entry.second].push_back(vid_idx);
-        }
-        for (auto& entry : vid_idxs_by_hpid) {
-            std::sort(entry.second.begin(), entry.second.end());
+        if (resolve_assignments) {
+            for (const auto& entry : sv_hpid_map) {
+                uint32_t vid_idx = sv_id_by_idx.size();
+                sv_id_to_idx.emplace(entry.first, vid_idx);
+                sv_id_by_idx.push_back(entry.first);
+                vid_idxs_by_hpid[entry.second].push_back(vid_idx);
+            }
+            for (auto& entry : vid_idxs_by_hpid) std::sort(entry.second.begin(), entry.second.end());
         }
 
         std::map<std::vector<uint32_t>, uint32_t> vid_set_to_idx;
@@ -404,7 +405,8 @@ struct evidence_map_t {
         // For each read, find the best association. Furthermore, flag reads that have a "best" association to multiple SVs
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score >> pos >> alt_idx) {
             std::string exact_sv_id = sv_id;
-            read_alt_associations[read_name].associations.push_back(read_alt_association_t(sv_by_exact_id.at(exact_sv_id), bp, pos, alt_idx));
+            read_alt_associations[read_name].associations.push_back(read_alt_association_t(sv_by_exact_id.at(exact_sv_id), bp, pos, alt_idx, score));
+            if (!resolve_assignments) continue;
             sv_id = remove_svid_dup_suffix(sv_id);
             bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
             int hpid = sv_hpid_map[sv_id];
@@ -427,8 +429,7 @@ struct evidence_map_t {
             }
         }
 
-        alt_reads_association_fin.clear();
-        alt_reads_association_fin.seekg(0, std::ios::beg);
+        if (!resolve_assignments) return;
 
         // Now, for each SV, we calculate U, the number of reads with a unique best
         // association to that SV.
@@ -451,19 +452,22 @@ struct evidence_map_t {
         // Only multi-VID HPIDs need a temporary per-read VID collection. For a
         // singleton HPID the VID is derived from the HPID without per-read storage.
         std::unordered_map<std::string, std::vector<uint32_t>> unique_read_vid_idxs;
-        while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score >> pos >> alt_idx) {
-            sv_id = remove_svid_dup_suffix(sv_id);
-            const best_assoc_t& best_assoc = read_to_best_assoc_map[read_name];
-            bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
-            if (passes_min_epr == best_assoc.passes_min_epr && score == best_assoc.score) {
-                if (best_assoc.unique) {
-                    int hpid = sv_hpid_map[sv_id];
-                    read_assignments[read_name] = read_assignment_t(hpid, std::numeric_limits<uint32_t>::max());
-                    if (vid_idxs_by_hpid[hpid].size() > 1) {
-                        unique_read_vid_idxs[read_name].push_back(sv_id_to_idx.at(sv_id));
+        for (const auto& read_associations : read_alt_associations) {
+            const std::string& read_name = read_associations.first;
+            const best_assoc_t& best_assoc = read_to_best_assoc_map.at(read_name);
+            for (const read_alt_association_t& association : read_associations.second.associations) {
+                sv_id = remove_svid_dup_suffix(association.sv->id);
+                bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
+                if (passes_min_epr == best_assoc.passes_min_epr && association.score == best_assoc.score) {
+                    if (best_assoc.unique) {
+                        int hpid = sv_hpid_map[sv_id];
+                        read_assignments[read_name] = read_assignment_t(hpid, std::numeric_limits<uint32_t>::max());
+                        if (vid_idxs_by_hpid[hpid].size() > 1) {
+                            unique_read_vid_idxs[read_name].push_back(sv_id_to_idx.at(sv_id));
+                        }
+                    } else {
+                        read_to_multiple_svs[read_name].push_back({sv_id, association.bp});
                     }
-                } else {
-                    read_to_multiple_svs[read_name].push_back({sv_id, bp});
                 }
             }
         }
@@ -631,7 +635,26 @@ struct evidence_map_t {
         return is_read_er(read_name_with_suffix(read), sv);
     }
 
+    bool is_read_alt(const std::string& read_name, sv_t* sv) const {
+        auto assignment_it = read_assignments.find(read_name);
+        if (assignment_it != read_assignments.end() && assignment_it->second.hpid != sv->hpid) return false;
+        for (const read_alt_association_t& association : get_read_alt_associations(read_name)) {
+            if (association.sv == sv) return true;
+        }
+        return false;
+    }
+
+    bool is_read_alt(bam1_t* read, sv_t* sv) const {
+        return is_read_alt(read_name_with_suffix(read), sv);
+    }
+
+    bool is_read_alt(const bp_support_read_t& read, sv_t* sv) const {
+        return is_read_alt(read_name_with_suffix(read), sv);
+    }
+
     int get_read_alt_pos(const std::string& read_name, sv_t* sv, int bp) const {
+        auto assignment_it = read_assignments.find(read_name);
+        if (assignment_it != read_assignments.end() && assignment_it->second.hpid != sv->hpid) return -1;
         for (const read_alt_association_t& association : get_read_alt_associations(read_name)) {
             if (association.sv == sv && association.bp == bp) return association.pos;
         }
@@ -768,8 +791,8 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std
     std::vector<bool>& is_consistent_read, std::vector<bool>& is_exact_read,
     double consistent_avg_score, double consistent_stddev_score);
 
-void read_mates(int contig_id);
-void release_mates(int contig_id);
+std::pair<std::unordered_map<std::string, std::pair<std::string, int>>*, evidence_map_t*> acquire_chromosome_data(int contig_id);
+void release_chromosome_data(int contig_id);
 
 IntervalTree<ext_read_t*> get_candidate_reads_for_extension_itree(std::string contig_name, hts_pos_t contig_len, std::vector<hts_pair_pos_t> target_ivals, open_samFile_t* bam_file,
                                                                   std::vector<ext_read_t*>& candidate_reads_for_extension);

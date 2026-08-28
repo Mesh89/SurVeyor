@@ -1,5 +1,4 @@
 #include "genotype.h"
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -42,7 +41,6 @@ chr_seqs_map_t chr_seqs;
 config_t config;
 contig_map_t contig_map;
 stats_t stats;
-std::mutex mtx;
 
 std::string bam_fname, reference_fname, workdir;
 bam_pool_t* bam_pool;
@@ -57,6 +55,13 @@ StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, false);
 std::vector<std::unordered_map<std::string, std::pair<std::string, int> > > mateseqs_w_mapq;
 std::vector<int> active_threads_per_chr;
 std::vector<std::mutex> mutex_per_chr;
+std::vector<std::vector<sv_t*>> evidence_svs_by_contig;
+std::vector<std::unique_ptr<evidence_map_t>> evidence_maps_by_contig;
+std::vector<bool> evidence_map_load_attempted;
+evidence_map_t empty_evidence_map;
+bool load_evidence_maps = false;
+evidence_mode_t evidence_mode = evidence_mode_t::CACHED;
+std::string reads_association_dir;
 
 void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_info_t bp_reads_info, std::string prefix, int bp_number) {
     if (!bp_reads_info.computed) return;
@@ -982,7 +987,7 @@ std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<st
     return is_consistent_read;
 }
 
-void read_mates(int contig_id) {
+std::pair<std::unordered_map<std::string, std::pair<std::string, int>>*, evidence_map_t*> acquire_chromosome_data(int contig_id) {
     mutex_per_chr[contig_id].lock();
     if (active_threads_per_chr[contig_id] == 0) {
 		std::string fname = workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt";
@@ -991,16 +996,40 @@ void read_mates(int contig_id) {
 		while (fin >> qname >> read_seq >> qual >> mapq) {
 			mateseqs_w_mapq[contig_id][qname] = {read_seq, mapq};
 		}
+    }
+	if (load_evidence_maps && !evidence_map_load_attempted[contig_id]) {
+        evidence_map_load_attempted[contig_id] = true;
+        std::string contig_name = contig_map.get_name(contig_id);
+        std::string alt_fname = reads_association_dir + "/" + contig_name + ".alt.txt";
+        std::string ref_fname = reads_association_dir + "/" + contig_name + ".ref.txt";
+        std::string er_fname = reads_association_dir + "/" + contig_name + ".er.txt";
+        std::string td_fname = reads_association_dir + "/" + contig_name + ".td.txt";
+        std::ifstream alt_fin(alt_fname), ref_fin(ref_fname), er_fin(er_fname), td_fin(td_fname);
+        bool has_alt = bool(alt_fin), has_ref = bool(ref_fin), has_er = bool(er_fin);
+        if (td_fin) {
+            std::unordered_map<std::string, sv_t*> sv_by_id;
+            for (sv_t* sv : evidence_svs_by_contig[contig_id]) sv_by_id[sv->id] = sv;
+            std::string sv_id;
+            while (td_fin >> sv_id) sv_by_id.at(sv_id)->sample_info.too_deep = true;
+        }
+        if (has_alt || has_ref || has_er) {
+            evidence_maps_by_contig[contig_id].reset(new evidence_map_t());
+            evidence_maps_by_contig[contig_id]->load(has_alt ? alt_fname : "", has_ref ? ref_fname : "", has_er ? er_fname : "", evidence_svs_by_contig[contig_id], config, reassigns_evidence(evidence_mode));
+        }
 	}
 	active_threads_per_chr[contig_id]++;
+	evidence_map_t* evidence_map = evidence_maps_by_contig[contig_id] ? evidence_maps_by_contig[contig_id].get() : &empty_evidence_map;
 	mutex_per_chr[contig_id].unlock();
+	return {&mateseqs_w_mapq[contig_id], evidence_map};
 }
 
-void release_mates(int contig_id) {
+void release_chromosome_data(int contig_id) {
     mutex_per_chr[contig_id].lock();
 	active_threads_per_chr[contig_id]--;
 	if (active_threads_per_chr[contig_id] == 0) {
 		mateseqs_w_mapq[contig_id].clear();
+		evidence_maps_by_contig[contig_id].reset();
+		evidence_map_load_attempted[contig_id] = false;
 	}
 	mutex_per_chr[contig_id].unlock();
 }
@@ -1110,6 +1139,7 @@ void rebalance_covs(bcf_hdr_t* hdr, std::vector<std::shared_ptr<deletion_t>>& de
 
 int main(int argc, char* argv[]) {
 
+    if (argc < 7) throw std::runtime_error("Usage: genotype <input.vcf.gz> <output.vcf.gz> <alignment.bam> <reference.fa> <workdir> <sample> [options]");
     std::string in_vcf_fname = argv[1];
     std::string out_vcf_fname = argv[2];
     bam_fname = argv[3];
@@ -1117,27 +1147,25 @@ int main(int argc, char* argv[]) {
     workdir = argv[5];
     std::string sample_name = argv[6];
 
-    bool reassign_evidence = false;
     std::string alt_reads_association_dir = workdir + "/reads_to_sv_associations";
-    std::string alt_pairs_association_fname = workdir + "/alt_pairs_to_sv_associations.txt";
     for (int i = 7; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--reassign-evidence") {
-            reassign_evidence = true;
+            evidence_mode = evidence_mode_t::REASSIGN;
+        } else if (arg == "--cached-evidence") {
+            evidence_mode = evidence_mode_t::CACHED;
         } else if (arg == "--alt-read-associations") {
             if (++i >= argc) {
                 throw std::runtime_error("Missing path after --alt-read-associations.");
             }
             alt_reads_association_dir = argv[i];
-        } else if (arg == "--alt-pair-associations") {
-            if (++i >= argc) {
-                throw std::runtime_error("Missing path after --alt-pair-associations.");
-            }
-            alt_pairs_association_fname = argv[i];
         } else {
             throw std::runtime_error("Unknown genotype option: " + arg);
         }
     }
+    bool reassign_evidence = reassigns_evidence(evidence_mode);
+    load_evidence_maps = true;
+    reads_association_dir = alt_reads_association_dir;
 
     contig_map.load(workdir);
     config.parse(workdir + "/config.txt");
@@ -1154,6 +1182,7 @@ int main(int argc, char* argv[]) {
 	}
 	std::random_shuffle(global_crossing_isize_dist.begin(), global_crossing_isize_dist.end());
 	if (global_crossing_isize_dist.size() > 100000) global_crossing_isize_dist.resize(100000);
+    std::sort(global_crossing_isize_dist.begin(), global_crossing_isize_dist.end());
     global_crossing_isize_dist.shrink_to_fit();
 	crossing_isizes_dist_fin.close();
 
@@ -1165,6 +1194,9 @@ int main(int argc, char* argv[]) {
     mateseqs_w_mapq.resize(contig_map.size());
     active_threads_per_chr = std::vector<int>(contig_map.size());
 	mutex_per_chr = std::vector<std::mutex>(contig_map.size());
+    evidence_svs_by_contig.resize(contig_map.size());
+    evidence_maps_by_contig.resize(contig_map.size());
+    evidence_map_load_attempted = std::vector<bool>(contig_map.size());
 
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
     if (in_vcf_file == NULL) {
@@ -1182,7 +1214,6 @@ int main(int argc, char* argv[]) {
     std::unordered_map<std::string, std::vector<std::shared_ptr<duplication_t>>> dups_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<insertion_t>>> inss_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<inversion_t>>> invs_by_chr;
-    std::unordered_map<std::string, std::vector<sv_t*>> svs_by_chr;
     while (bcf_read(in_vcf_file, in_vcf_header, vcf_record) == 0) {
         std::shared_ptr<sv_t> sv = bcf_to_sv(in_vcf_header, vcf_record);
         if (sv == nullptr) {
@@ -1195,7 +1226,7 @@ int main(int argc, char* argv[]) {
         }
 
         sv->vcf_entry = bcf_dup(vcf_record);
-        svs_by_chr[sv->chr].push_back(sv.get());
+        bool retained = true;
         if (should_genotype_as_hp_indel(sv.get(), chr_seqs.get_seq(sv->chr), chr_seqs.get_len(sv->chr))) {
             hp_by_chr[sv->chr].push_back(sv);
         } else if (sv->svtype() == "DEL") {
@@ -1206,26 +1237,10 @@ int main(int argc, char* argv[]) {
         	inss_by_chr[sv->chr].push_back(std::dynamic_pointer_cast<insertion_t>(sv));
         } else if (sv->svtype() == "INV") {
             invs_by_chr[sv->chr].push_back(std::dynamic_pointer_cast<inversion_t>(sv));
+        } else {
+            retained = false;
         }
-    }
-
-    evidence_map_t empty_evidence_map;
-    std::unordered_map<std::string, std::unique_ptr<evidence_map_t>> evidence_maps_by_chr;
-    if (reassign_evidence) {
-        auto evidence_map_load_start = std::chrono::steady_clock::now();
-        for (auto& entry : svs_by_chr) {
-            std::string alt_association_fname = alt_reads_association_dir + "/" + entry.first + ".alt.txt";
-            std::string ref_association_fname = alt_reads_association_dir + "/" + entry.first + ".ref.txt";
-            std::string er_association_fname = alt_reads_association_dir + "/" + entry.first + ".er.txt";
-            std::ifstream alt_association_fin(alt_association_fname), ref_association_fin(ref_association_fname), er_association_fin(er_association_fname);
-            bool has_alt_associations = bool(alt_association_fin), has_ref_associations = bool(ref_association_fin), has_er_associations = bool(er_association_fin);
-            if (!has_alt_associations && !has_ref_associations && !has_er_associations) continue;
-            std::unique_ptr<evidence_map_t> evidence_map(new evidence_map_t());
-            evidence_map->load(has_alt_associations ? alt_association_fname : "", has_ref_associations ? ref_association_fname : "", has_er_associations ? er_association_fname : "", entry.second, config);
-            evidence_maps_by_chr.emplace(entry.first, std::move(evidence_map));
-        }
-        double evidence_map_load_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - evidence_map_load_start).count();
-        std::cout << "Evidence maps loaded in " << evidence_map_load_seconds << " seconds" << std::endl;
+        if (retained) evidence_svs_by_contig[contig_map.get_id(sv->chr)].push_back(sv.get());
     }
 
     int* imap = NULL;
@@ -1233,12 +1248,7 @@ int main(int argc, char* argv[]) {
     bcf_hdr_t* out_vcf_header = bcf_subset_header(in_vcf_header, sample_name, imap);
     add_fmt_tags(out_vcf_header);
     if (bcf_hdr_write(out_vcf_file, out_vcf_header) != 0) {
-    	throw std::runtime_error("Failed to read the VCF header.");
-    }
-
-    evidence_logger_t* evidence_logger = NULL;
-    if (!reassign_evidence) {
-        evidence_logger = new evidence_logger_t(alt_reads_association_dir, alt_pairs_association_fname);
+	        throw std::runtime_error("Failed to read the VCF header.");
     }
 
     // genotype chrs in descending order of svs
@@ -1247,9 +1257,7 @@ int main(int argc, char* argv[]) {
     const int BLOCK_SIZE = 20;
 
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
-    	std::string contig_name = contig_map.get_name(contig_id);
-        auto evidence_map_it = evidence_maps_by_chr.find(contig_name);
-        evidence_map_t* evidence_map = evidence_map_it == evidence_maps_by_chr.end() ? &empty_evidence_map : evidence_map_it->second.get();
+	    	std::string contig_name = contig_map.get_name(contig_id);
 
         std::vector<std::shared_ptr<sv_t>>& hps = hp_by_chr[contig_name];
         std::vector<hts_pair_pos_t> ref_hp_ranges;
@@ -1264,8 +1272,7 @@ int main(int argc, char* argv[]) {
             || (block_hps.size() >= BLOCK_SIZE && ref_hp_ranges[i].beg != ref_hp_ranges[i+1].beg)) {
                 std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool,
-                        &mateseqs_w_mapq[contig_map.get_id(contig_name)], 
-                        &global_crossing_isize_dist, evidence_logger, reassign_evidence, evidence_map);
+                        &global_crossing_isize_dist, evidence_mode);
                 block_hps.clear();
             }
         }
@@ -1279,8 +1286,7 @@ int main(int argc, char* argv[]) {
             if (block_dels.size() == BLOCK_SIZE || (i == dels.size()-1 && !block_dels.empty())) {
                 std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
-                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
-                        evidence_logger, reassign_evidence, evidence_map);
+                        std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist);
                 futures.push_back(std::move(future));
                 block_dels.clear();
             }
@@ -1295,8 +1301,7 @@ int main(int argc, char* argv[]) {
             if (block_dups.size() == BLOCK_SIZE || (i == dups.size()-1 && !block_dups.empty())) {
                 std::future<void> future = thread_pool.push(genotype_dups, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_dups, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
-                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], workdir, &global_crossing_isize_dist,
-                        evidence_logger, reassign_evidence, evidence_map);
+                        std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist);
                 futures.push_back(std::move(future));
                 block_dups.clear();
             }
@@ -1311,8 +1316,7 @@ int main(int argc, char* argv[]) {
             if (block_inss.size() == BLOCK_SIZE || (i == inss.size()-1 && !block_inss.empty())) {
                 std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
-                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id], &global_crossing_isize_dist, evidence_logger,
-                        reassign_evidence, evidence_map);
+                        std::ref(contig_map), bam_pool, &global_crossing_isize_dist);
                 futures.push_back(std::move(future));
                 block_inss.clear();
             }
@@ -1327,7 +1331,7 @@ int main(int argc, char* argv[]) {
             if (block_invs.size() == BLOCK_SIZE || (i == invs.size()-1 && !block_invs.empty())) {
                 std::future<void> future = thread_pool.push(genotype_invs, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_invs, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
-                        std::ref(contig_map), bam_pool, &mateseqs_w_mapq[contig_id]);
+                        std::ref(contig_map), bam_pool);
                 futures.push_back(std::move(future));
                 block_invs.clear();
             }
@@ -1338,7 +1342,6 @@ int main(int argc, char* argv[]) {
         futures[i].get();
     }
     futures.clear();
-
     // if (reassign_evidence) {
     //     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
     //         std::string contig_name = contig_map.get_name(contig_id);
@@ -1352,35 +1355,26 @@ int main(int argc, char* argv[]) {
     int n_seqs;
     const char** seqnames = bcf_hdr_seqnames(in_vcf_header, &n_seqs);
     for (int i = 0; i < n_seqs; i++) {
-    	std::string contig_name = seqnames[i];
-    	std::vector<std::shared_ptr<sv_t>> contig_svs;
-        if (hp_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), hp_by_chr[contig_name].begin(), hp_by_chr[contig_name].end());
-    	if (dels_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), dels_by_chr[contig_name].begin(), dels_by_chr[contig_name].end());
-    	if (dups_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), dups_by_chr[contig_name].begin(), dups_by_chr[contig_name].end());
-    	if (inss_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), inss_by_chr[contig_name].begin(), inss_by_chr[contig_name].end());
-        if (invs_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), invs_by_chr[contig_name].begin(), invs_by_chr[contig_name].end());
-    	std::sort(contig_svs.begin(), contig_svs.end(), [](const std::shared_ptr<sv_t>& sv1, const std::shared_ptr<sv_t>& sv2) {
-            return std::tie(sv1->start, sv1->end, sv1->id) < std::tie(sv2->start, sv2->end, sv2->id);
-        });
+        	std::string contig_name = seqnames[i];
+        	std::vector<std::shared_ptr<sv_t>> contig_svs;
+            if (hp_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), hp_by_chr[contig_name].begin(), hp_by_chr[contig_name].end());
+        	if (dels_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), dels_by_chr[contig_name].begin(), dels_by_chr[contig_name].end());
+        	if (dups_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), dups_by_chr[contig_name].begin(), dups_by_chr[contig_name].end());
+        	if (inss_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), inss_by_chr[contig_name].begin(), inss_by_chr[contig_name].end());
+            if (invs_by_chr.count(contig_name) > 0) contig_svs.insert(contig_svs.end(), invs_by_chr[contig_name].begin(), invs_by_chr[contig_name].end());
+        	std::sort(contig_svs.begin(), contig_svs.end(), [](const std::shared_ptr<sv_t>& sv1, const std::shared_ptr<sv_t>& sv2) {
+                return std::tie(sv1->start, sv1->end, sv1->id) < std::tie(sv2->start, sv2->end, sv2->id);
+            });
 
-		for (auto& sv : contig_svs) {
-			bcf_update_info_int32(out_vcf_header, vcf_record, "AC", NULL, 0);
-			bcf_update_info_int32(out_vcf_header, vcf_record, "AN", NULL, 0);
-            // 1) If not reassigning evidence, update all records
-            // 2) If reassigning evidence, only update records that may have changed: currently, they are
-            // - records selected by genotype_when_reassigning_evidence
-            // - homopolymer indels (note: we currently do not reassign evidence for homopolymer indels, but when multiple indels with identical HP ALT len are present,
-            //   the first one in the list is selected. For this reason, the evidence may shift between homopolymer indels with identical HP ALT len)
-            if (!reassign_evidence || genotype_when_reassigning_evidence(sv.get())) {
-                update_record(in_vcf_header, out_vcf_header, sv.get(), chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), imap[0]);
-            }
-			if (bcf_write(out_vcf_file, out_vcf_header, sv->vcf_entry) != 0) {
-				throw std::runtime_error("Failed to write VCF record to " + out_vcf_fname);
+			for (auto& sv : contig_svs) {
+				bcf_update_info_int32(out_vcf_header, vcf_record, "AC", NULL, 0);
+				bcf_update_info_int32(out_vcf_header, vcf_record, "AN", NULL, 0);
+                if (!reassign_evidence || genotype_when_reassigning_evidence(sv.get())) update_record(in_vcf_header, out_vcf_header, sv.get(), chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), imap[0]);
+				if (bcf_write(out_vcf_file, out_vcf_header, sv->vcf_entry) != 0) throw std::runtime_error("Failed to write VCF record to " + out_vcf_fname);
 			}
-		}
-    }
-    delete[] imap;
+	}
     free(seqnames);
+    delete[] imap;
 
     bcf_destroy(vcf_record);
     bcf_hdr_destroy(out_vcf_header);
@@ -1388,7 +1382,6 @@ int main(int argc, char* argv[]) {
     bcf_close(in_vcf_file);
     bcf_close(out_vcf_file);
     delete bam_pool;
-    delete evidence_logger;
 
     tbx_index_build(out_vcf_fname.c_str(), 0, &tbx_conf_vcf);
 }
