@@ -193,7 +193,7 @@ std::vector<std::string> generate_reference_guided_contigs(std::string reference
 		used[curr_vertex] = true;
 
 		std::string corrected_assembled_sequence = assembled_sequence;
-		correct_contig(corrected_assembled_sequence, used_reads, config);
+		correct_contig(corrected_assembled_sequence, used_reads, config.max_seq_error, config.min_clip_len);
 		assembled_sequences.push_back(corrected_assembled_sequence);
 	}
 	for (int i = 0; i < n; i++) {

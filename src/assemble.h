@@ -1,7 +1,10 @@
 #ifndef ASSEMBLE_H_
 #define ASSEMBLE_H_
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
+#include <tuple>
 #include <unordered_set>
 #include <mutex>
 #include <htslib/sam.h>
@@ -26,16 +29,20 @@ struct seq_w_pp_t {
 	}
 };
 
-void correct_contig(std::string& contig, std::vector<std::string>& reads,
-	std::vector<ungapped_aln_t>& ungapped_alns, config_t& config, bool ambiguous_as_N = false) {
+void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}) {
 
+	std::vector<ungapped_aln_t> ungapped_alns;
+	for (std::string& read : reads) {
+		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1));
+	}
 	std::vector<int> As(contig.length()), Cs(contig.length()), Gs(contig.length()), Ts(contig.length());
+	std::vector<int> A_quals(contig.length()), C_quals(contig.length()), G_quals(contig.length()), T_quals(contig.length());
 	for (int i = 0; i < reads.size(); i++) {
 		ungapped_aln_t& ungapped_aln = ungapped_alns[i];
 		if (ungapped_aln.query_end <= ungapped_aln.query_begin) continue;
 
 		double mismatch_rate = double(ungapped_aln.mismatches)/(ungapped_aln.query_end-ungapped_aln.query_begin);
-		if (mismatch_rate <= config.max_seq_error) {
+		if (mismatch_rate <= max_acceptable_error_rate) {
 			for (int j = ungapped_aln.query_begin; j < ungapped_aln.query_end; j++) {
 				int ref_pos = j - ungapped_aln.query_begin + ungapped_aln.ref_begin;
 
@@ -46,16 +53,21 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads,
 					Cs.resize(ref_pos+1);
 					Gs.resize(ref_pos+1);
 					Ts.resize(ref_pos+1);
+					A_quals.resize(ref_pos+1);
+					C_quals.resize(ref_pos+1);
+					G_quals.resize(ref_pos+1);
+					T_quals.resize(ref_pos+1);
 					for (int k = old_size; k < As.size(); k++) {
-						As[k] = Cs[k] = Gs[k] = Ts[k] = 0;
+						As[k] = Cs[k] = Gs[k] = Ts[k] = A_quals[k] = C_quals[k] = G_quals[k] = T_quals[k] = 0;
 					}
 				}
 
 				char c = reads[i][j];
-				if (c == 'A') As[ref_pos]++;
-				else if (c == 'C') Cs[ref_pos]++;
-				else if (c == 'G') Gs[ref_pos]++;
-				else if (c == 'T') Ts[ref_pos]++;
+				int qual = quals.empty() ? 0 : quals[i][j];
+				if (c == 'A') { As[ref_pos]++; A_quals[ref_pos] += qual; }
+				else if (c == 'C') { Cs[ref_pos]++; C_quals[ref_pos] += qual; }
+				else if (c == 'G') { Gs[ref_pos]++; G_quals[ref_pos] += qual; }
+				else if (c == 'T') { Ts[ref_pos]++; T_quals[ref_pos] += qual; }
 			}
 		}
 	}
@@ -63,26 +75,14 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads,
 	contig.resize(As.size());
 
 	for (int i = 0; i < contig.length(); i++) {
-		int max_freq = max(As[i], Cs[i], Gs[i], Ts[i]);
-		if (max_freq == 0) continue;
+		if (As[i] + Cs[i] + Gs[i] + Ts[i] == 0) continue;
 
-		int count_max = (As[i] == max_freq) + (Cs[i] == max_freq) + (Gs[i] == max_freq) + (Ts[i] == max_freq);
-		if (ambiguous_as_N && count_max > 1) contig[i] = 'N';
-		else if (max_freq == As[i]) contig[i] = 'A';
-		else if (max_freq == Cs[i]) contig[i] = 'C';
-		else if (max_freq == Gs[i]) contig[i] = 'G';
-		else if (max_freq == Ts[i]) contig[i] = 'T';
+		auto best_base_score = std::max({
+			std::make_tuple(A_quals[i], As[i], 'A'), std::make_tuple(C_quals[i], Cs[i], 'C'),
+			std::make_tuple(G_quals[i], Gs[i], 'G'), std::make_tuple(T_quals[i], Ts[i], 'T')
+		});
+		contig[i] = std::get<2>(best_base_score);
 	}
-}
-
-void correct_contig(std::string& contig, std::vector<std::string>& reads, config_t& config,
-	bool ambiguous_as_N = false) {
-
-	std::vector<ungapped_aln_t> ungapped_alns;
-	for (std::string& read : reads) {
-		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), config.min_clip_len - 1));
-	}
-	correct_contig(contig, reads, ungapped_alns, config, ambiguous_as_N);
 }
 
 void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, std::vector<int>& out_edges,
@@ -224,7 +224,7 @@ std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_rea
 			used_reads.push_back(read_seqs[curr_vertex]);
 		}
 		used[curr_vertex] = true;
-		correct_contig(assembled_sequence, used_reads, config);
+		correct_contig(assembled_sequence, used_reads, config.max_seq_error, config.min_clip_len);
 		assembled_sequences.push_back(assembled_sequence);
 	}
 

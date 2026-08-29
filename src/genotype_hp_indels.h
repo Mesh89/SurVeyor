@@ -433,9 +433,10 @@ std::vector<hp_allele_cluster_t> cluster_reads_by_cached_association(const std::
 
     for (const hp_read_info_t& hp_read_info : hp_read_infos) {
         int allele_idx = -1;
+        std::string read_name = read_name_with_suffix(hp_read_info.read);
         for (const evidence_map_t::read_alt_association_t& association : evidence_map->get_read_alt_associations(hp_read_info.read)) {
             for (int i = 0; i < hp_indels.size(); i++) {
-                if (association.sv == hp_indels[i]) {
+                if (association.sv == hp_indels[i] && evidence_map->is_read_alt_association(read_name, association)) {
                     allele_idx = i;
                     break;
                 }

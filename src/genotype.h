@@ -2,6 +2,7 @@
 #define GENOTYPE_H
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <list>
@@ -284,6 +285,7 @@ struct evidence_map_t {
 
     struct read_alt_associations_t {
         std::vector<read_alt_association_t> associations;
+        int max_score = std::numeric_limits<int>::min();
         bool oar_recorded = false;
         bool orr_recorded = false;
         bool consistent = false;
@@ -405,7 +407,9 @@ struct evidence_map_t {
         // For each read, find the best association. Furthermore, flag reads that have a "best" association to multiple SVs
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score >> pos >> alt_idx) {
             std::string exact_sv_id = sv_id;
-            read_alt_associations[read_name].associations.push_back(read_alt_association_t(sv_by_exact_id.at(exact_sv_id), bp, pos, alt_idx, score));
+            read_alt_associations_t& read_associations = read_alt_associations[read_name];
+            read_associations.associations.push_back(read_alt_association_t(sv_by_exact_id.at(exact_sv_id), bp, pos, alt_idx, score));
+            if (score > read_associations.max_score) read_associations.max_score = score;
             if (!resolve_assignments) continue;
             sv_id = remove_svid_dup_suffix(sv_id);
             bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
@@ -635,11 +639,21 @@ struct evidence_map_t {
         return is_read_er(read_name_with_suffix(read), sv);
     }
 
-    bool is_read_alt(const std::string& read_name, sv_t* sv) const {
+    bool is_read_alt_association(const std::string& read_name, const read_alt_association_t& association) const {
         auto assignment_it = read_assignments.find(read_name);
-        if (assignment_it != read_assignments.end() && assignment_it->second.hpid != sv->hpid) return false;
+        if (assignment_it != read_assignments.end()) {
+            if (assignment_it->second.hpid != association.sv->hpid) return false;
+            auto vid_it = sv_id_to_idx.find(remove_svid_dup_suffix(association.sv->id));
+            const std::vector<uint32_t>* assigned_vid_idxs = get_assigned_vid_idxs(read_name);
+            return vid_it != sv_id_to_idx.end() && assigned_vid_idxs && std::binary_search(assigned_vid_idxs->begin(), assigned_vid_idxs->end(), vid_it->second);
+        }
+        auto associations_it = read_alt_associations.find(read_name);
+        return associations_it != read_alt_associations.end() && association.score == associations_it->second.max_score;
+    }
+
+    bool is_read_alt(const std::string& read_name, sv_t* sv) const {
         for (const read_alt_association_t& association : get_read_alt_associations(read_name)) {
-            if (association.sv == sv) return true;
+            if (association.sv == sv && is_read_alt_association(read_name, association)) return true;
         }
         return false;
     }
@@ -653,10 +667,8 @@ struct evidence_map_t {
     }
 
     int get_read_alt_pos(const std::string& read_name, sv_t* sv, int bp) const {
-        auto assignment_it = read_assignments.find(read_name);
-        if (assignment_it != read_assignments.end() && assignment_it->second.hpid != sv->hpid) return -1;
         for (const read_alt_association_t& association : get_read_alt_associations(read_name)) {
-            if (association.sv == sv && association.bp == bp) return association.pos;
+            if (association.sv == sv && association.bp == bp && is_read_alt_association(read_name, association)) return association.pos;
         }
         return -1;
     }
@@ -777,7 +789,7 @@ struct evidence_map_t {
 
 };
 
-std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs);
+std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals = {});
 std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
     std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read);
 std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,

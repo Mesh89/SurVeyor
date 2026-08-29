@@ -87,9 +87,9 @@ struct small_dup_read_evidence_t {
 small_dup_read_evidence_t get_cached_small_dup_read_evidence(duplication_t* dup, bam1_t* read, size_t n_alt_seqs, evidence_map_t* evidence_map) {
     small_dup_read_evidence_t result;
     const std::vector<evidence_map_t::read_alt_association_t>& associations = evidence_map->get_read_alt_associations(read);
-    bool alt_read = evidence_map->is_read_alt(read, dup);
+    std::string read_name = read_name_with_suffix(read);
     for (const auto& association : associations) {
-        if (association.sv != dup || association.bp != 1 || association.alt_idx < 0 || !alt_read) continue;
+        if (association.sv != dup || association.bp != 1 || association.alt_idx < 0 || !evidence_map->is_read_alt_association(read_name, association)) continue;
         if (association.alt_idx >= n_alt_seqs) throw std::runtime_error("Invalid cached ALT index for small duplication " + dup->id + ".");
         result.alt_idxs.push_back(association.alt_idx);
         result.alt_scores.push_back(0);

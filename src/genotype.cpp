@@ -786,7 +786,7 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std
         consistent_avg_score, consistent_stddev_score);
 }
 
-std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs) {
+std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals) {
     std::vector<std::string> temp1, temp2;
     std::vector<StripedSmithWaterman::Alignment> consensus_contigs_alns;
 
@@ -801,6 +801,10 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     }
     std::vector<std::string> consensus_seqs2 = assemble_reads(temp3, seqs_w_pp, temp4, config, stats);
     consensus_seqs.insert(consensus_seqs.end(), consensus_seqs2.begin(), consensus_seqs2.end());
+
+    for (std::string& consensus_seq : consensus_seqs) {
+        if (!consensus_seq.empty() && consensus_seq != "HAS_CYCLE") correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals);
+    }
 
     return consensus_seqs;
 }
@@ -823,15 +827,26 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     }
 
     std::vector<std::string> seqs;
+    std::vector<std::vector<uint8_t>> quals_storage;
     for (int i = 0; i < reads.size(); i++) {
         std::shared_ptr<bam1_t> read = reads[i];
         std::string seq = get_sequence(read.get());
-        if (revcomp_read[i]) rc(seq);
+        const uint8_t* read_quals = bam_get_qual(read.get());
+        quals_storage.emplace_back(read_quals, read_quals + read->core.l_qseq);
+        if (revcomp_read[i]) {
+            rc(seq);
+            std::reverse(quals_storage.back().begin(), quals_storage.back().end());
+        }
         seqs.push_back(seq);
     }
 
+    std::vector<const uint8_t*> quals;
+    for (const std::vector<uint8_t>& read_quals : quals_storage) {
+        quals.push_back(read_quals.data());
+    }
+
     avg_score = 0;
-    std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs);
+    std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs, quals);
 
     std::vector<std::shared_ptr<bam1_t>> consistent_reads;
     std::vector<int> start_positions, end_positions;
@@ -894,7 +909,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     }
     std::string evidence_consensus_seq;
     if (start_positions.size() >= 2) {
-        correct_contig(consensus_seq, chosen_seqs, config, true);
+        correct_contig(consensus_seq, chosen_seqs, config.max_seq_error, config.min_clip_len);
         evidence_consensus_seq = consensus_seq;
 
         consensus_seq = consensus_seq.substr(start_positions[1], end_positions[1]-start_positions[1]);
