@@ -110,8 +110,8 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     double alt_avg_score, ref_avg_score;
     double alt_stddev_score, ref_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read);
-    auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, nullptr);
+    auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read, nullptr);
     auto score_inv_consensus = [&](const std::string& consensus_seq) {
         alignment_targets_t targets;
         hts_pos_t target_start = std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION);
@@ -372,18 +372,18 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     double alt_bp1_avg_score, alt_bp2_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_bp1_stddev_score, alt_bp2_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_bp1_is_exact_read, alt_bp2_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_bp1_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read);
-    auto alt_bp2_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read);
+    auto alt_bp1_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read, nullptr);
+    auto alt_bp2_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read, nullptr);
 
     char* ref_bp1_seq = new char[ref_bp1_len+1];
     strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
     ref_bp1_seq[ref_bp1_len] = 0;
-    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, ref_bp1_better_reads_isrc, ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read);
+    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, ref_bp1_better_reads_isrc, ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, nullptr);
 
     char* ref_bp2_seq = new char[ref_bp2_len+1];
     strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
     ref_bp2_seq[ref_bp2_len] = 0;
-    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read);
+    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, nullptr);
 
     auto score_inv_consensus = [&](const std::string& consensus_seq, bool bp1) {
         hts_pos_t breakpoint = bp1 ? sv_start : sv_end;

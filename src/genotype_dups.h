@@ -298,7 +298,8 @@ void write_aligned_large_dup_read_evidence(duplication_t* dup, open_samFile_t* b
 
 inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
-                stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map) {
+                stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
+                const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 	if (dup->sample_info.too_deep) return;
 
     small_dup_alignment_targets_t alignment_targets = build_small_dup_alignment_targets(dup, contig_seq, contig_len, stats);
@@ -375,8 +376,8 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     double alt_avg_score, ref_avg_score;
     double alt_stddev_score, ref_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seqs[alt_with_most_reads], alt_better_reads[alt_with_most_reads], std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read);
-    auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_reads, std::vector<bool>(), ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seqs[alt_with_most_reads], alt_better_reads[alt_with_most_reads], std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds);
+    auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_reads, std::vector<bool>(), ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read, hp_mismatch_rate_thresholds);
 
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions[alt_with_most_reads]);
     dup->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
@@ -455,7 +456,8 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
 
 inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
-                stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map) {
+                stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
+                const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
     if (dup->sample_info.too_deep) return;
 
@@ -547,9 +549,9 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     double alt_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read);
-    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read);
-    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds);
+    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, hp_mismatch_rate_thresholds);
+    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds);
 
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions);
     dup->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
@@ -635,7 +637,7 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
 
 inline void genotype_dups(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::vector<duplication_t*> dups,
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
-    bam_pool_t* bam_pool, std::string workdir, std::vector<double>* global_crossing_isize_dist) {
+    bam_pool_t* bam_pool, std::string workdir, std::vector<double>* global_crossing_isize_dist, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 
@@ -657,10 +659,10 @@ inline void genotype_dups(int id, std::string contig_name, char* contig_seq, hts
     std::vector<sv_t*> small_dups;
     for (duplication_t* dup : dups) {
         if (dup->svlen() <= stats.read_len-2*config.min_clip_len) {
-			genotype_small_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_map);
+			genotype_small_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_map, hp_mismatch_rate_thresholds);
             small_dups.push_back(dup);
 		} else {
-			genotype_large_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_map);
+			genotype_large_dup(dup, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_map, hp_mismatch_rate_thresholds);
 		}
     }
 

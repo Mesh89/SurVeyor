@@ -443,7 +443,7 @@ void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
 hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string contig_name,
     char* contig_seq, hts_pos_t contig_len, hts_pos_t chunk_beg, hts_pos_t chunk_end,
     config_t* config, stats_t* stats, bam_pool_t* bam_pool,
-    StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter) {
+    StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter, bool generate_candidates) {
 
     hp_chunk_result_t result;
     if (contig_len == 0) return result;
@@ -576,6 +576,7 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 }
                 for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.threshold_estimation_rates) result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx][alt_hp_len].push_back(read_rate.rate);
 
+                if (!generate_candidates) continue;
                 if (hp_run.beg == 0 || alt_hp_len == ref_hp_len) continue;
 
                 int hp_len_diff = alt_hp_len - ref_hp_len;
@@ -609,15 +610,24 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 5) {
-        std::cerr << "Usage: find_hp_indels <workdir> <reference.fa> <alignments.bam|cram> <output.vcf.gz>\n";
+    bool thresholds_only = false;
+    bool invalid_args = false;
+    std::vector<std::string> positional_args;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--thresholds-only" && !thresholds_only) thresholds_only = true;
+        else if (arg.rfind("--", 0) == 0) invalid_args = true;
+        else positional_args.push_back(arg);
+    }
+    if (invalid_args || (!thresholds_only && positional_args.size() != 4) || (thresholds_only && positional_args.size() != 3)) {
+        std::cerr << "Usage: find_hp_indels [--thresholds-only] <workdir> <reference.fa> <alignments.bam|cram> [output.vcf.gz]\n";
         return 1;
     }
 
-    workdir = argv[1];
-    std::string reference_fname = argv[2];
-    std::string alignment_fname = argv[3];
-    std::string out_vcf_fname = argv[4];
+    workdir = positional_args[0];
+    std::string reference_fname = positional_args[1];
+    std::string alignment_fname = positional_args[2];
+    std::string out_vcf_fname = thresholds_only ? "" : positional_args[3];
 
     config_t config;
     config.parse(workdir + "/config.txt");
@@ -644,7 +654,7 @@ int main(int argc, char* argv[]) {
         hts_pos_t contig_len = chr_seqs.get_len(contig_name);
         for (hts_pos_t chunk_beg = 0; chunk_beg < contig_len; chunk_beg += CHUNK_SIZE) {
             futures.push_back(thread_pool.push(find_hp_indels_for_chunk, contig_id, contig_name, chr_seqs.get_seq(contig_name), contig_len,
-                chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool, std::ref(aligner), std::cref(filter)));
+                chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool, std::ref(aligner), std::cref(filter), !thresholds_only));
         }
     }
     thread_pool.stop(true);
@@ -665,12 +675,13 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    size_t hp_len_count = 0;
+    size_t hp_len_count = MIN_REF_HP_LEN + 1;
     for (const hp_mismatch_rates_by_len_t& rates_by_hp_len : threshold_estimation_rates_by_hp_len_and_base) hp_len_count = std::max(hp_len_count, rates_by_hp_len.size());
     for (hp_mismatch_rates_by_len_t& rates_by_hp_len : threshold_estimation_rates_by_hp_len_and_base) rates_by_hp_len.resize(hp_len_count);
     std::array<std::vector<double>, 4> hp_mismatch_rate_thresholds_by_base;
     for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) hp_mismatch_rate_thresholds_by_base[hp_base_idx] = estimate_hp_mismatch_rate_thresholds(threshold_estimation_rates_by_hp_len_and_base[hp_base_idx], config.max_seq_error);
     write_hp_mismatch_rate_thresholds(hp_mismatch_rate_thresholds_by_base, workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    if (thresholds_only) return 0;
     std::vector<std::shared_ptr<sv_t>> filtered_hp_indels;
     for (int hp_indel_idx = 0; hp_indel_idx < hp_indels.size(); hp_indel_idx++) {
         std::shared_ptr<sv_t>& hp_indel = hp_indels[hp_indel_idx];

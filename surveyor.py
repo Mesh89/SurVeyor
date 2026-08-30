@@ -550,6 +550,9 @@ elif cmd_args.command == 'genotype':
 
     reads_categorizer(cmd_args.workdir)
 
+    find_hp_indels_cmd = SURVEYOR_PATH + "/bin/find_hp_indels --thresholds-only %s %s %s" % (cmd_args.workdir, cmd_args.reference, cmd_args.bam_file)
+    run_cmd(find_hp_indels_cmd)
+
     cp_cmd = "cp %s %s/intermediate_results/calls-raw.vcf.gz" % (cmd_args.in_vcf_file, cmd_args.workdir)
     run_cmd(cp_cmd)
 

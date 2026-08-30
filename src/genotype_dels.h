@@ -6,6 +6,7 @@
 #include "sam_utils.h"
 #include "utils.h"
 #include "stat_tests.h"
+#include "hp_mismatch_rate_thresholds.h"
 #include "../libs/ssw_cpp.h"
 
 #include "genotype.h"
@@ -276,7 +277,8 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
 
 inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
-                stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map) {
+                stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
+                const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
     int del_start = del->start, del_end = del->end;
 
     // build alt allele
@@ -320,9 +322,9 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     double alt_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read);
-    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_seqs, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read);
-    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_seqs, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds);
+    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_seqs, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, hp_mismatch_rate_thresholds);
+    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_seqs, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds);
 
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions);
     del->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
@@ -404,7 +406,7 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
 
 inline void genotype_dels(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<deletion_t*> dels,
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
-    bam_pool_t* bam_pool, std::string workdir, std::vector<double>* global_crossing_isize_dist) {
+    bam_pool_t* bam_pool, std::string workdir, std::vector<double>* global_crossing_isize_dist, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 
@@ -426,8 +428,7 @@ inline void genotype_dels(int id, std::string contig_name, char* contig_seq, int
     std::vector<deletion_t*> small_deletions, large_deletions;       
     std::vector<sv_t*> small_svs;  
     for (deletion_t* del : dels) {
-        genotype_del(del, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, 
-            stats, config, aligner, evidence_map);
+        genotype_del(del, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_map, hp_mismatch_rate_thresholds);
         if (-del->svlen() >= stats.max_is) {
             large_deletions.push_back(del);
         } else {

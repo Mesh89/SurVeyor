@@ -21,6 +21,7 @@
 #include "extend_1sr_consensus.h"
 #include "htslib/sam.h"
 #include "sam_utils.h"
+#include "hp_mismatch_rate_thresholds.h"
 #include "types.h"
 #include "var_utils.h"
 #include "vcf_utils.h"
@@ -791,7 +792,8 @@ struct evidence_map_t {
 
 std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals = {});
 std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
-    std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read);
+    std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read,
+    const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds);
 std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
     const std::vector<bool>& is_eligible_read, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read);
 

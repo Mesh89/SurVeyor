@@ -809,10 +809,66 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     return consensus_seqs;
 }
 
+struct consensus_hp_region_t {
+    int beg, end;
+    char base;
+
+    consensus_hp_region_t(int beg = 0, int end = 0, char base = 'N') : beg(beg), end(end), base(base) {}
+    int length() const { return end - beg; }
+};
+
+char uppercase_hp_base(char base) {
+    return base >= 'a' && base <= 'z' ? base - ('a' - 'A') : base;
+}
+
+char complement_hp_base(char base) {
+    if (base == 'A') return 'T';
+    if (base == 'C') return 'G';
+    if (base == 'G') return 'C';
+    if (base == 'T') return 'A';
+    return 'N';
+}
+
+consensus_hp_region_t find_longest_consensus_hp_region(const std::string& seq) {
+    consensus_hp_region_t longest_hp;
+    for (int hp_beg = 0; hp_beg < seq.length();) {
+        char hp_base = uppercase_hp_base(seq[hp_beg]);
+        int hp_end = hp_beg + 1;
+        while (hp_end < seq.length() && uppercase_hp_base(seq[hp_end]) == hp_base) hp_end++;
+        if ((hp_base == 'A' || hp_base == 'C' || hp_base == 'G' || hp_base == 'T') && hp_end - hp_beg > longest_hp.length()) longest_hp = {hp_beg, hp_end, hp_base};
+        hp_beg = hp_end;
+    }
+    return longest_hp;
+}
+
+double ungapped_mismatch_rate_for_ref_range(const std::string& read_seq, const std::string& consensus_seq, const ungapped_aln_t& aln, int ref_beg, int ref_end) {
+    int range_len = ref_end - ref_beg;
+    int query_beg = aln.query_begin + ref_beg - aln.ref_begin;
+    int mismatches = number_of_mismatches_fast(read_seq.c_str() + query_beg, consensus_seq.c_str() + ref_beg, range_len, range_len);
+    return double(mismatches) / range_len;
+}
+
+bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_reverse, const std::string& consensus_seq, const ungapped_aln_t& aln,
+    const consensus_hp_region_t& longest_hp, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
+
+    int aligned_len = aln.query_end - aln.query_begin;
+    int tail_3p_len = is_reverse ? longest_hp.beg - aln.ref_begin : aln.ref_end - longest_hp.end;
+    if (hp_mismatch_rate_thresholds == nullptr || longest_hp.length() < 5 || aln.ref_begin >= longest_hp.beg || aln.ref_end <= longest_hp.end || tail_3p_len < config.min_clip_len) return aligned_len > 0 && double(aln.mismatches) / aligned_len <= config.max_seq_error;
+
+    int five_p_and_hp_beg = is_reverse ? longest_hp.beg : aln.ref_begin;
+    int five_p_and_hp_end = is_reverse ? aln.ref_end : longest_hp.end;
+    int three_p_beg = is_reverse ? aln.ref_begin : longest_hp.end;
+    int three_p_end = is_reverse ? longest_hp.beg : aln.ref_end;
+    double five_p_and_hp_mismatch_rate = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, five_p_and_hp_beg, five_p_and_hp_end);
+    double mismatch_rate_3p = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, three_p_beg, three_p_end);
+    char sequenced_hp_base = is_reverse ? complement_hp_base(longest_hp.base) : longest_hp.base;
+    return five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= hp_mismatch_rate_thresholds->get_threshold(longest_hp.length(), sequenced_hp_base);
+}
+
 // Returns a consistency mask over reads; is_exact_match uses the same index space.
 std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<std::shared_ptr<bam1_t>>& reads, std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, 
-    std::vector<bool>& is_exact_match) {
+    std::vector<bool>& is_exact_match, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
     if (reads.empty()) {
         avg_score = 0;
@@ -868,13 +924,15 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
         std::vector<int> curr_seqs_idxs;
         double curr_cum_score = 0;
         std::vector<double> curr_aln_scores;
+        consensus_hp_region_t longest_hp = find_longest_consensus_hp_region(cseq);
         for (int j = 0; j < reads.size(); j++) {
             std::shared_ptr<bam1_t> read = reads[j];
             const std::string& read_seq = seqs[j];
 
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1));
 
-            if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+            bool is_reverse = bam_is_rev(read.get()) != revcomp_read[j];
+            if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, longest_hp, hp_mismatch_rate_thresholds)) {
                 curr_seqs_idxs.push_back(j);
                 curr_consistent_reads.push_back(read);
                 curr_cum_score += double(ungapped_aln.score)/read_seq.length();
@@ -935,12 +993,14 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     cum_score = 0;
     int n_consistent_reads = 0;
     if (!evidence_consensus_seq.empty()) {
+        consensus_hp_region_t longest_hp = find_longest_consensus_hp_region(evidence_consensus_seq);
         for (int i = 0; i < reads.size(); i++) {
             const std::string& read_seq = seqs[i];
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
                 evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1));
 
-            if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+            bool is_reverse = bam_is_rev(reads[i].get()) != revcomp_read[i];
+            if (passes_consensus_mismatch_filter(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, longest_hp, hp_mismatch_rate_thresholds)) {
                 is_consistent_read[i] = true;
                 is_exact_match[i] = ungapped_aln.mismatches == 0;
                 n_consistent_reads++;
@@ -1185,6 +1245,7 @@ int main(int argc, char* argv[]) {
     contig_map.load(workdir);
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
+    hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
 
     chr_seqs.read_fasta_into_map(reference_fname);
     bam_pool = new bam_pool_t(config.threads, bam_fname, reference_fname);
@@ -1299,9 +1360,7 @@ int main(int argc, char* argv[]) {
                 block_dels.push_back(dels[i].get());
             }
             if (block_dels.size() == BLOCK_SIZE || (i == dels.size()-1 && !block_dels.empty())) {
-                std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
-                        std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist);
+                std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
                 futures.push_back(std::move(future));
                 block_dels.clear();
             }
@@ -1314,9 +1373,7 @@ int main(int argc, char* argv[]) {
                 block_dups.push_back(dups[i].get());
             }
             if (block_dups.size() == BLOCK_SIZE || (i == dups.size()-1 && !block_dups.empty())) {
-                std::future<void> future = thread_pool.push(genotype_dups, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_dups, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
-                        std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist);
+                std::future<void> future = thread_pool.push(genotype_dups, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_dups, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
                 futures.push_back(std::move(future));
                 block_dups.clear();
             }
@@ -1329,9 +1386,7 @@ int main(int argc, char* argv[]) {
                 block_inss.push_back(inss[i].get());
             }
             if (block_inss.size() == BLOCK_SIZE || (i == inss.size()-1 && !block_inss.empty())) {
-                std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
-                        std::ref(contig_map), bam_pool, &global_crossing_isize_dist);
+                std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
                 futures.push_back(std::move(future));
                 block_inss.clear();
             }
