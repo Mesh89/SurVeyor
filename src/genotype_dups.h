@@ -300,14 +300,17 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
                 std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
                 const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
-	if (dup->sample_info.too_deep) return;
-
     small_dup_alignment_targets_t alignment_targets = build_small_dup_alignment_targets(dup, contig_seq, contig_len, stats);
     hts_pos_t dup_start = alignment_targets.dup_start, dup_end = alignment_targets.dup_end;
     hts_pos_t ref_start = alignment_targets.ref_start, ref_end = alignment_targets.ref_end, ref_len = alignment_targets.ref_len;
     hts_pos_t svlen = alignment_targets.svlen;
     char* ref_seq = alignment_targets.ref_seq.get();
     std::vector<char*>& alt_seqs = alignment_targets.alt_seqs;
+    dup->ref1_hp_len = longest_homopolymer_len(ref_seq, ref_len);
+    if (dup->sample_info.too_deep) {
+        dup->alt1_hp_len = longest_homopolymer_len(alt_seqs[0], strlen(alt_seqs[0]));
+        return;
+    }
 
     std::stringstream region;
     region << dup->chr << ":" << ref_start << "-" << ref_end;
@@ -368,6 +371,7 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     std::vector<char*> ref_seqs = {ref_seq};
     std::vector<hts_pos_t> ref_lens = {ref_len};
     int alt_len = strlen(alt_seqs[alt_with_most_reads]);
+    dup->alt1_hp_len = longest_homopolymer_len(alt_seqs[alt_with_most_reads], alt_len);
     std::vector<hts_pos_t> alt_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_seqs[alt_with_most_reads], alt_len, stats.read_len);
     dup->sample_info.expected_alt1_reads_frac = (double) alt_ref_diff_reads_expected_positions.size() / std::max(1, alt_len - stats.read_len + 1);
     dup->sample_info.max_feasible_alt1_len = get_max_feasible_alt_len(alt_ref_diff_reads_expected_positions, stats.read_len);
@@ -459,14 +463,16 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
                 const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
-    if (dup->sample_info.too_deep) return;
-
     large_dup_alignment_targets_t alignment_targets = build_large_dup_alignment_targets(dup, contig_seq, contig_len, stats);
     hts_pos_t dup_start = alignment_targets.dup_start, dup_end = alignment_targets.dup_end;
     hts_pos_t ref_bp1_start = alignment_targets.ref_bp1_start, ref_bp1_end = alignment_targets.ref_bp1_end, ref_bp1_len = alignment_targets.ref_bp1_len, ref_bp1_pos = alignment_targets.ref_bp1_pos;
     hts_pos_t ref_bp2_start = alignment_targets.ref_bp2_start, ref_bp2_end = alignment_targets.ref_bp2_end, ref_bp2_len = alignment_targets.ref_bp2_len, ref_bp2_pos = alignment_targets.ref_bp2_pos;
     hts_pos_t alt_lh_len = alignment_targets.alt_lh_len, alt_rh_len = alignment_targets.alt_rh_len, alt_len = alignment_targets.alt_len;
     char* alt_seq = alignment_targets.alt_seq.get();
+    dup->ref1_hp_len = longest_homopolymer_len(contig_seq+ref_bp1_start, ref_bp1_len);
+    dup->ref2_hp_len = longest_homopolymer_len(contig_seq+ref_bp2_start, ref_bp2_len);
+    dup->alt1_hp_len = dup->alt2_hp_len = longest_homopolymer_len(alt_seq, alt_len);
+    if (dup->sample_info.too_deep) return;
 
     std::vector<char*> ref_seqs = {contig_seq+ref_bp1_start, contig_seq+ref_bp2_start};
     std::vector<hts_pos_t> ref_lens = {ref_bp1_len, ref_bp2_len};

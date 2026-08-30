@@ -204,20 +204,23 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
                 const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
-    if (ins->sample_info.too_deep) return;
-
     ins_alignment_targets_t alignment_targets = build_ins_alignment_targets(ins, contig_seq, contig_len, stats);
     hts_pos_t ins_start = alignment_targets.ins_start, ins_end = alignment_targets.ins_end;
     hts_pos_t alt_lf_len = alignment_targets.alt_lf_len, alt_rf_len = alignment_targets.alt_rf_len;
     hts_pos_t alt_bp1_len = alignment_targets.alt_bp1_len, alt_bp2_len = alignment_targets.alt_bp2_len;
     char* alt_bp1_seq = alignment_targets.alt_bp1_seq.get();
     char* alt_bp2_seq = alignment_targets.alt_bp2_seq.get();
+    ins->alt1_hp_len = longest_homopolymer_len(alt_bp1_seq, alt_bp1_len);
+    ins->alt2_hp_len = longest_homopolymer_len(alt_bp2_seq, alt_bp2_len);
     hts_pos_t ref_bp1_start = alignment_targets.ref_bp1_start, ref_bp1_end = alignment_targets.ref_bp1_end, ref_bp1_len = alignment_targets.ref_bp1_len;
     hts_pos_t ref_bp2_start = alignment_targets.ref_bp2_start, ref_bp2_end = alignment_targets.ref_bp2_end, ref_bp2_len = alignment_targets.ref_bp2_len;
     char* ref_bp1_w_aux_seq = alignment_targets.ref_bp1_seq_with_aux.get();
     char* ref_bp2_w_aux_seq = alignment_targets.ref_bp2_seq_with_aux.get();
     hts_pos_t ref_bp1_w_aux_len = alignment_targets.ref_bp1_len_with_aux, ref_bp1_w_aux_pos = alignment_targets.ref_bp1_pos_with_aux;
     hts_pos_t ref_bp2_w_aux_len = alignment_targets.ref_bp2_len_with_aux, ref_bp2_w_aux_pos = alignment_targets.ref_bp2_pos_with_aux;
+    ins->ref1_hp_len = longest_homopolymer_len(contig_seq+ref_bp1_start, ref_bp1_len);
+    ins->ref2_hp_len = longest_homopolymer_len(contig_seq+ref_bp2_start, ref_bp2_len);
+    if (ins->sample_info.too_deep) return;
 
     std::vector<char*> ref_seqs = {ref_bp1_w_aux_seq, ref_bp2_w_aux_seq};
     std::vector<hts_pos_t> ref_lens = {ref_bp1_w_aux_len, ref_bp2_w_aux_len};

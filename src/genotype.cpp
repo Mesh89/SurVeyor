@@ -395,6 +395,14 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     } else {
         bcf_update_info_int32(out_hdr, sv->vcf_entry, "HP_REF_RANGE", NULL, 0);
     }
+    if (sv->ref1_hp_len >= 0) bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF1_HP_LEN", &sv->ref1_hp_len, 1);
+    else bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF1_HP_LEN", NULL, 0);
+    if (sv->ref2_hp_len >= 0) bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF2_HP_LEN", &sv->ref2_hp_len, 1);
+    else bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF2_HP_LEN", NULL, 0);
+    if (sv->alt1_hp_len >= 0) bcf_update_info_int32(out_hdr, sv->vcf_entry, "ALT1_HP_LEN", &sv->alt1_hp_len, 1);
+    else bcf_update_info_int32(out_hdr, sv->vcf_entry, "ALT1_HP_LEN", NULL, 0);
+    if (sv->alt2_hp_len >= 0) bcf_update_info_int32(out_hdr, sv->vcf_entry, "ALT2_HP_LEN", &sv->alt2_hp_len, 1);
+    else bcf_update_info_int32(out_hdr, sv->vcf_entry, "ALT2_HP_LEN", NULL, 0);
     // update FORMAT fields
     bcf_update_genotypes(out_hdr, sv->vcf_entry, sv->sample_info.gt.data(), sv->sample_info.gt.size());
 

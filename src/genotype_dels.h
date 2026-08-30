@@ -300,6 +300,9 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     hts_pos_t alt_lh_len = sequences.alt_lh_len;
     hts_pos_t alt_rh_len = sequences.alt_rh_len;
     hts_pos_t alt_len = sequences.alt_len;
+    del->ref1_hp_len = longest_homopolymer_len(ref_bp1_seq, sequences.ref_bp1_len);
+    del->ref2_hp_len = longest_homopolymer_len(ref_bp2_seq, sequences.ref_bp2_len);
+    del->alt1_hp_len = del->alt2_hp_len = longest_homopolymer_len(alt_seq, alt_len);
     std::vector<char*> ref_seqs = {sequences.ref_bp1_w_aux_seq.get(), sequences.ref_bp2_w_aux_seq.get()};
     std::vector<hts_pos_t> ref_lens = {sequences.ref_bp1_w_aux_len, sequences.ref_bp2_w_aux_len};
     std::vector<hts_pos_t> alt_ref_diff_reads_expected_positions = get_diff_reads_expected_positions(ref_seqs, ref_lens, alt_seq, alt_len, stats.read_len);

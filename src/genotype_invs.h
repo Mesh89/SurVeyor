@@ -49,6 +49,8 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     char* ref_seq = new char[ref_len+1];
     strncpy(ref_seq, contig_seq+ref_start, ref_len);
     ref_seq[ref_len] = 0;
+    inv->ref1_hp_len = longest_homopolymer_len(ref_seq, ref_len);
+    inv->alt1_hp_len = longest_homopolymer_len(alt_seq, alt_len);
 
     std::stringstream region;
     region << inv->chr << ":" << ref_start << "-" << ref_end;
@@ -383,6 +385,10 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     char* ref_bp2_seq = new char[ref_bp2_len+1];
     strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
     ref_bp2_seq[ref_bp2_len] = 0;
+    inv->ref1_hp_len = longest_homopolymer_len(ref_bp1_seq, ref_bp1_len);
+    inv->ref2_hp_len = longest_homopolymer_len(ref_bp2_seq, ref_bp2_len);
+    inv->alt1_hp_len = longest_homopolymer_len(alt_bp1_seq, alt_bp1_len);
+    inv->alt2_hp_len = longest_homopolymer_len(alt_bp2_seq, alt_bp2_len);
     auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, nullptr);
 
     auto score_inv_consensus = [&](const std::string& consensus_seq, bool bp1) {

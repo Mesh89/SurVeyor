@@ -746,6 +746,10 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
     std::vector<std::unique_ptr<char[]>>& alt_alleles = alignment_targets.alt_alleles;
     std::vector<int>& alt_allele_lens = alignment_targets.alt_allele_lens;
     std::vector<hts_pair_pos_t>& alt_allele_hp_ranges = alignment_targets.alt_allele_hp_ranges;
+    for (int i = 0; i < hp_indels.size(); i++) {
+        hp_indels[i]->ref1_hp_len = ref_allele_hp_range.end - ref_allele_hp_range.beg;
+        hp_indels[i]->alt1_hp_len = alt_allele_hp_ranges[i].end - alt_allele_hp_ranges[i].beg;
+    }
 
     std::vector<hp_read_info_t> hp_read_infos, hp_read_infos_assigned_outside_group;
 

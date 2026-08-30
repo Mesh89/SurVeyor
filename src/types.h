@@ -199,6 +199,8 @@ struct sv_t {
     hts_pos_t junction_remap_ref_beg = HTS_POS_MIN, junction_remap_ref_end = HTS_POS_MIN;
     bool hp_genotyped = false;
     hts_pos_t hp_ref_beg = HTS_POS_MIN, hp_ref_end = HTS_POS_MIN;
+    int ref1_hp_len = -1, ref2_hp_len = -1;
+    int alt1_hp_len = -1, alt2_hp_len = -1;
 
     static constexpr const double KS_PVAL_NOT_COMPUTED = -1.0;
     static constexpr const int SIZE_NOT_COMPUTED = INT32_MAX;

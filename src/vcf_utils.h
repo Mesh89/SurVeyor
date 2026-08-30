@@ -331,6 +331,22 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* hp_ref_range_tag = "##INFO=<ID=HP_REF_RANGE,Number=2,Type=Integer,Description=\"1-based half-open [start,end) coordinates of the reference homopolymer run used in homopolymer-specific genotyping.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_ref_range_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "REF1_HP_LEN");
+	const char* ref1_hp_len_tag = "##INFO=<ID=REF1_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longest homopolymer in the breakpoint 1 reference allele sequence.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ref1_hp_len_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "REF2_HP_LEN");
+	const char* ref2_hp_len_tag = "##INFO=<ID=REF2_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longest homopolymer in the breakpoint 2 reference allele sequence.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ref2_hp_len_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "ALT1_HP_LEN");
+	const char* alt1_hp_len_tag = "##INFO=<ID=ALT1_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longest homopolymer in the breakpoint 1 alternate allele sequence.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, alt1_hp_len_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "ALT2_HP_LEN");
+	const char* alt2_hp_len_tag = "##INFO=<ID=ALT2_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longest homopolymer in the breakpoint 2 alternate allele sequence.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, alt2_hp_len_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "GT");
 	const char* gt_tag = "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, gt_tag, &len));
