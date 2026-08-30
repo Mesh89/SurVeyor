@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
@@ -16,6 +18,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 #include <htslib/vcf.h>
 #include <htslib/synced_bcf_reader.h>
@@ -27,6 +30,55 @@ const int GENOTYPE_CONSENSUS_EXTENSION = 500;
 
 using stats_t = std::unordered_map<std::string, std::unordered_map<std::string, int>>;
 using features_t = std::unordered_map<std::string, double>;
+
+const std::vector<std::string>& default_feature_names() {
+    static const std::vector<std::string> names = {
+        "START_STOP_DIST", "SVLEN", "SVINSLEN", "EDIT_DISTANCE", "SV_REF_PREFIX_A_RATIO", "SV_REF_PREFIX_C_RATIO", "SV_REF_PREFIX_G_RATIO", "SV_REF_PREFIX_T_RATIO",
+        "MAX_SV_REF_PREFIX_BASE_RATIO", "SV_REF_SUFFIX_A_RATIO", "SV_REF_SUFFIX_C_RATIO", "SV_REF_SUFFIX_G_RATIO", "SV_REF_SUFFIX_T_RATIO", "MAX_SV_REF_SUFFIX_BASE_RATIO",
+        "LEFT_ANCHOR_A_RATIO", "LEFT_ANCHOR_C_RATIO", "LEFT_ANCHOR_G_RATIO", "LEFT_ANCHOR_T_RATIO", "MAX_LEFT_ANCHOR_BASE_RATIO", "LEFT_FLANKING_A_RATIO_50",
+        "LEFT_FLANKING_C_RATIO_50", "LEFT_FLANKING_G_RATIO_50", "LEFT_FLANKING_T_RATIO_50", "MAX_LEFT_FLANKING_BASE_RATIO_50", "LEFT_FLANKING_A_RATIO_100",
+        "LEFT_FLANKING_C_RATIO_100", "LEFT_FLANKING_G_RATIO_100", "LEFT_FLANKING_T_RATIO_100", "MAX_LEFT_FLANKING_BASE_RATIO_100", "LEFT_FLANKING_A_RATIO_500",
+        "LEFT_FLANKING_C_RATIO_500", "LEFT_FLANKING_G_RATIO_500", "LEFT_FLANKING_T_RATIO_500", "MAX_LEFT_FLANKING_BASE_RATIO_500", "RIGHT_ANCHOR_A_RATIO", "RIGHT_ANCHOR_C_RATIO",
+        "RIGHT_ANCHOR_G_RATIO", "RIGHT_ANCHOR_T_RATIO", "MAX_RIGHT_ANCHOR_BASE_RATIO", "RIGHT_FLANKING_A_RATIO_50", "RIGHT_FLANKING_C_RATIO_50", "RIGHT_FLANKING_G_RATIO_50",
+        "RIGHT_FLANKING_T_RATIO_50", "MAX_RIGHT_FLANKING_BASE_RATIO_50", "RIGHT_FLANKING_A_RATIO_100", "RIGHT_FLANKING_C_RATIO_100", "RIGHT_FLANKING_G_RATIO_100",
+        "RIGHT_FLANKING_T_RATIO_100", "MAX_RIGHT_FLANKING_BASE_RATIO_100", "RIGHT_FLANKING_A_RATIO_500", "RIGHT_FLANKING_C_RATIO_500", "RIGHT_FLANKING_G_RATIO_500",
+        "RIGHT_FLANKING_T_RATIO_500", "MAX_RIGHT_FLANKING_BASE_RATIO_500", "INS_PREFIX_A_RATIO", "INS_PREFIX_C_RATIO", "INS_PREFIX_G_RATIO", "INS_PREFIX_T_RATIO",
+        "MAX_INS_PREFIX_BASE_COUNT_RATIO", "INS_SUFFIX_A_RATIO", "INS_SUFFIX_C_RATIO", "INS_SUFFIX_G_RATIO", "INS_SUFFIX_T_RATIO", "MAX_INS_SUFFIX_BASE_COUNT_RATIO",
+        "INS_SEQ_COV_PREFIX_LEN", "INS_SEQ_COV_SUFFIX_LEN", "EXP_ALT_READS_FREQ1", "EXP_ALT_READS_FREQ2", "HP_REF_LEN", "HP_ALT_LEN", "ASS1_LEFT_RATIO", "ASS1_RIGHT_RATIO",
+        "ASS2_LEFT_RATIO", "ASS2_RIGHT_RATIO", "AAS_ARS_DIFF_TO_LEN", "ASSC1_IA_RATIO", "ASSC2_IA_RATIO", "ASSC1_IA_DIFF", "ASSC2_IA_DIFF", "AL1", "AL2", "AL", "XASS1_LEFT_RATIO",
+        "XASS1_RIGHT_RATIO", "XASS2_LEFT_RATIO", "XASS2_RIGHT_RATIO", "XAAS_XARS_DIFF_TO_LEN", "XASSC1_IA_RATIO", "XASSC2_IA_RATIO", "XASSC1_IA_DIFF", "XASSC2_IA_DIFF", "XAL1",
+        "XAL2", "XAL", "MDLF", "MDSP", "MDSF", "MDRF", "MDSP_OVER_MDLF", "MDSF_OVER_MDRF", "MDLFHQ", "MDSPHQ", "MDSFHQ", "MDRFHQ", "MDSP_OVER_MDLF_HQ", "MDSF_OVER_MDRF_HQ",
+        "MDLC", "MDRC", "MDLCHQ", "MDRCHQ", "TD", "AR1", "AR1_ADJ", "AR1C", "AR1C_ADJ", "AR1C_RATIO", "AR1CmQ", "AR1CMQ", "AR1CHQ", "AR1C_HQ_RATIO", "AR2", "AR2_ADJ", "AR2C",
+        "AR2C_ADJ", "AR2C_RATIO", "AR2CmQ", "AR2CMQ", "AR2CHQ", "AR2C_HQ_RATIO", "AR1E", "AR1EmQ", "AR1EMQ", "AR1E_HQ_RATIO", "AR1E_RATIO", "AR2E", "AR2EmQ", "AR2EMQ",
+        "AR2E_HQ_RATIO", "AR2E_RATIO", "AR1CE", "AR1CEmQ", "AR1CEMQ", "AR1CE_HQ_RATIO", "AR1CE_RATIO", "AR2CE", "AR2CEmQ", "AR2CEMQ", "AR2CE_HQ_RATIO", "AR2CE_RATIO", "AR1HPMODE",
+        "AR1CHPMODE", "AR1CHPIQR", "AR1HPMODE_AR1CHPMODE_DIFF", "AR1HPMODE_ALTLEN_DIFF", "AR1CHPMODE_ALTLEN_DIFF", "AR1CHPmQ", "AR1CHPMQ", "AR1CHPAQ", "AR1CHPSQ", "AR1HP5PMR",
+        "AR1HP3PMR", "MAXARCD", "MAXARCED", "MAXARED", "RR1", "RR1C", "RR1CmQ", "RR1CMQ", "RR1C_HQ_RATIO", "RR1E", "RR1EmQ", "RR1EMQ", "RR1E_HQ_RATIO", "RR1E_RATIO", "RR1CE",
+        "RR1CEmQ", "RR1CEMQ", "RR1CE_HQ_RATIO", "RR1CE_RATIO", "RR1HPMODE", "RR1CHPMODE", "RR1CHPIQR", "RR1HPMODE_RR1CHPMODE_DIFF", "RR1HPMODE_REFLEN_DIFF",
+        "RR1CHPMODE_REFLEN_DIFF", "RR1CHPmQ", "RR1CHPMQ", "RR1CHPAQ", "RR1CHPSQ", "RR1HP5PMR", "RR1HP3PMR", "RR2", "RR2C", "RR2CmQ", "RR2CMQ", "RR2C_HQ_RATIO", "RR2E", "RR2EmQ",
+        "RR2EMQ", "RR2E_HQ_RATIO", "RR2E_RATIO", "RR2CE", "RR2CEmQ", "RR2CEMQ", "RR2CE_HQ_RATIO", "RR2CE_RATIO", "MAXRRCD", "MAXRRCED", "MAXRRED", "OAR1", "OAR2", "OAR1ALL",
+        "OAR2ALL", "OAR1_ALL_RATIO", "OAR2_ALL_RATIO", "OTHER_HP_GENOTYPED", "OTHER1_MIN_ARCHQ", "OTHER2_MIN_ARCHQ", "OTHER1_MIN_AR_OVER_NAR", "OTHER2_MIN_AR_OVER_NAR",
+        "OTHER1_MIN_ARC_OVER_NARC", "OTHER2_MIN_ARC_OVER_NARC", "OTHER1_MIN_ARE_OVER_NARE", "OTHER2_MIN_ARE_OVER_NARE", "OTHER1_AAS_ARS_DIFF_TO_LEN", "OTHER2_AAS_ARS_DIFF_TO_LEN",
+        "OTHER1_XAAS_XARS_DIFF_TO_LEN", "OTHER2_XAAS_XARS_DIFF_TO_LEN", "OAR1C", "OAR2C", "OAR1CHQ", "OAR2CHQ", "OAR1C_HQ_RATIO", "OAR2C_HQ_RATIO", "OAR1E", "OAR2E", "NAR1",
+        "NAR2", "NAR1C", "NAR2C", "NAR1CHQ", "NAR2CHQ", "NAR1C_HQ_RATIO", "NAR2C_HQ_RATIO", "NAR1CE", "NAR2CE", "NAR1E", "NAR2E", "ER1_DEVIATION", "ER2_DEVIATION", "ER_HQ_RATIO",
+        "AR1CMSPAN_1", "AR1CMSPAN_2", "AR1CMHQSPAN_1", "AR1CMHQSPAN_2", "AR2CMSPAN_1", "AR2CMSPAN_2", "AR2CMHQSPAN_1", "AR2CMHQSPAN_2", "RR1CMSPAN_1", "RR1CMSPAN_2",
+        "RR1CMHQSPAN_1", "RR1CMHQSPAN_2", "RR2CMSPAN_1", "RR2CMSPAN_2", "RR2CMHQSPAN_1", "RR2CMHQSPAN_2", "AR1_RR1_CAS_Z_SCORE", "AR2_RR2_CAS_Z_SCORE", "AR1_OVER_RR1",
+        "AR2_OVER_RR2", "AR1C_OVER_RR1C", "AR2C_OVER_RR2C", "AR1CE_OVER_RR1CE", "AR2CE_OVER_RR2CE", "AR1E_OVER_RR1E", "AR2E_OVER_RR2E", "AR1_OVER_OAR1", "AR2_OVER_OAR2",
+        "AR1C_OVER_OAR1C", "AR2C_OVER_OAR2C", "AR1CE_OVER_OAR1E", "AR2CE_OVER_OAR2E", "AR1E_OVER_OAR1E", "AR2E_OVER_OAR2E", "OAR1_OVER_NAR1", "OAR2_OVER_NAR2", "OAR1C_OVER_NAR1C",
+        "OAR2C_OVER_NAR2C", "OAR1E_OVER_NAR1CE", "OAR2E_OVER_NAR2CE", "OAR1E_OVER_NAR1E", "OAR2E_OVER_NAR2E", "OAR1_OVER_TOTAL1", "OAR2_OVER_TOTAL2", "OAR1C_OVER_TOTAL1C",
+        "OAR2C_OVER_TOTAL2C", "OAR1E_OVER_TOTAL1CE", "OAR2E_OVER_TOTAL2CE", "OAR1E_OVER_TOTAL1E", "OAR2E_OVER_TOTAL2E", "ORR1_RATIO", "ORR2_RATIO", "ORR1C_RATIO", "ORR2C_RATIO",
+        "ORR1E_RATIO", "ORR2E_RATIO", "AR1_OVER_NAR1", "AR2_OVER_NAR2", "AR1C_OVER_NAR1C", "AR2C_OVER_NAR2C", "AR1CE_OVER_NAR1CE", "AR2CE_OVER_NAR2CE", "AR1E_OVER_NAR1E",
+        "AR2E_OVER_NAR2E", "KS_PVAL", "SIZE_NORM", "ASP1", "ASP1HQ_1", "ASP1HQ_2", "ASP1HQ_1_RATIO", "ASP1HQ_2_RATIO", "ASP2", "ASP2HQ_1", "ASP2HQ_2", "ASP2HQ_1_RATIO",
+        "ASP2HQ_2_RATIO", "ASP1_ASP2_RATIO", "ASP1mQ_1", "ASP1mQ_2", "ASP1MQ_1", "ASP1MQ_2", "ASP1SPAN_1", "ASP1SPAN_2", "ASP2mQ_1", "ASP2mQ_2", "ASP2MQ_1", "ASP2MQ_2",
+        "ASP2SPAN_1", "ASP2SPAN_2", "ASP1_OVER_RSP1", "ASP2_OVER_RSP2", "ASP1_RSP1_1_NM_Z_SCORE", "ASP1_RSP1_2_NM_Z_SCORE", "ASP2_RSP2_1_NM_Z_SCORE", "ASP2_RSP2_2_NM_Z_SCORE",
+        "RSP1", "RSP1HQ_1", "RSP1HQ_2", "RSP2", "RSP2HQ_1", "RSP2HQ_2", "RSP1mQ_1", "RSP1mQ_2", "RSP1MQ_1", "RSP1MQ_2", "RSP2mQ_1", "RSP2mQ_2", "RSP2MQ_1", "RSP2MQ_2", "NSP1",
+        "NSP1HQ_1", "NSP1HQ_2", "NSP2", "NSP2HQ_1", "NSP2HQ_2", "NSP1mQ_1", "NSP1mQ_2", "NSP1MQ_1", "NSP1MQ_2", "NSP2mQ_1", "NSP2mQ_2", "NSP2MQ_1", "NSP2MQ_2",
+        "ASP1_NSP1_1_NM_Z_SCORE", "ASP1_NSP1_2_NM_Z_SCORE", "ASP2_NSP2_1_NM_Z_SCORE", "ASP2_NSP2_2_NM_Z_SCORE", "SSP1HQ_1", "SSP1HQ_2", "SSP2HQ_1", "SSP2HQ_2", "SSP1mQ_1",
+        "SSP1mQ_2", "SSP1MQ_1", "SSP1MQ_2", "SSP2mQ_1", "SSP2mQ_2", "SSP2MQ_1", "SSP2MQ_2", "SSP1_RSP1_1_NM_Z_SCORE", "SSP1_RSP1_2_NM_Z_SCORE", "SSP2_RSP2_1_NM_Z_SCORE",
+        "SSP2_RSP2_2_NM_Z_SCORE",
+    };
+    return names;
+}
+
 
 struct alt_read_metrics_t {
     double ar1, ar2, ar1c, ar2c, ar1chq, ar2chq, ar1e, ar2e;
@@ -715,12 +767,42 @@ std::map<std::string, model_data_t> process_chrom(const std::string& vcf_fname, 
     return models;
 }
 
+bool file_exists(const std::string& fname) {
+    std::ifstream in(fname, std::ios::binary);
+    return in.good();
+}
+
+tbx_t* load_or_build_index(const std::string& vcf_fname, int n_threads) {
+    bool index_exists = file_exists(vcf_fname+".csi") || file_exists(vcf_fname+".tbi");
+    tbx_t* index = index_exists ? tbx_index_load(vcf_fname.c_str()) : NULL;
+    if (index != NULL) return index;
+
+    std::cerr << (index_exists ? "Rebuilding unusable index for " : "Building index for ") << vcf_fname << ".\n";
+    std::string index_fname = vcf_fname+".csi";
+    std::string temp_index_fname = index_fname+".tmp."+std::to_string((long long)getpid());
+    int result = tbx_index_build3(vcf_fname.c_str(), temp_index_fname.c_str(), 14, n_threads, &tbx_conf_vcf);
+    if (result != 0) {
+        std::remove(temp_index_fname.c_str());
+        if (result == -2) throw std::runtime_error("Cannot index " + vcf_fname + ": the VCF is not BGZF-compressed.");
+        throw std::runtime_error("Failed to build an index for " + vcf_fname + ". Ensure that the VCF is coordinate-sorted and its directory is writable.");
+    }
+    if (std::rename(temp_index_fname.c_str(), index_fname.c_str()) != 0) {
+        int rename_error = errno;
+        std::remove(temp_index_fname.c_str());
+        index = tbx_index_load(vcf_fname.c_str());
+        if (index != NULL) return index;
+        throw std::runtime_error("Failed to install the index for " + vcf_fname + ": " + std::strerror(rename_error) + ".");
+    }
+    index = tbx_index_load(vcf_fname.c_str());
+    if (index == NULL) throw std::runtime_error("Built an index for " + vcf_fname + " but failed to load it.");
+    return index;
+}
+
 void extract_features(const std::string& vcf_fname, const std::string& stats_fname, const std::string& model_stage_dir, const std::string& output_fname, int n_threads) {
     stats_t stats = load_stats(stats_fname);
     const std::map<std::string, model_data_t> model_definitions = load_model_features(model_stage_dir);
     std::map<std::string, model_data_t> models = model_definitions;
-    tbx_t* index = tbx_index_load(vcf_fname.c_str());
-    if (index == NULL) throw std::runtime_error("Failed to load the index for " + vcf_fname + ".");
+    tbx_t* index = load_or_build_index(vcf_fname, n_threads);
     std::vector<std::string> chroms;
     int nseq = 0;
     const char** seqnames = tbx_seqnames(index, &nseq);
@@ -762,8 +844,13 @@ void extract_features(const std::string& vcf_fname, const std::string& stats_fna
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--list-features") {
+        for (const std::string& feature_name : default_feature_names()) std::cout << feature_name << '\n';
+        return 0;
+    }
     if (argc != 6) {
-        std::cerr << "Usage: extract_features input.vcf.gz stats.txt model_stage_dir output.bin threads\n";
+        std::cerr << "Usage: extract_features --list-features\n"
+                  << "       extract_features input.vcf.gz stats.txt model_stage_dir output.bin threads\n";
         return 1;
     }
     try {

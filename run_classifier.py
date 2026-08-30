@@ -20,7 +20,16 @@ class Classifier:
         build_extractor_path = os.path.join(surveyor_path, "build", "bin", "extract_features")
         if os.path.isfile(build_extractor_path):
             return build_extractor_path
-        raise RuntimeError("extract_features was not found. Build SurVeyor before running run_classifier_c.py.")
+        raise RuntimeError("extract_features was not found. Build SurVeyor before running run_classifier.py.")
+
+    def get_default_feature_names():
+        result = subprocess.run([Classifier.get_extractor_path(), "--list-features"], check=True, capture_output=True, text=True)
+        feature_names = result.stdout.splitlines()
+        if not feature_names:
+            raise RuntimeError("extract_features returned an empty default feature schema.")
+        if len(feature_names) != len(set(feature_names)):
+            raise RuntimeError("extract_features returned duplicate default feature names.")
+        return feature_names
 
     def get_writer_path():
         surveyor_path = os.path.dirname(os.path.realpath(__file__))
@@ -30,7 +39,7 @@ class Classifier:
         build_writer_path = os.path.join(surveyor_path, "build", "bin", "write_classifier_vcf")
         if os.path.isfile(build_writer_path):
             return build_writer_path
-        raise RuntimeError("write_classifier_vcf was not found. Build SurVeyor before running run_classifier_c.py.")
+        raise RuntimeError("write_classifier_vcf was not found. Build SurVeyor before running run_classifier.py.")
 
     def load_feature_bundle(feature_bundle_fname):
         test_data, test_variant_ids, test_record_keys = dict(), dict(), dict()

@@ -1,5 +1,5 @@
 import sys, os, argparse, hashlib, pysam, timeit, shutil, shlex
-from run_classifier_c import Classifier
+from run_classifier import Classifier
 
 VERSION = "0.13"
 
