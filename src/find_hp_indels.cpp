@@ -1,10 +1,13 @@
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <future>
+#include <iomanip>
 #include <iostream>
-#include <map>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -23,11 +26,15 @@
 #include "utils.h"
 #include "sam_utils.h"
 #include "hp_read_info.h"
+#include "hp_mismatch_rate_thresholds.h"
 #include "vcf_utils.h"
 #include "consensus.h"
 
 const int MIN_REF_HP_LEN = 5;
 const int MIN_SUPPORTING_READS = 3;
+const int MIN_READS_FOR_HP_MM_THRESHOLD = 100;
+const double HP_MM_OUTLIER_MAD_MULTIPLIER = 4.0;
+const double MAX_HP_MM_THRESHOLD = 0.75;
 const hts_pos_t CHUNK_SIZE = 1000000;
 
 struct mate_info_t {
@@ -36,13 +43,12 @@ struct mate_info_t {
 };
 
 using mate_map_t = std::unordered_map<std::string, mate_info_t>;
-using max_3p_error_rates_t = std::map<int, double>;
-
 struct hp_read_observation_t {
     std::string seq;
     std::vector<uint8_t> quals;
     int left_tail_len;
     bool is_reverse;
+    double ref_3p_mismatch_rate;
 };
 
 struct hp_run_t {
@@ -57,42 +63,13 @@ struct hp_run_t {
     hp_run_t(hts_pos_t beg, hts_pos_t end, char base) : beg(beg), end(end), base(base) {}
 };
 
-max_3p_error_rates_t read_max_3p_error_rates(std::string fname) {
-    std::ifstream fin(fname);
-    if (!fin) throw std::runtime_error("Unable to open " + fname + ".");
-
-    std::string hp_len_header, max_error_rate_header;
-    fin >> hp_len_header >> max_error_rate_header;
-    if (hp_len_header != "HP_LEN" || max_error_rate_header.empty()) {
-        throw std::runtime_error("Invalid header in " + fname + ".");
-    }
-
-    max_3p_error_rates_t max_3p_error_rates;
-    int hp_len;
-    double max_error_rate;
-    while (fin >> hp_len >> max_error_rate) {
-        if (hp_len < 0 || max_error_rate < 0 || max_error_rate > 1 || !max_3p_error_rates.emplace(hp_len, max_error_rate).second) {
-            throw std::runtime_error("Invalid entry in " + fname + ".");
-        }
-    }
-    if (!fin.eof() || max_3p_error_rates.empty()) throw std::runtime_error("Invalid data in " + fname + ".");
-    return max_3p_error_rates;
-}
-
-double get_max_3p_error_rate(const max_3p_error_rates_t& max_3p_error_rates, int hp_len) {
-    auto it = max_3p_error_rates.upper_bound(hp_len);
-    if (it != max_3p_error_rates.begin()) it--;
-    return it->second;
-}
-
-bool is_usable_hp_read(const hp_read_info_t& hp_read_info, int min_clip_len, double max_seq_error,
-    const max_3p_error_rates_t& max_3p_error_rates) {
+bool is_usable_hp_read(const hp_read_info_t& hp_read_info, int min_clip_len, double max_seq_error) {
 
     if (hp_read_info.hp_len == UNDEFINED_HP_LEN) return false;
     if (hp_read_info.hp_deletion_extends_outside_hp || hp_read_info.hp_insertion_has_non_hp_bases) return false;
     if (hp_read_info.tail_5p_len < min_clip_len || hp_read_info.tail_3p_len < min_clip_len) return false;
     if (double(hp_read_info.tail_5p_mismatches) / hp_read_info.tail_5p_len > max_seq_error) return false;
-    return double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len <= get_max_3p_error_rate(max_3p_error_rates, hp_read_info.hp_len);
+    return true;
 }
 
 std::vector<hp_run_t> find_hp_runs(char* contig_seq, hts_pos_t contig_len, hts_pos_t chunk_beg, hts_pos_t chunk_end) {
@@ -151,6 +128,20 @@ struct hp_positional_consensus_t {
     int trim_beg = 0;
     int hp_beg = 0, hp_end = 0;
     int callable_beg = 0, callable_end = 0;
+};
+
+using hp_mismatch_rates_by_len_t = std::vector<std::vector<double>>;
+using hp_mismatch_rates_by_len_and_base_t = std::array<hp_mismatch_rates_by_len_t, 4>;
+
+struct hp_read_mismatch_rate_t {
+    double rate;
+    int sequenced_hp_base_idx;
+};
+
+struct hp_chunk_result_t {
+    std::vector<std::shared_ptr<sv_t>> hp_indels;
+    std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
+    hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
 };
 
 hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_read_observation_t>& observations, int hp_len) {
@@ -222,11 +213,114 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
     return consensus;
 }
 
-void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t& hp_run, int alt_hp_len, const std::vector<hp_read_observation_t>& observations,
+struct hp_read_mismatch_rates_t {
+    std::vector<hp_read_mismatch_rate_t> candidate_rates;
+    std::vector<hp_read_mismatch_rate_t> threshold_estimation_rates;
+};
+
+hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_positional_consensus_t& consensus, const std::vector<hp_read_observation_t>& observations,
+    int hp_len, char hp_base) {
+
+    hp_read_mismatch_rates_t mismatch_rates;
+    if (hp_len < 0) return mismatch_rates;
+    int ref_hp_base_idx = base_to_index(hp_base);
+    if (ref_hp_base_idx < 0) return mismatch_rates;
+
+    int left_5p_reads = 0, right_5p_reads = 0;
+    for (const hp_read_observation_t& observation : observations) {
+        if (observation.is_reverse) right_5p_reads++;
+        else left_5p_reads++;
+    }
+
+    for (int read_idx = 0; read_idx < observations.size(); read_idx++) {
+        const hp_read_observation_t& observation = observations[read_idx];
+        bool has_independent_consensus = observation.is_reverse ? left_5p_reads >= MIN_SUPPORTING_READS : right_5p_reads >= MIN_SUPPORTING_READS;
+        int sequenced_hp_base_idx = observation.is_reverse ? 3 - ref_hp_base_idx : ref_hp_base_idx;
+        if (!has_independent_consensus) {
+            mismatch_rates.candidate_rates.push_back({observation.ref_3p_mismatch_rate, sequenced_hp_base_idx});
+            continue;
+        }
+        if (consensus.seq.empty()) continue;
+
+        int tail_beg = observation.is_reverse ? 0 : observation.left_tail_len + hp_len;
+        int tail_end = observation.is_reverse ? observation.left_tail_len : observation.seq.length();
+        int consensus_offset = consensus.read_offsets[read_idx] - consensus.trim_beg;
+        tail_beg = std::max(tail_beg, -consensus_offset);
+        tail_end = std::min(tail_end, (int) consensus.seq.length() - consensus_offset);
+        int compared_bases = tail_end - tail_beg;
+        if (compared_bases <= 0) continue;
+        int consensus_beg = consensus_offset + tail_beg;
+        int mismatches = number_of_mismatches_fast(observation.seq.c_str() + tail_beg, consensus.seq.c_str() + consensus_beg, compared_bases, compared_bases);
+        double mismatch_rate = double(mismatches) / compared_bases;
+        mismatch_rates.candidate_rates.push_back({mismatch_rate, sequenced_hp_base_idx});
+        mismatch_rates.threshold_estimation_rates.push_back({mismatch_rate, sequenced_hp_base_idx});
+    }
+    return mismatch_rates;
+}
+
+double median_double(std::vector<double> values) {
+    if (values.empty()) return -1.0;
+    std::sort(values.begin(), values.end());
+    size_t middle = values.size() / 2;
+    return values.size() % 2 == 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+}
+
+std::vector<double> estimate_hp_mismatch_rate_thresholds(const hp_mismatch_rates_by_len_t& mismatch_rates_by_hp_len, double default_threshold) {
+    std::vector<double> thresholds(mismatch_rates_by_hp_len.size(), -1.0);
+    std::vector<bool> threshold_computed(mismatch_rates_by_hp_len.size(), false);
+    for (int hp_len = 0; hp_len < mismatch_rates_by_hp_len.size(); hp_len++) {
+        if (hp_len < MIN_REF_HP_LEN) continue;
+        std::vector<double> rates = mismatch_rates_by_hp_len[hp_len];
+        int min_neighbor_hp_len = (hp_len + 1) / 2;
+        int max_neighbor_hp_len = std::min<int>(mismatch_rates_by_hp_len.size() - 1, 2 * hp_len);
+        for (int distance = 1; rates.size() < MIN_READS_FOR_HP_MM_THRESHOLD && (hp_len - distance >= min_neighbor_hp_len || hp_len + distance <= max_neighbor_hp_len); distance++) {
+            int lower_hp_len = hp_len - distance;
+            int upper_hp_len = hp_len + distance;
+            if (lower_hp_len >= min_neighbor_hp_len) rates.insert(rates.end(), mismatch_rates_by_hp_len[lower_hp_len].begin(), mismatch_rates_by_hp_len[lower_hp_len].end());
+            if (upper_hp_len <= max_neighbor_hp_len) rates.insert(rates.end(), mismatch_rates_by_hp_len[upper_hp_len].begin(), mismatch_rates_by_hp_len[upper_hp_len].end());
+        }
+        if (rates.size() < MIN_READS_FOR_HP_MM_THRESHOLD) continue;
+
+        double center = median_double(rates);
+        std::vector<double> absolute_deviations;
+        absolute_deviations.reserve(rates.size());
+        for (double rate : rates) absolute_deviations.push_back(std::abs(rate - center));
+        double robust_sigma = 1.4826 * median_double(absolute_deviations);
+        thresholds[hp_len] = std::min(MAX_HP_MM_THRESHOLD, std::max(default_threshold, center + HP_MM_OUTLIER_MAD_MULTIPLIER * robust_sigma));
+        threshold_computed[hp_len] = true;
+    }
+
+    int nearest_smaller_computed_hp_len = -1;
+    for (int hp_len = 0; hp_len < thresholds.size(); hp_len++) {
+        if (threshold_computed[hp_len]) {
+            nearest_smaller_computed_hp_len = hp_len;
+        } else if (nearest_smaller_computed_hp_len >= 0) {
+            thresholds[hp_len] = thresholds[nearest_smaller_computed_hp_len];
+        } else {
+            thresholds[hp_len] = default_threshold;
+        }
+    }
+    return thresholds;
+}
+
+void write_hp_mismatch_rate_thresholds(const std::array<std::vector<double>, 4>& thresholds_by_base, const std::string& fname) {
+    std::ofstream fout(fname);
+    if (!fout) throw std::runtime_error("Unable to open " + fname + " for writing.");
+    fout << "HP_LEN\tA\tC\tG\tT\n" << std::setprecision(17);
+    size_t hp_len_count = 0;
+    for (const std::vector<double>& thresholds : thresholds_by_base) hp_len_count = std::max(hp_len_count, thresholds.size());
+    for (size_t hp_len = 0; hp_len < hp_len_count; hp_len++) {
+        fout << hp_len;
+        for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) fout << "\t" << thresholds_by_base[hp_base_idx][hp_len];
+        fout << "\n";
+    }
+    if (!fout) throw std::runtime_error("Unable to write " + fname + ".");
+}
+
+void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t& hp_run, int alt_hp_len, const hp_positional_consensus_t& consensus,
     const std::string& contig_name, char* contig_seq, hts_pos_t contig_len, config_t& config, stats_t& stats, StripedSmithWaterman::Aligner& aligner,
     const StripedSmithWaterman::Filter& filter) {
 
-    hp_positional_consensus_t consensus = build_hp_positional_consensus(observations, alt_hp_len);
     if (consensus.seq.empty() || consensus.hp_beg < 0 || consensus.hp_end > (int) consensus.seq.size()) return;
 
     hts_pos_t extend = std::max<hts_pos_t>(stats.read_len, consensus.seq.size());
@@ -304,7 +398,7 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
 void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
     bool anchor_is_reverse, char* contig_seq, hts_pos_t contig_len,
     int read_len, int min_clip_len, double max_seq_error, StripedSmithWaterman::Aligner& aligner,
-    const StripedSmithWaterman::Filter& filter, const max_3p_error_rates_t& max_3p_error_rates) {
+    const StripedSmithWaterman::Filter& filter) {
 
     hts_pos_t extend = std::max(0, read_len - 1);
     hts_pos_t allele_beg = std::max((hts_pos_t) 0, hp_run.beg - extend);
@@ -338,25 +432,24 @@ void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
     hp_read_info_t hp_read_info = calculate_hp_read_info(aln, mate_seq,
         allele_hp_range, hp_run.base, &ref_allele[0], ref_allele.length(), aln_as_rev, rescued_read, 0,
         has_no_left_indel, has_no_right_indel, max_seq_error);
-    if (!is_usable_hp_read(hp_read_info, min_clip_len, max_seq_error, max_3p_error_rates)) return;
+    if (!is_usable_hp_read(hp_read_info, min_clip_len, max_seq_error)) return;
     hp_run.usable_reads++;
     hp_run.hp_len_counts[hp_read_info.hp_len]++;
     bool is_reverse = !hp_read_info.read.mate_is_reverse;
     int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
-    hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({mate_seq, mate_quals, left_tail_len, is_reverse});
+    hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({mate_seq, mate_quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len});
 }
 
-std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t contig_id, std::string contig_name,
+hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string contig_name,
     char* contig_seq, hts_pos_t contig_len, hts_pos_t chunk_beg, hts_pos_t chunk_end,
     config_t* config, stats_t* stats, bam_pool_t* bam_pool,
-    StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter,
-    const max_3p_error_rates_t& max_3p_error_rates) {
+    StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter) {
 
-    std::vector<std::shared_ptr<sv_t>> hp_indels;
-    if (contig_len == 0) return hp_indels;
+    hp_chunk_result_t result;
+    if (contig_len == 0) return result;
 
     std::vector<hp_run_t> hp_runs = find_hp_runs(contig_seq, contig_len, chunk_beg, chunk_end);
-    if (hp_runs.empty()) return hp_indels;
+    if (hp_runs.empty()) return result;
 
     std::vector<hts_pos_t> hp_run_ends;
     std::vector<hts_pos_t> hp_run_begs;
@@ -426,7 +519,7 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base,
                     contig_seq, contig_len, contig_seq + ref_allele_beg, ref_allele_end - ref_allele_beg,
                     ref_allele_hp_range, has_no_left_indel, has_no_right_indel, 0, config->max_seq_error);
-                if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error, max_3p_error_rates)) continue;
+                if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
                 bool is_reverse = !hp_read_info.read.mate_is_reverse;
@@ -434,7 +527,7 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 const uint8_t* bam_quals = bam_get_qual(read.get());
                 std::vector<uint8_t> quals(bam_quals, bam_quals + read->core.l_qseq);
                 std::replace(quals.begin(), quals.end(), uint8_t(255), uint8_t(0));
-                hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({hp_read_info.read.seq, quals, left_tail_len, is_reverse});
+                hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({hp_read_info.read.seq, quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len});
             }
 
             if (read->core.qual < min_anchor_mapq || !is_dc_pair(read.get()) || mateseqs_w_mapq_chr.empty()) continue;
@@ -449,7 +542,7 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 for (; rescue_hp_idx < hp_runs.size() && hp_runs[rescue_hp_idx].beg <= max_hp_beg; rescue_hp_idx++) {
                     add_rescued_hp_read(hp_runs[rescue_hp_idx], mate_it->second, false,
                         contig_seq, contig_len, stats->read_len, config->min_clip_len, config->max_seq_error,
-                        aligner, filter, max_3p_error_rates);
+                        aligner, filter);
                 }
             } else {
                 hts_pos_t min_hp_end = read_end - stats->max_is;
@@ -458,18 +551,32 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 for (; rescue_hp_idx < hp_runs.size() && hp_runs[rescue_hp_idx].end <= max_hp_end; rescue_hp_idx++) {
                     add_rescued_hp_read(hp_runs[rescue_hp_idx], mate_it->second, true,
                         contig_seq, contig_len, stats->read_len, config->min_clip_len, config->max_seq_error,
-                        aligner, filter, max_3p_error_rates);
+                        aligner, filter);
                 }
             }
         }
         if (read_status < -1) throw std::runtime_error("Error while reading alignments for " + contig_name + ".");
 
+        int max_hp_reads_per_locus = 2 * stats->get_max_depth(contig_name);
         for (const hp_run_t& hp_run : hp_runs) {
+            if (hp_run.usable_reads > max_hp_reads_per_locus) continue;
             int ref_hp_len = hp_run.end - hp_run.beg;
             for (const auto& hp_len_count : hp_run.hp_len_counts) {
                 int alt_hp_len = hp_len_count.first;
                 int supporting_reads = hp_len_count.second;
-                if (hp_run.beg == 0 || alt_hp_len == ref_hp_len || supporting_reads < MIN_SUPPORTING_READS) continue;
+                if (supporting_reads < MIN_SUPPORTING_READS) continue;
+
+                auto observations_it = hp_run.observations_by_hp_len.find(alt_hp_len);
+                if (observations_it == hp_run.observations_by_hp_len.end()) continue;
+                hp_positional_consensus_t consensus = build_hp_positional_consensus(observations_it->second, alt_hp_len);
+                hp_read_mismatch_rates_t read_mismatch_rates = calculate_hp_consensus_mismatch_rates(consensus, observations_it->second, alt_hp_len, hp_run.base);
+                for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.candidate_rates) {
+                    hp_mismatch_rates_by_len_t& rates_by_hp_len = result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx];
+                    if (rates_by_hp_len.size() <= alt_hp_len) rates_by_hp_len.resize(alt_hp_len + 1);
+                }
+                for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.threshold_estimation_rates) result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx][alt_hp_len].push_back(read_rate.rate);
+
+                if (hp_run.beg == 0 || alt_hp_len == ref_hp_len) continue;
 
                 int hp_len_diff = alt_hp_len - ref_hp_len;
                 if (std::abs(hp_len_diff) < config->min_sv_size) continue;
@@ -487,12 +594,10 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
                 hp_indel->junction_remap_ref_end = hp_indel->end + 1;
                 hp_indel->hp_ref_beg = hp_run.beg;
                 hp_indel->hp_ref_end = hp_run.end;
-                auto observations_it = hp_run.observations_by_hp_len.find(alt_hp_len);
-                if (observations_it != hp_run.observations_by_hp_len.end()) {
-                    call_aux_from_hp_consensus(hp_indel, hp_run, alt_hp_len, observations_it->second,
-                        contig_name, contig_seq, contig_len, *config, *stats, aligner, filter);
-                }
-                hp_indels.push_back(hp_indel);
+                hp_indel->sample_info.alt1_hp_len_mode = alt_hp_len;
+                call_aux_from_hp_consensus(hp_indel, hp_run, alt_hp_len, consensus, contig_name, contig_seq, contig_len, *config, *stats, aligner, filter);
+                result.hp_indel_3p_mismatch_rates.push_back(std::move(read_mismatch_rates.candidate_rates));
+                result.hp_indels.push_back(hp_indel);
             }
         }
     } catch (...) {
@@ -500,12 +605,12 @@ std::vector<std::shared_ptr<sv_t>> find_hp_indels_for_chunk(int id, size_t conti
         throw;
     }
     release_mates(contig_id);
-    return hp_indels;
+    return result;
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 5 && argc != 6) {
-        std::cerr << "Usage: find_hp_indels <workdir> <reference.fa> <alignments.bam|cram> <output.vcf.gz> [max-3p-error-rates.tsv]\n";
+    if (argc != 5) {
+        std::cerr << "Usage: find_hp_indels <workdir> <reference.fa> <alignments.bam|cram> <output.vcf.gz>\n";
         return 1;
     }
 
@@ -513,15 +618,12 @@ int main(int argc, char* argv[]) {
     std::string reference_fname = argv[2];
     std::string alignment_fname = argv[3];
     std::string out_vcf_fname = argv[4];
-    std::string max_3p_error_rates_fname = argc == 6 ? argv[5] : "resources/max-3p-error-rate-by-hp-len.tsv";
 
     config_t config;
     config.parse(workdir + "/config.txt");
 
     stats_t stats;
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
-
-    max_3p_error_rates_t max_3p_error_rates = read_max_3p_error_rates(max_3p_error_rates_fname);
 
     contig_map_t contig_map(workdir);
 
@@ -535,32 +637,70 @@ int main(int argc, char* argv[]) {
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
     StripedSmithWaterman::Filter filter;
 
-    std::vector<std::future<std::vector<std::shared_ptr<sv_t>>>> futures;
+    std::vector<std::future<hp_chunk_result_t>> futures;
     ctpl::thread_pool thread_pool(config.threads);
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
         std::string contig_name = contig_map.get_name(contig_id);
         hts_pos_t contig_len = chr_seqs.get_len(contig_name);
         for (hts_pos_t chunk_beg = 0; chunk_beg < contig_len; chunk_beg += CHUNK_SIZE) {
             futures.push_back(thread_pool.push(find_hp_indels_for_chunk, contig_id, contig_name, chr_seqs.get_seq(contig_name), contig_len,
-                chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool, std::ref(aligner), std::cref(filter),
-                std::cref(max_3p_error_rates)));
+                chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool, std::ref(aligner), std::cref(filter)));
         }
     }
     thread_pool.stop(true);
 
     std::vector<std::shared_ptr<sv_t>> hp_indels;
-    for (std::future<std::vector<std::shared_ptr<sv_t>>>& future : futures) {
-        std::vector<std::shared_ptr<sv_t>> chunk_hp_indels = future.get();
-        std::sort(chunk_hp_indels.begin(), chunk_hp_indels.end(), sv_output_order);
-        hp_indels.insert(hp_indels.end(), chunk_hp_indels.begin(), chunk_hp_indels.end());
+    std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
+    hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
+    for (std::future<hp_chunk_result_t>& future : futures) {
+        hp_chunk_result_t chunk_result = future.get();
+        hp_indels.insert(hp_indels.end(), chunk_result.hp_indels.begin(), chunk_result.hp_indels.end());
+        hp_indel_3p_mismatch_rates.insert(hp_indel_3p_mismatch_rates.end(), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.begin()), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.end()));
+        for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) {
+            hp_mismatch_rates_by_len_t& threshold_estimation_rates_by_hp_len = threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
+            const hp_mismatch_rates_by_len_t& chunk_threshold_estimation_rates_by_hp_len = chunk_result.threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
+            if (threshold_estimation_rates_by_hp_len.size() < chunk_threshold_estimation_rates_by_hp_len.size()) threshold_estimation_rates_by_hp_len.resize(chunk_threshold_estimation_rates_by_hp_len.size());
+            for (int hp_len = 0; hp_len < chunk_threshold_estimation_rates_by_hp_len.size(); hp_len++) {
+                threshold_estimation_rates_by_hp_len[hp_len].insert(threshold_estimation_rates_by_hp_len[hp_len].end(), chunk_threshold_estimation_rates_by_hp_len[hp_len].begin(), chunk_threshold_estimation_rates_by_hp_len[hp_len].end());
+            }
+        }
     }
+    size_t hp_len_count = 0;
+    for (const hp_mismatch_rates_by_len_t& rates_by_hp_len : threshold_estimation_rates_by_hp_len_and_base) hp_len_count = std::max(hp_len_count, rates_by_hp_len.size());
+    for (hp_mismatch_rates_by_len_t& rates_by_hp_len : threshold_estimation_rates_by_hp_len_and_base) rates_by_hp_len.resize(hp_len_count);
+    std::array<std::vector<double>, 4> hp_mismatch_rate_thresholds_by_base;
+    for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) hp_mismatch_rate_thresholds_by_base[hp_base_idx] = estimate_hp_mismatch_rate_thresholds(threshold_estimation_rates_by_hp_len_and_base[hp_base_idx], config.max_seq_error);
+    write_hp_mismatch_rate_thresholds(hp_mismatch_rate_thresholds_by_base, workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    std::vector<std::shared_ptr<sv_t>> filtered_hp_indels;
+    for (int hp_indel_idx = 0; hp_indel_idx < hp_indels.size(); hp_indel_idx++) {
+        std::shared_ptr<sv_t>& hp_indel = hp_indels[hp_indel_idx];
+        int hp_len = hp_indel->sample_info.alt1_hp_len_mode;
+        if (hp_len < 0) continue;
 
+        int passing_reads = 0;
+        for (const hp_read_mismatch_rate_t& read_rate : hp_indel_3p_mismatch_rates[hp_indel_idx]) {
+            int hp_base_idx = read_rate.sequenced_hp_base_idx;
+            if (hp_base_idx < 0 || hp_len >= hp_mismatch_rate_thresholds_by_base[hp_base_idx].size()) continue;
+            if (read_rate.rate <= hp_mismatch_rate_thresholds_by_base[hp_base_idx][hp_len]) {
+                passing_reads++;
+            }
+        }
+        if (passing_reads < MIN_SUPPORTING_READS) continue;
+        filtered_hp_indels.push_back(hp_indel);
+    }
+    hp_indels = std::move(filtered_hp_indels);
     std::string command;
     for (int i = 0; i < argc; i++) {
         if (!command.empty()) command += " ";
         command += argv[i];
     }
     std::unique_ptr<bcf_hdr_t, decltype(&bcf_hdr_destroy)> hdr( generate_vcf_header(chr_seqs, "", config, command), &bcf_hdr_destroy);
+    std::sort(hp_indels.begin(), hp_indels.end(), [&hdr](const std::shared_ptr<sv_t>& a, const std::shared_ptr<sv_t>& b) {
+        int a_rid = bcf_hdr_name2id(hdr.get(), a->chr.c_str());
+        int b_rid = bcf_hdr_name2id(hdr.get(), b->chr.c_str());
+        if (a_rid != b_rid) return a_rid < b_rid;
+        return sv_output_order(a, b);
+    });
     std::unique_ptr<htsFile, decltype(&hts_close)> out(bcf_open(out_vcf_fname.c_str(), "wz"), &hts_close);
     if (!out) throw std::runtime_error("Unable to open " + out_vcf_fname + " for writing.");
     if (hts_set_threads(out.get(), std::max(1, std::min(config.threads, 4))) != 0) {
