@@ -44,7 +44,7 @@ const std::vector<std::string>& default_feature_names() {
         "RIGHT_FLANKING_T_RATIO_100", "MAX_RIGHT_FLANKING_BASE_RATIO_100", "RIGHT_FLANKING_A_RATIO_500", "RIGHT_FLANKING_C_RATIO_500", "RIGHT_FLANKING_G_RATIO_500",
         "RIGHT_FLANKING_T_RATIO_500", "MAX_RIGHT_FLANKING_BASE_RATIO_500", "INS_PREFIX_A_RATIO", "INS_PREFIX_C_RATIO", "INS_PREFIX_G_RATIO", "INS_PREFIX_T_RATIO",
         "MAX_INS_PREFIX_BASE_COUNT_RATIO", "INS_SUFFIX_A_RATIO", "INS_SUFFIX_C_RATIO", "INS_SUFFIX_G_RATIO", "INS_SUFFIX_T_RATIO", "MAX_INS_SUFFIX_BASE_COUNT_RATIO",
-        "INS_SEQ_COV_PREFIX_LEN", "INS_SEQ_COV_SUFFIX_LEN", "EXP_ALT_READS_FREQ1", "EXP_ALT_READS_FREQ2", "HP_REF_LEN", "HP_ALT_LEN", "ASS1_LEFT_RATIO", "ASS1_RIGHT_RATIO",
+        "INS_SEQ_COV_PREFIX_LEN", "INS_SEQ_COV_SUFFIX_LEN", "EXP_ALT_READS_FREQ1", "EXP_ALT_READS_FREQ2", "REF1_HP_LEN", "REF2_HP_LEN", "ALT1_HP_LEN", "ALT2_HP_LEN", "ASS1_LEFT_RATIO", "ASS1_RIGHT_RATIO",
         "ASS2_LEFT_RATIO", "ASS2_RIGHT_RATIO", "AAS_ARS_DIFF_TO_LEN", "ASSC1_IA_RATIO", "ASSC2_IA_RATIO", "ASSC1_IA_DIFF", "ASSC2_IA_DIFF", "AL1", "AL2", "AL", "XASS1_LEFT_RATIO",
         "XASS1_RIGHT_RATIO", "XASS2_LEFT_RATIO", "XASS2_RIGHT_RATIO", "XAAS_XARS_DIFF_TO_LEN", "XASSC1_IA_RATIO", "XASSC2_IA_RATIO", "XASSC1_IA_DIFF", "XASSC2_IA_DIFF", "XAL1",
         "XAL2", "XAL", "MDLF", "MDSP", "MDSF", "MDRF", "MDSP_OVER_MDLF", "MDSF_OVER_MDRF", "MDLFHQ", "MDSPHQ", "MDSFHQ", "MDRFHQ", "MDSP_OVER_MDLF_HQ", "MDSF_OVER_MDRF_HQ",
@@ -201,6 +201,11 @@ std::vector<double> get_info_numbers(bcf_hdr_t* hdr, bcf1_t* record, const char*
         free(data);
     }
     return values;
+}
+
+double get_info_number(bcf_hdr_t* hdr, bcf1_t* record, const char* key, double default_value) {
+    std::vector<double> values = get_info_numbers(hdr, record, key);
+    return values.empty() ? default_value : values[0];
 }
 
 std::string get_info_string(bcf_hdr_t* hdr, bcf1_t* record, const char* key, const std::string& default_value = "") {
@@ -471,11 +476,7 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     double exp_alt_reads_freq1 = earf[0], exp_alt_reads_freq2 = earf[1];
     features["EXP_ALT_READS_FREQ1"] = std::nearbyint(exp_alt_reads_freq1*100)/100;
     features["EXP_ALT_READS_FREQ2"] = std::nearbyint(exp_alt_reads_freq2*100)/100;
-    if (model_name == "HP") {
-        std::vector<double> hp_range = get_info_numbers(hdr, record, "HP_REF_RANGE");
-        features["HP_REF_LEN"] = hp_range[1]-hp_range[0];
-        features["HP_ALT_LEN"] = features["HP_REF_LEN"]+signed_svlen;
-    } else features["HP_REF_LEN"] = features["HP_ALT_LEN"] = NAN_VALUE;
+    for (const char* key : {"REF1_HP_LEN", "REF2_HP_LEN", "ALT1_HP_LEN", "ALT2_HP_LEN"}) features[key] = get_info_number(hdr, record, key, NAN_VALUE);
 
     add_base_count_features(features, get_info_numbers(hdr, record, "LEFT_ANCHOR_BASE_COUNT"), "LEFT_ANCHOR_", "MAX_LEFT_ANCHOR_BASE_RATIO");
     add_base_count_features(features, get_info_numbers(hdr, record, "LEFT_FLANKING_BASE_COUNT_50"), "LEFT_FLANKING_", "MAX_LEFT_FLANKING_BASE_RATIO_50");
@@ -515,7 +516,7 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     features["AR1CMHQSPAN_1"] = spans.first; features["AR1CMHQSPAN_2"] = spans.second;
     features["AR1HPMODE"] = get_format_number(hdr, record, "AR1HPMODE", NAN_VALUE); features["AR1CHPMODE"] = get_format_number(hdr, record, "AR1CHPMODE", NAN_VALUE);
     features["AR1HPMODE_AR1CHPMODE_DIFF"] = features["AR1HPMODE"]-features["AR1CHPMODE"];
-    features["AR1HPMODE_ALTLEN_DIFF"] = features["AR1HPMODE"]-features["HP_ALT_LEN"]; features["AR1CHPMODE_ALTLEN_DIFF"] = features["AR1CHPMODE"]-features["HP_ALT_LEN"];
+    features["AR1HPMODE_ALTLEN_DIFF"] = features["AR1HPMODE"]-features["ALT1_HP_LEN"]; features["AR1CHPMODE_ALTLEN_DIFF"] = features["AR1CHPMODE"]-features["ALT1_HP_LEN"];
     for (const char* key : {"AR1CHPIQR", "AR1CHPmQ", "AR1CHPMQ", "AR1CHPAQ", "AR1CHPSQ", "AR1HP5PMR", "AR1HP3PMR"}) features[key] = get_format_number(hdr, record, key, NAN_VALUE);
 
     bool has_ar2 = has_format(hdr, record, "AR2");
@@ -589,7 +590,7 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     }
     features["RR1HPMODE"] = get_format_number(hdr, record, "RR1HPMODE", NAN_VALUE); features["RR1CHPMODE"] = get_format_number(hdr, record, "RR1CHPMODE", NAN_VALUE);
     features["RR1HPMODE_RR1CHPMODE_DIFF"] = features["RR1HPMODE"]-features["RR1CHPMODE"];
-    features["RR1HPMODE_REFLEN_DIFF"] = features["RR1HPMODE"]-features["HP_REF_LEN"]; features["RR1CHPMODE_REFLEN_DIFF"] = features["RR1CHPMODE"]-features["HP_REF_LEN"];
+    features["RR1HPMODE_REFLEN_DIFF"] = features["RR1HPMODE"]-features["REF1_HP_LEN"]; features["RR1CHPMODE_REFLEN_DIFF"] = features["RR1CHPMODE"]-features["REF1_HP_LEN"];
     for (const char* key : {"RR1CHPIQR", "RR1CHPmQ", "RR1CHPMQ", "RR1CHPAQ", "RR1CHPSQ", "RR1HP5PMR", "RR1HP3PMR"}) features[key] = get_format_number(hdr, record, key, NAN_VALUE);
     double rr1cf = get_format_number(hdr, record, "RR1CF", 0), rr1cr = get_format_number(hdr, record, "RR1CR", 0), rr2cf = has_rr2 ? get_format_number(hdr, record, "RR2CF", 0) : rr1cf, rr2cr = has_rr2 ? get_format_number(hdr, record, "RR2CR", 0) : rr1cr;
     double rr1cf_ratio = rr1cf/std::max(1.0, rr1cf+rr1cr), rr1cr_ratio = rr1cr/std::max(1.0, rr1cf+rr1cr), rr2cf_ratio = rr2cf/std::max(1.0, rr2cf+rr2cr), rr2cr_ratio = rr2cr/std::max(1.0, rr2cf+rr2cr);
