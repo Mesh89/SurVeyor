@@ -36,6 +36,7 @@
 #include "genotype_inss.h"
 #include "genotype_invs.h"
 #include "genotype_hp_indels.h"
+#include "consensus.h"
 
 chr_seqs_map_t chr_seqs;
 config_t config;
@@ -809,6 +810,20 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     }
     std::vector<std::string> consensus_seqs2 = assemble_reads(temp3, seqs_w_pp, temp4, config, stats);
     consensus_seqs.insert(consensus_seqs.end(), consensus_seqs2.begin(), consensus_seqs2.end());
+
+    std::vector<hts_pos_t> read_start_offsets;
+    hts_pos_t min_read_start_offset = 0;
+    for (std::string& seq : seqs) {
+        ungapped_aln_t aln = best_ungapped_aln(seq.c_str(), seq.length(), ref_seq.c_str(), ref_seq.length(), config.min_clip_len - 1);
+        hts_pos_t read_start_offset = aln.ref_begin - aln.query_begin;
+        if (read_start_offsets.empty() || read_start_offset < min_read_start_offset) min_read_start_offset = read_start_offset;
+        read_start_offsets.push_back(read_start_offset);
+    }
+    for (hts_pos_t& read_start_offset : read_start_offsets) read_start_offset -= min_read_start_offset;
+
+    positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets);
+    consensus_seqs.push_back("");
+    consensus_seqs.push_back(positional_consensus.seq);
 
     for (std::string& consensus_seq : consensus_seqs) {
         if (!consensus_seq.empty() && consensus_seq != "HAS_CYCLE") correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals);
