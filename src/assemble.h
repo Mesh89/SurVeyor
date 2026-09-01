@@ -333,7 +333,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 
 	StripedSmithWaterman::Alignment aln;
 	std::string full_assembled_seq;
-	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence, remap_region_start, remap_region_end, 
+	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence, std::string(assembled_sequence.length(), 'I'), remap_region_start, remap_region_end, 
 		remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
 	std::shared_ptr<sv_t> chosen_ins = NULL;
 	if (svs.empty() || svs[0]->svtype() != "INS" || svs[0]->svsize() < config.min_assembled_ins_size) { // cannot identify an SV insertion, check if it is an incomplete assembly
@@ -345,9 +345,9 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		remap_region_end = std::max(r_cluster->end, l_cluster->start)+extend;
 		if (remap_region_end >= contig_len) remap_region_end = contig_len-1;
 
-		std::vector<std::shared_ptr<sv_t>> svs1 = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence + "-" + assembled_sequences[1], 
+		std::vector<std::shared_ptr<sv_t>> svs1 = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence + "-" + assembled_sequences[1], std::string(assembled_sequence.length() + 1 + assembled_sequences[1].length(), 'I'),
 			remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
-		std::vector<std::shared_ptr<sv_t>> svs2 = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1] + "-" + assembled_sequence, 
+		std::vector<std::shared_ptr<sv_t>> svs2 = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1] + "-" + assembled_sequence, std::string(assembled_sequences[1].length() + 1 + assembled_sequence.length(), 'I'),
 			remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
 		bool sv1_is_ins = !svs1.empty() && svs1[0]->svtype() == "INS" && svs1[0]->svsize() >= config.min_assembled_ins_size;
 		bool sv2_is_ins = !svs2.empty() && svs2[0]->svtype() == "INS" && svs2[0]->svsize() >= config.min_assembled_ins_size;
@@ -371,7 +371,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		double laa_score_ratio = double(chosen_ins->left_anchor_aln->best_score)/chosen_ins->left_anchor_aln->seq_len;
 		double raa_score_ratio = double(chosen_ins->right_anchor_aln->best_score)/chosen_ins->right_anchor_aln->seq_len;
 		if (laa_score_ratio >= raa_score_ratio) {
-			std::vector<std::shared_ptr<sv_t>> new_svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence + "-" + assembled_sequences[1], 
+			std::vector<std::shared_ptr<sv_t>> new_svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence + "-" + assembled_sequences[1], std::string(assembled_sequence.length() + 1 + assembled_sequences[1].length(), 'I'),
 				remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
 			if (!new_svs.empty() && new_svs[0]->svtype() == "INS") {
 				std::shared_ptr<sv_t> new_ins = new_svs[0];
@@ -383,7 +383,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 					}
 			}
 		} else {
-			std::vector<std::shared_ptr<sv_t>> new_svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1] + "-" + assembled_sequence, 
+			std::vector<std::shared_ptr<sv_t>> new_svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1] + "-" + assembled_sequence, std::string(assembled_sequences[1].length() + 1 + assembled_sequence.length(), 'I'),
 				remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
 			if (!new_svs.empty() && new_svs[0]->svtype() == "INS") {
 				std::shared_ptr<sv_t> new_ins = new_svs[0];

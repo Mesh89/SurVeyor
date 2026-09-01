@@ -49,7 +49,6 @@ std::ofstream open_mateseqs_fout(int contig_id) {
 }
 
 void get_base_stats(int id, std::string bam_fname, std::string reference_fname, std::vector<std::pair<std::string, hts_pos_t> > rnd_positions) {
-
     open_samFile_t bam_file(bam_fname);
     if (hts_set_fai_filename(bam_file.file, fai_path(reference_fname.c_str())) != 0) {
         throw std::runtime_error("Failed to read reference " + reference_fname);

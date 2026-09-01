@@ -353,7 +353,7 @@ std::vector<int> find_accepted_reads(std::string& consensus_seq, std::deque<bam1
 }
 
 std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer_selection,
-                                     std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix) {
+                                     std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual) {
 
     std::vector<std::string> seqs;
     std::vector<uint8_t*> quals;
@@ -393,7 +393,7 @@ std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer
         for (int i = 0; i < clipped.size(); i++) selected_idxs[i] = i;
     }
 
-    std::string consensus_seq = build_full_consensus_seq(seqs, quals, read_start_offsets, lowq_prefix, lowq_suffix);
+    std::string consensus_seq = build_full_consensus_seq(seqs, quals, read_start_offsets, lowq_prefix, lowq_suffix, consensus_qual);
 
     std::vector<int> selected_accepted = find_accepted_reads(consensus_seq, selected_clipped, read_start_offsets);
 
@@ -451,11 +451,12 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
     while (clipped.size() >= 3) {
         std::vector<bool> accepted;
         int lowq_prefix, lowq_suffix;
-        std::string consensus_seq = build_full_consensus_seq(clipped, true, accepted, lowq_prefix, lowq_suffix);
+        std::string consensus_qual;
+        std::string consensus_seq = build_full_consensus_seq(clipped, true, accepted, lowq_prefix, lowq_suffix, consensus_qual);
 
         int accepted_reads_n = std::count(accepted.begin(), accepted.end(), true);
         if (accepted_reads_n < 3) {
-            consensus_seq = build_full_consensus_seq(clipped, false, accepted, lowq_prefix, lowq_suffix);
+            consensus_seq = build_full_consensus_seq(clipped, false, accepted, lowq_prefix, lowq_suffix, consensus_qual);
         }
         accepted_reads_n = std::count(accepted.begin(), accepted.end(), true);
 
@@ -483,7 +484,7 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
             for (bam1_t* r : accepted_reads) used_reads.insert(r);
 
             // rebuild consensus sequence using only accepted reads
-            consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix);
+            consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix, consensus_qual);
 
             hts_pos_t start = get_unclipped_start(accepted_reads[0]), end = 0;
             for (bam1_t* r : accepted_reads) end = std::max(end, get_unclipped_end(r));
@@ -566,7 +567,7 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
             if (is_hsr) clip_len = 0;
 
             consensus_t* consensus = new consensus_t(left_clipped, start, breakpoint, end, consensus_seq,
-                fwd_clipped, rev_clipped, clip_len, max_mapq, lowq_prefix, lowq_suffix);
+                consensus_qual, fwd_clipped, rev_clipped, clip_len, max_mapq, lowq_prefix, lowq_suffix);
             consensus->other_bp_lower_boundary = other_bp_lower_boundary;
             consensus->other_bp_upper_boundary = other_bp_upper_boundary;
             consensus->is_hsr = is_hsr;
@@ -593,7 +594,8 @@ void route_consensuses(const std::vector<consensus_t*>& consensuses,
 }
 
 void process_unused_read(bam1_t* read, const std::string& contig_name) {
-    std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_aln(read, contig_name, get_sequence(read), nullptr, 0, 0, stats, config);
+    std::string read_seq = get_sequence(read);
+    std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_aln(read, contig_name, read_seq, get_qual_ascii(read), nullptr, 0, 0, stats, config);
     std::lock_guard<std::mutex> lock(mtx);
     for (auto& sv : svs) {
         detected_svs_count[sv->unique_key(false)]++;

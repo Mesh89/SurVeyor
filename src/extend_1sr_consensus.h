@@ -665,6 +665,7 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	} else {
 		consensus->end += ext_consensus.length() - consensus->sequence.length();
 	}
+	consensus->qual.append(ext_consensus.length() - consensus->sequence.length(), '!');
 	consensus->sequence = ext_consensus;
 	consensus->extended_to_right = true;
 }
@@ -748,6 +749,7 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	} else {
 		consensus->start -= ext_consensus.length() - consensus->sequence.length();
 	}
+	consensus->qual.insert(0, ext_consensus.length() - consensus->sequence.length(), '!');
 	consensus->sequence = ext_consensus;
 	consensus->extended_to_left = true;
 }

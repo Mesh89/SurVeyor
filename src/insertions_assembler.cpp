@@ -373,6 +373,7 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
                 }
                 consensus->clip_len = consensus->breakpoint - consensus->start;
                 consensus->sequence = consensus->sequence.substr(consensus->lowq_prefix);
+                consensus->qual = consensus->qual.substr(consensus->lowq_prefix);
                 lc_consensuses.push_back(consensus);
             } else {
                 consensus->end -= consensus->lowq_suffix;
@@ -381,6 +382,7 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
                 }
                 consensus->clip_len = consensus->end - consensus->breakpoint;
                 consensus->sequence = consensus->sequence.substr(0, consensus->sequence.length()-consensus->lowq_suffix);
+                consensus->qual = consensus->qual.substr(0, consensus->qual.length()-consensus->lowq_suffix);
                 rc_consensuses.push_back(consensus);
             }
         }

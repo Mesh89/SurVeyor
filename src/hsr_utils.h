@@ -193,7 +193,7 @@ void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 }
 
 // c1 is assumed to be to the left of c2, and neither cluster is not fully contained within the other
-void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consensus_t* target, std::string& c1_seq, std::string& c2_seq, int overlap) {
+void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consensus_t* target, const std::string& c1_seq, const std::string& c1_qual, const std::string& c2_seq, const std::string& c2_qual, int overlap) {
 	if (c1->is_hsr && !c2->is_hsr) {
 		target->breakpoint = c2->breakpoint;
 	} else if (!c1->is_hsr && c2->is_hsr) {
@@ -203,7 +203,20 @@ void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 	}
 	target->start = c1->start;
 	target->end = c2->end;
-	target->sequence = c1_seq + c2_seq.substr(overlap);
+	int c1_overlap_beg = c1_seq.length() - overlap;
+	std::string merged_seq = c1_seq.substr(0, c1_overlap_beg);
+	std::string merged_qual = c1_qual.substr(0, c1_overlap_beg);
+	for (int i = 0; i < overlap; i++) {
+		if (c1_qual[c1_overlap_beg+i] >= c2_qual[i]) {
+			merged_seq.push_back(c1_seq[c1_overlap_beg+i]);
+			merged_qual.push_back(c1_qual[c1_overlap_beg+i]);
+		} else {
+			merged_seq.push_back(c2_seq[i]);
+			merged_qual.push_back(c2_qual[i]);
+		}
+	}
+	target->sequence = merged_seq + c2_seq.substr(overlap);
+	target->qual = merged_qual + c2_qual.substr(overlap);
 	target->fwd_reads = c1->fwd_reads + c2->fwd_reads;
 	target->rev_reads = c1->rev_reads + c2->rev_reads;
 	target->clip_len = 0;
@@ -225,18 +238,20 @@ bool merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 	hts_pos_t hq_overlap = c1_hq_end - c2_hq_start;
 	std::string c1_hq_seq = c1->sequence.substr(0, c1->sequence.length()-c1->lowq_suffix);
 	std::string c2_hq_seq = c2->sequence.substr(c2->lowq_prefix);
+	std::string c1_hq_qual = c1->qual.substr(0, c1->qual.length()-c1->lowq_suffix);
+	std::string c2_hq_qual = c2->qual.substr(c2->lowq_prefix);
 	int min_hq_seq_len = std::min(c1_hq_seq.length(), c2_hq_seq.length());
 	if (hq_overlap >= min_hq_seq_len/2 && hq_overlap < min_hq_seq_len) { // first, try to see if the high quality parts are compatible
 		suffix_prefix_aln_t spa_hq = aln_suffix_prefix_perfect(c1_hq_seq, c2_hq_seq, min_overlap);
 		if (spa_hq.overlap) {
-			merge_overlapping_pair_of_clusters(c1, c2, target, c1_hq_seq, c2_hq_seq, spa_hq.overlap);
+			merge_overlapping_pair_of_clusters(c1, c2, target, c1_hq_seq, c1_hq_qual, c2_hq_seq, c2_hq_qual, spa_hq.overlap);
 			return true;
 		}
 	}
 	
 	suffix_prefix_aln_t spa = aln_suffix_prefix_perfect(c1->sequence, c2->sequence, min_overlap); // then, try the whole sequences
 	if (spa.overlap) {
-		merge_overlapping_pair_of_clusters(c1, c2, target, c1->sequence, c2->sequence, spa.overlap);
+		merge_overlapping_pair_of_clusters(c1, c2, target, c1->sequence, c1->qual, c2->sequence, c2->qual, spa.overlap);
 		return true;
 	}
 	return false;

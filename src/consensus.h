@@ -10,7 +10,7 @@
 #include "htslib/hts.h"
 
 struct positional_consensus_t {
-    std::string seq;
+    std::string seq, qual;
     std::vector<int> coverage, max_base_freq;
 };
 
@@ -46,6 +46,7 @@ inline positional_consensus_t build_positional_consensus(const std::vector<std::
         consensus_len = std::max<hts_pos_t>(consensus_len, read_start_offsets[i] + seqs[i].length());
     }
     consensus.seq.assign(consensus_len, 'N');
+    consensus.qual.assign(consensus_len, '!');
     consensus.coverage.assign(consensus_len, 0);
     consensus.max_base_freq.assign(consensus_len, 0);
 
@@ -63,17 +64,21 @@ inline positional_consensus_t build_positional_consensus(const std::vector<std::
         }
 
         base_score_t best_base_score = std::max(std::max(base_scores[0], base_scores[1]), std::max(base_scores[2], base_scores[3]));
-        if (best_base_score.freq > 0) consensus.seq[i] = best_base_score.base;
+        if (best_base_score.freq > 0) {
+            consensus.seq[i] = best_base_score.base;
+            consensus.qual[i] = std::min(best_base_score.qual, 40) + 33;
+        }
         consensus.max_base_freq[i] = best_base_score.freq;
     }
     return consensus;
 }
 
 inline std::string build_full_consensus_seq(std::vector<std::string>& seqs, std::vector<uint8_t*>& quals,
-    std::vector<hts_pos_t> read_start_offsets, int& lowq_prefix, int& lowq_suffix) {
+    std::vector<hts_pos_t> read_start_offsets, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual) {
 
     std::vector<const uint8_t*> const_quals(quals.begin(), quals.end());
     positional_consensus_t consensus = build_positional_consensus(seqs, const_quals, read_start_offsets);
+    consensus_qual = consensus.qual;
 
     lowq_prefix = 0;
     lowq_suffix = 0;

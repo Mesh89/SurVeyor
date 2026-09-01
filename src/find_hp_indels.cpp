@@ -122,7 +122,7 @@ void release_mates(int contig_id) {
 }
 
 struct hp_positional_consensus_t {
-    std::string seq;
+    std::string seq, qual;
     std::vector<int> coverage;
     std::vector<int> read_offsets;
     int trim_beg = 0;
@@ -195,6 +195,7 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
 
     positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_offsets);
     consensus.seq = positional_consensus.seq;
+    consensus.qual = positional_consensus.qual;
     consensus.coverage = positional_consensus.coverage;
 
     int trim_end = consensus_len;
@@ -205,6 +206,7 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
         trim_end--;
     }
     consensus.seq = consensus.seq.substr(consensus.trim_beg, trim_end - consensus.trim_beg);
+    consensus.qual = consensus.qual.substr(consensus.trim_beg, trim_end - consensus.trim_beg);
     consensus.coverage = std::vector<int>(consensus.coverage.begin() + consensus.trim_beg, consensus.coverage.begin() + trim_end);
     consensus.hp_beg -= consensus.trim_beg;
     consensus.hp_end -= consensus.trim_beg;
@@ -349,7 +351,7 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
 
     std::shared_ptr<sv_t> alt_hp = std::make_shared<deletion_t>(contig_name, ref_beg + alt_hp_beg - 1, ref_beg + alt_hp_end - 1,
         "", nullptr, nullptr, nullptr, nullptr);
-    detect_svs_from_aln(aln, contig_name, ref_beg, consensus.seq, alt_hp, 0, 0, stats, config);
+    detect_svs_from_aln(aln, contig_name, ref_beg, consensus.seq, consensus.qual, alt_hp, 0, 0, stats, config);
 
     hp_alignment_summary_t aln_summary = summarize_hp_alignment(normalized_cigar(aln), aln.ref_begin, consensus.seq,
         {alt_hp_beg, alt_hp_end}, hp_run.base);

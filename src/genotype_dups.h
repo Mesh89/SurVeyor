@@ -421,7 +421,7 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         consensus_alignment_metrics_t unextended_metrics = score_dup_consensus(alt_consensus_seq);
         dup->sample_info.alt_consensus1_metrics = unextended_metrics;
 
-        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, 0, 0, 0, 0, 0, 0);
+        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, dup->start-GENOTYPE_CONSENSUS_EXTENSION), dup->start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, dup->end, std::min<hts_pos_t>(contig_len, dup->end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         dup->sample_info.alt_lext_reads = alt_consensus->left_ext_reads;
@@ -605,7 +605,7 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         dup->sample_info.alt_consensus1_metrics = unextended_metrics;
 
        // all we care about is the consensus sequence
-        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, 0, 0, 0, 0, 0, 0);
+        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, dup->end-GENOTYPE_CONSENSUS_EXTENSION), dup->end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, dup->start, std::min<hts_pos_t>(contig_len, dup->start+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         dup->sample_info.alt_lext_reads = alt_consensus->left_ext_reads;

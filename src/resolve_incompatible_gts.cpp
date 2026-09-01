@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         all_svs.push_back(sv);
 
         if (get_sv_type(hdr, sv) != "DEL" && get_sv_type(hdr, sv) != "INS") continue;
-        
+
         std::string chr = bcf_seqname_safe(hdr, sv);
         float* epr = NULL;
         int nvalues = 0, len = 0;
@@ -75,9 +75,6 @@ int main(int argc, char** argv) {
             int n_alt_alleles = count_alt_alleles(hdr, sv);
             int max_alt_alleles = 2 - n_alt_alleles;
             if (seg_tree.any_ge(range_start, range_end, max_alt_alleles+1)) {
-                // std::cout << "Marking SV " << sv->d.id << " at " << chr << ":" << sv->pos << "-" << get_sv_end(hdr, sv) 
-                //           << " EPR=" << epr << " as 0/0" << std::endl;
-                // adding this deletion would exceed the maximum number of alt alleles, mark it as 0/0
                 int* gt = (int*)malloc(2 * sizeof(int));
                 gt[0] = bcf_gt_unphased(0);
                 gt[1] = bcf_gt_unphased(0);

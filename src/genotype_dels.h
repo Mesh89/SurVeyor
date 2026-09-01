@@ -378,7 +378,7 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
         consensus_alignment_metrics_t unextended_metrics = score_del_consensus(alt_consensus_seq);
         del->sample_info.alt_consensus1_metrics = unextended_metrics;
-        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, 0, 0, 0, 0, 0, 0);
+        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, del_start-GENOTYPE_CONSENSUS_EXTENSION), del_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, del_end, std::min<hts_pos_t>(contig_len, del_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         

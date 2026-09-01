@@ -929,7 +929,6 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
 
     std::vector<std::shared_ptr<bam1_t>> consistent_reads;
     std::vector<int> start_positions, end_positions;
-    std::vector<int> chosen_seqs_idxs;
     double cum_score = 0;
     std::vector<double> aln_scores;
     int separation = 0;
@@ -944,7 +943,6 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
 
         std::vector<std::shared_ptr<bam1_t>> curr_consistent_reads;
         std::vector<int> curr_start_positions, curr_end_positions;
-        std::vector<int> curr_seqs_idxs;
         double curr_cum_score = 0;
         std::vector<double> curr_aln_scores;
         consensus_hp_region_t longest_hp = find_longest_consensus_hp_region(cseq);
@@ -952,11 +950,10 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             std::shared_ptr<bam1_t> read = reads[j];
             const std::string& read_seq = seqs[j];
 
-            ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1));
+            ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
 
             bool is_reverse = bam_is_rev(read.get()) != revcomp_read[j];
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, longest_hp, hp_mismatch_rate_thresholds)) {
-                curr_seqs_idxs.push_back(j);
                 curr_consistent_reads.push_back(read);
                 curr_cum_score += double(ungapped_aln.score)/read_seq.length();
                 curr_aln_scores.push_back(double(ungapped_aln.score)/read_seq.length());
@@ -968,7 +965,6 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
         curr_cum_score /= log(cseq.length());
         if (curr_cum_score > cum_score) {
             consistent_reads = curr_consistent_reads;
-            chosen_seqs_idxs = curr_seqs_idxs;
             cum_score = curr_cum_score;
             aln_scores = curr_aln_scores;
             start_positions = curr_start_positions;
@@ -984,13 +980,8 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     else avg_score = 0;
     stddev_score = stddev(aln_scores);
 
-    std::vector<std::string> chosen_seqs;
-    for (int idx : chosen_seqs_idxs) {
-        chosen_seqs.push_back(seqs[idx]);
-    }
     std::string evidence_consensus_seq;
     if (start_positions.size() >= 2) {
-        correct_contig(consensus_seq, chosen_seqs, config.max_seq_error, config.min_clip_len);
         evidence_consensus_seq = consensus_seq;
 
         consensus_seq = consensus_seq.substr(start_positions[1], end_positions[1]-start_positions[1]);
@@ -1020,7 +1011,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
         for (int i = 0; i < reads.size(); i++) {
             const std::string& read_seq = seqs[i];
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
-                evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1));
+                evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
 
             bool is_reverse = bam_is_rev(reads[i].get()) != revcomp_read[i];
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, longest_hp, hp_mismatch_rate_thresholds)) {

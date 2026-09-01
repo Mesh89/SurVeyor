@@ -28,7 +28,7 @@ struct consensus_t {
     bool left_clipped;
     hts_pos_t start, breakpoint, end;
     hts_pos_t orig_start, orig_end;
-    std::string sequence;
+    std::string sequence, qual;
     int fwd_reads, rev_reads;
     uint8_t max_mapq;
     hts_pos_t other_bp_lower_boundary = LOWER_BOUNDARY_NON_CALCULATED, other_bp_upper_boundary = UPPER_BOUNDARY_NON_CALCULATED;
@@ -43,18 +43,18 @@ struct consensus_t {
     };
 
     consensus_t(bool left_clipped, hts_pos_t start, hts_pos_t breakpoint, hts_pos_t end,
-                const std::string& sequence, int fwd_reads, int rev_reads, int clip_len, uint8_t max_mapq, 
+                const std::string& sequence, const std::string& qual, int fwd_reads, int rev_reads, int clip_len, uint8_t max_mapq, 
                 int lowq_prefix, int lowq_suffix)
                 : left_clipped(left_clipped), start(start), breakpoint(breakpoint), end(end),
                 orig_start(start), orig_end(end),
-                sequence(sequence), fwd_reads(fwd_reads), rev_reads(rev_reads), clip_len(clip_len), max_mapq(max_mapq), 
+                sequence(sequence), qual(qual), fwd_reads(fwd_reads), rev_reads(rev_reads), clip_len(clip_len), max_mapq(max_mapq), 
                 lowq_prefix(lowq_prefix), lowq_suffix(lowq_suffix) {}
 
     consensus_t(std::string& line) {
         std::stringstream ss(line);
         char dir;
         int max_mapq_int;
-        ss >> start >> end >> breakpoint >> dir >> sequence >> fwd_reads >> rev_reads
+        ss >> start >> end >> breakpoint >> dir >> sequence >> qual >> fwd_reads >> rev_reads
            >> max_mapq_int >> other_bp_lower_boundary >> other_bp_upper_boundary >> lowq_prefix >> lowq_suffix >> is_hsr;
         orig_start = start;
         orig_end = end;
@@ -65,7 +65,7 @@ struct consensus_t {
 
     std::string to_string() {
         std::stringstream ss;
-        ss << start << " " << end << " " << breakpoint << (left_clipped ? " L " : " R ") << sequence << " ";
+        ss << start << " " << end << " " << breakpoint << (left_clipped ? " L " : " R ") << sequence << " " << qual << " ";
         ss << fwd_reads << " " << rev_reads << " " << (int)max_mapq << " " << other_bp_lower_boundary << " " << other_bp_upper_boundary << " " << lowq_prefix << " " << lowq_suffix << " ";
         ss << is_hsr;
         return ss.str();

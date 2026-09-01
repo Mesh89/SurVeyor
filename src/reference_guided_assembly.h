@@ -561,7 +561,7 @@ std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::str
 	int remap_end = std::min(l_cluster->end+50, contig_len-1);
 	if (remap_start >= remap_end) return NULL;
 
-	 std::vector<std::shared_ptr<sv_t>> insertions = detect_svs_from_junction(contig_name, contig_seq, junction_seq, 
+	 std::vector<std::shared_ptr<sv_t>> insertions = detect_svs_from_junction(contig_name, contig_seq, junction_seq, std::string(junction_seq.length(), 'I'),
                 remap_start, remap_end, remap_start, remap_end, aligner, 0, 0, stats, config);
 
 	if (insertions.empty() || insertions[0]->svtype() != "INS" || insertions[0]->svsize() < config.min_assembled_ins_size) return NULL;

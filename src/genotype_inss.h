@@ -379,7 +379,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
         ins->sample_info.alt_consensus1_metrics = unextended_metrics;
 
         // all we care about is the consensus sequence
-        std::shared_ptr<consensus_t> alt_bp1_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp1_consensus_seq, 0, 0, 0, 0, 0, 0);
+        std::shared_ptr<consensus_t> alt_bp1_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp1_consensus_seq, std::string(alt_bp1_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_bp1_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, ins_start-GENOTYPE_CONSENSUS_EXTENSION), ins_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_bp1_consensus, candidate_reads_for_extension_itree, ins_start, std::min<hts_pos_t>(contig_len, ins_start+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         ins->sample_info.alt_lext_reads = alt_bp1_consensus->left_ext_reads;
@@ -402,7 +402,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
         consensus_alignment_metrics_t unextended_metrics = score_ins_consensus(alt_bp2_consensus_seq, false);
         ins->sample_info.alt_consensus2_metrics = unextended_metrics;
 
-        std::shared_ptr<consensus_t> alt_bp2_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp2_consensus_seq, 0, 0, 0, 0, 0, 0);
+        std::shared_ptr<consensus_t> alt_bp2_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp2_consensus_seq, std::string(alt_bp2_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_bp2_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, ins_end-GENOTYPE_CONSENSUS_EXTENSION), ins_end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_bp2_consensus, candidate_reads_for_extension_itree, ins_end, std::min<hts_pos_t>(contig_len, ins_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         ins->sample_info.alt_lext_reads += alt_bp2_consensus->left_ext_reads;
