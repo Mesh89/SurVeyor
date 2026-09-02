@@ -27,6 +27,7 @@
 
 const double NAN_VALUE = std::numeric_limits<double>::quiet_NaN();
 const int GENOTYPE_CONSENSUS_EXTENSION = 500;
+const bool USE_HP_SPECIFIC_PATH = true;
 
 using stats_t = std::unordered_map<std::string, std::unordered_map<std::string, int>>;
 using features_t = std::unordered_map<std::string, double>;
@@ -300,7 +301,7 @@ bool has_assembly_evidence(bcf_hdr_t* hdr, bcf1_t* record) { return has_format(h
 bool has_extension_evidence(bcf_hdr_t* hdr, bcf1_t* record) { return has_format(hdr, record, "XAL") || has_format(hdr, record, "XAL2"); }
 
 std::string get_model_name(bcf_hdr_t* hdr, bcf1_t* record, int max_is, int read_len) {
-    if (gt_as_homopolymer(hdr, record)) return "HP";
+    if (USE_HP_SPECIFIC_PATH && gt_as_homopolymer(hdr, record)) return "HP";
     std::string svtype = get_svtype(hdr, record);
     if (svtype == "DUP" && has_info(hdr, record, "INS_TO_DUP")) {
         svtype = "INS_TO_DUP";

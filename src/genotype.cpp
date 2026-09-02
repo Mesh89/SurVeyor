@@ -42,6 +42,7 @@ chr_seqs_map_t chr_seqs;
 config_t config;
 contig_map_t contig_map;
 stats_t stats;
+const bool USE_HP_SPECIFIC_PATH = false;
 
 std::string bam_fname, reference_fname, workdir;
 bam_pool_t* bam_pool;
@@ -53,7 +54,7 @@ std::vector<double> global_crossing_isize_dist;
 StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, false);
 
-std::vector<std::unordered_map<std::string, std::pair<std::string, int> > > mateseqs_w_mapq;
+std::vector<ext_mate_map_t> mateseqs_w_mapq;
 std::vector<int> active_threads_per_chr;
 std::vector<std::mutex> mutex_per_chr;
 std::vector<std::vector<sv_t*>> evidence_svs_by_contig;
@@ -1076,14 +1077,14 @@ std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<st
     return is_consistent_read;
 }
 
-std::pair<std::unordered_map<std::string, std::pair<std::string, int>>*, evidence_map_t*> acquire_chromosome_data(int contig_id) {
+std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_id) {
     mutex_per_chr[contig_id].lock();
     if (active_threads_per_chr[contig_id] == 0) {
 		std::string fname = workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt";
 		std::ifstream fin(fname);
 		std::string qname, read_seq, qual; int mapq;
 		while (fin >> qname >> read_seq >> qual >> mapq) {
-			mateseqs_w_mapq[contig_id][qname] = {read_seq, mapq};
+			mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
 		}
     }
 	if (load_evidence_maps && !evidence_map_load_attempted[contig_id]) {
@@ -1317,7 +1318,8 @@ int main(int argc, char* argv[]) {
 
         sv->vcf_entry = bcf_dup(vcf_record);
         bool retained = true;
-        if (should_genotype_as_hp_indel(sv.get(), chr_seqs.get_seq(sv->chr), chr_seqs.get_len(sv->chr))) {
+        sv->hp_genotyped = should_genotype_as_hp_indel(sv.get(), chr_seqs.get_seq(sv->chr), chr_seqs.get_len(sv->chr));
+        if (USE_HP_SPECIFIC_PATH && sv->hp_genotyped) {
             hp_by_chr[sv->chr].push_back(sv);
         } else if (sv->svtype() == "DEL") {
             dels_by_chr[sv->chr].push_back(std::dynamic_pointer_cast<deletion_t>(sv));

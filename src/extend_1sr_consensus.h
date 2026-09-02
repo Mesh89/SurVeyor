@@ -21,6 +21,7 @@ struct ext_read_t {
 	bool rev, same_chr, left_clipped;
 	int sequence_len = 0;
 	char* sequence = NULL;
+	char* qual = NULL;
 
 	ext_read_t(bam1_t* read) {
 		init(read);
@@ -36,16 +37,29 @@ struct ext_read_t {
 		left_clipped = is_left_clipped(read, 1);
 		if (sequence_len < read->core.l_qseq) {
 			if (sequence != NULL) delete[] sequence;
+			if (qual != NULL) delete[] qual;
 			sequence = new char[read->core.l_qseq+1];
+			qual = new char[read->core.l_qseq+1];
 		}
 		copy_sequence(read, sequence);
+		uint8_t* bam_qual = bam_get_qual(read);
+		for (int i = 0; i < read->core.l_qseq; i++) qual[i] = bam_qual[i] + 33;
+		qual[read->core.l_qseq] = '\0';
 		sequence_len = read->core.l_qseq;
 	}
 
 	~ext_read_t() {
 		if (sequence != NULL) delete[] sequence;
+		if (qual != NULL) delete[] qual;
 	}
 };
+
+struct ext_mate_t {
+	std::string seq, qual;
+	int mapq;
+};
+
+using ext_mate_map_t = std::unordered_map<std::string, ext_mate_t>;
 
 struct ext_read_allocator_t {
     std::queue<ext_read_t*> reads;
@@ -79,20 +93,23 @@ struct ext_read_allocator_t {
     ext_read_allocator_t& operator=(const ext_read_allocator_t&) = delete;
 };
 
-static void filter_reads_fully_contained_in_seed(std::vector<std::string>& read_seqs,
+static void filter_reads_fully_contained_in_seed(std::vector<std::string>& read_seqs, std::vector<std::string>& read_quals,
 		std::vector<int>& read_mapqs, std::vector<hts_pos_t>& read_starts) {
 
 	if (read_seqs.size() <= 1) return;
 
 	const std::string& seed_seq = read_seqs[0];
 	std::vector<std::string> filtered_read_seqs;
+	std::vector<std::string> filtered_read_quals;
 	std::vector<int> filtered_read_mapqs;
 	std::vector<hts_pos_t> filtered_read_starts;
 	filtered_read_seqs.reserve(read_seqs.size());
+	filtered_read_quals.reserve(read_quals.size());
 	filtered_read_mapqs.reserve(read_mapqs.size());
 	filtered_read_starts.reserve(read_starts.size());
 
 	filtered_read_seqs.push_back(read_seqs[0]);
+	filtered_read_quals.push_back(read_quals[0]);
 	filtered_read_mapqs.push_back(read_mapqs[0]);
 	filtered_read_starts.push_back(read_starts[0]);
 
@@ -100,11 +117,13 @@ static void filter_reads_fully_contained_in_seed(std::vector<std::string>& read_
 		if (seed_seq.find(read_seqs[i]) != std::string::npos) continue;
 
 		filtered_read_seqs.push_back(read_seqs[i]);
+		filtered_read_quals.push_back(read_quals[i]);
 		filtered_read_mapqs.push_back(read_mapqs[i]);
 		filtered_read_starts.push_back(read_starts[i]);
 	}
 
 	read_seqs.swap(filtered_read_seqs);
+	read_quals.swap(filtered_read_quals);
 	read_mapqs.swap(filtered_read_mapqs);
 	read_starts.swap(filtered_read_starts);
 }
@@ -411,8 +430,8 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 	}
 }
 
-void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, std::vector<std::string>& read_seqs,
-		std::vector<int>& read_mapqs, std::vector<hts_pos_t>& read_starts, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq,
+void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, std::vector<std::string>& read_seqs, std::vector<std::string>& read_quals,
+		std::vector<int>& read_mapqs, std::vector<hts_pos_t>& read_starts, ext_mate_map_t& mateseqs_w_mapq,
 		hts_pos_t target_start, hts_pos_t target_end, hts_pos_t contig_len, int high_confidence_mapq, stats_t& stats, int max_reads = INT32_MAX) {
 
 	hts_pos_t fwd_mates_start = std::max(hts_pos_t(1), target_start-stats.max_is+stats.read_len);
@@ -430,24 +449,28 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 			if (mateseqs_w_mapq.count(ext_read->qname) == 0) {
 				throw std::runtime_error("ERROR: mateseqs_w_mapq does not contain " + ext_read->qname);
 			}
-			std::pair<std::string, int> mateseq_w_mapq = mateseqs_w_mapq[ext_read->qname];
-			rc(mateseq_w_mapq.first);
-			read_seqs.push_back(mateseq_w_mapq.first);
-			read_mapqs.push_back(mateseq_w_mapq.second);
+			ext_mate_t mate = mateseqs_w_mapq[ext_read->qname];
+			rc(mate.seq);
+			std::reverse(mate.qual.begin(), mate.qual.end());
+			read_seqs.push_back(mate.seq);
+			read_quals.push_back(mate.qual);
+			read_mapqs.push_back(mate.mapq);
 			read_starts.push_back(0); // dummy value
 		} else if (ext_read->rev && ext_read->mapq >= high_confidence_mapq &&
 				!ext_read->same_chr && ext_read->end >= rev_mates_start && ext_read->end <= rev_mates_end) {
 			if (mateseqs_w_mapq.count(ext_read->qname) == 0) {
 				throw std::runtime_error("ERROR: mateseqs_w_mapq does not contain " + ext_read->qname);
 			}
-			std::pair<std::string, int> mateseq_w_mapq = mateseqs_w_mapq[ext_read->qname];
-			read_seqs.push_back(mateseq_w_mapq.first);
-			read_mapqs.push_back(mateseq_w_mapq.second);
+			ext_mate_t mate = mateseqs_w_mapq[ext_read->qname];
+			read_seqs.push_back(mate.seq);
+			read_quals.push_back(mate.qual);
+			read_mapqs.push_back(mate.mapq);
 			read_starts.push_back(0); // dummy value
 		}
 
 		if (ext_read->end >= target_start && ext_read->start <= target_end) {
 			read_seqs.push_back(ext_read->sequence);
+			read_quals.push_back(ext_read->qual);
 			read_mapqs.push_back(ext_read->mapq);
 			read_starts.push_back(ext_read->start);
 		}
@@ -507,6 +530,7 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 					(bam_is_mrev(read) && read->core.mpos > read->core.pos)) {
 					ext_read_t* ext_read_rc = ext_read_allocator.get(read);
 					rc(ext_read_rc->sequence);
+					std::reverse(ext_read_rc->qual, ext_read_rc->qual + ext_read_rc->sequence_len);
 					ext_read_rc->rev = !bam_is_rev(read);
 					region_reads.push_back(ext_read_rc);
 				}
@@ -589,24 +613,25 @@ void break_cycles(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >
 
 void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalTree<ext_read_t*>& candidate_reads_itree,
 		hts_pos_t target_start, hts_pos_t target_end, hts_pos_t contig_len,
-		const int high_confidence_mapq, stats_t& stats, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq,
+		const int high_confidence_mapq, stats_t& stats, ext_mate_map_t& mateseqs_w_mapq,
 		int max_extension_len = INT32_MAX) {
 
 	if (consensus->extended_to_right) return;
 
-	std::vector<std::string> read_seqs;
+	std::vector<std::string> read_seqs, read_quals;
 	std::vector<int> read_mapqs;
 	std::vector<hts_pos_t> read_starts;
 	read_seqs.push_back(consensus->sequence);
+	read_quals.push_back(consensus->qual);
 	read_mapqs.push_back(high_confidence_mapq);
 	read_starts.push_back(1); // we want our consensus to be to the left of every other read that extends it to the right (but not 0, since that is reserved for mates, i.e., unknown pos)
 
-	get_extension_read_seqs(candidate_reads_itree, read_seqs, read_mapqs, read_starts, mateseqs_w_mapq, 
+	get_extension_read_seqs(candidate_reads_itree, read_seqs, read_quals, read_mapqs, read_starts, mateseqs_w_mapq, 
 		target_start, target_end, contig_len, high_confidence_mapq, stats, 5000);
 
 	// remove reads that are fully contained in the seed consensus
 	// this is because the kmer-based graph construction has a blind spot to them, and might use them to extend the consensus
-	filter_reads_fully_contained_in_seed(read_seqs, read_mapqs, read_starts);
+	filter_reads_fully_contained_in_seed(read_seqs, read_quals, read_mapqs, read_starts);
 
 	if (read_seqs.size() > 5000) return;
 
@@ -638,12 +663,17 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	// 0 is the consensus, we start from there
 	edge_t e = best_edges[0];
 	std::string ext_consensus = consensus->sequence;
+	std::vector<int> ext_qual_sums;
+	for (char qual : consensus->qual) ext_qual_sums.push_back(std::max(0, (int) (uint8_t) qual - 33));
 	int extension_len = 0;
 	int last_appended_len = -1, second_last_appended_len = -1;
 	while (e.overlap && extension_len < max_extension_len) {
 		int appended_len = read_seqs[e.next].length()-e.overlap;
 		int accepted_len = std::min(appended_len, max_extension_len-extension_len);
+		int read_start = ext_consensus.length() - e.overlap;
 		ext_consensus += read_seqs[e.next].substr(e.overlap, accepted_len);
+		ext_qual_sums.resize(ext_consensus.length(), 0);
+		for (int i = 0; i < e.overlap + accepted_len; i++) ext_qual_sums[read_start+i] += std::max(0, (int) (uint8_t) read_quals[e.next][i] - 33);
 		extension_len += accepted_len;
 		second_last_appended_len = last_appended_len;
 		last_appended_len = accepted_len;
@@ -665,30 +695,32 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 	} else {
 		consensus->end += ext_consensus.length() - consensus->sequence.length();
 	}
-	consensus->qual.append(ext_consensus.length() - consensus->sequence.length(), '!');
+	consensus->qual.resize(ext_qual_sums.size());
+	for (int i = 0; i < ext_qual_sums.size(); i++) consensus->qual[i] = std::min(ext_qual_sums[i], 40) + 33;
 	consensus->sequence = ext_consensus;
 	consensus->extended_to_right = true;
 }
 
 void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTree<ext_read_t*>& candidate_reads_itree,
 		hts_pos_t target_start, hts_pos_t target_end, hts_pos_t contig_len,
-		const int high_confidence_mapq, stats_t& stats, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq,
+		const int high_confidence_mapq, stats_t& stats, ext_mate_map_t& mateseqs_w_mapq,
 		int max_extension_len = INT32_MAX) {
 
 	if (consensus->extended_to_left) return;
 
-	std::vector<std::string> read_seqs;
+	std::vector<std::string> read_seqs, read_quals;
 	std::vector<int> read_mapqs;
 	std::vector<hts_pos_t> read_starts;
 	read_seqs.push_back(consensus->sequence);
+	read_quals.push_back(consensus->qual);
 	read_mapqs.push_back(high_confidence_mapq);
 	read_starts.push_back(INT32_MAX); // we want our consensus to be to the right of every other read that extends it to the left
 
-	get_extension_read_seqs(candidate_reads_itree, read_seqs, read_mapqs, read_starts, mateseqs_w_mapq, target_start, target_end, contig_len, high_confidence_mapq, stats, 5000);
+	get_extension_read_seqs(candidate_reads_itree, read_seqs, read_quals, read_mapqs, read_starts, mateseqs_w_mapq, target_start, target_end, contig_len, high_confidence_mapq, stats, 5000);
 	
 	// remove reads that are fully contained in the seed consensus
 	// this is because the kmer-based graph construction has a blind spot to them, and might use them to extend the consensus
-	filter_reads_fully_contained_in_seed(read_seqs, read_mapqs, read_starts);
+	filter_reads_fully_contained_in_seed(read_seqs, read_quals, read_mapqs, read_starts);
 
 	if (read_seqs.size() > 5000) {
 		return;
@@ -720,6 +752,8 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	// 0 is the consensus, we start from there
 	edge_t e = best_edges[0];
 	std::string ext_consensus = consensus->sequence;
+	std::vector<int> ext_qual_sums;
+	for (char qual : consensus->qual) ext_qual_sums.push_back(std::max(0, (int) (uint8_t) qual - 33));
 	std::stringstream path_ss;
 	int extension_len = 0;
 	int last_prepended_len = -1, second_last_prepended_len = -1;
@@ -728,6 +762,9 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 		int accepted_len = std::min(prepended_len, max_extension_len-extension_len);
 		std::string prepended_seq = read_seqs[e.next].substr(prepended_len-accepted_len, accepted_len);
 		ext_consensus = prepended_seq + ext_consensus;
+		ext_qual_sums.insert(ext_qual_sums.begin(), accepted_len, 0);
+		int read_qual_beg = prepended_len - accepted_len;
+		for (int i = 0; i < accepted_len + e.overlap; i++) ext_qual_sums[i] += std::max(0, (int) (uint8_t) read_quals[e.next][read_qual_beg+i] - 33);
 		extension_len += accepted_len;
 		second_last_prepended_len = last_prepended_len;
 		last_prepended_len = accepted_len;
@@ -749,7 +786,8 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 	} else {
 		consensus->start -= ext_consensus.length() - consensus->sequence.length();
 	}
-	consensus->qual.insert(0, ext_consensus.length() - consensus->sequence.length(), '!');
+	consensus->qual.resize(ext_qual_sums.size());
+	for (int i = 0; i < ext_qual_sums.size(); i++) consensus->qual[i] = std::min(ext_qual_sums[i], 40) + 33;
 	consensus->sequence = ext_consensus;
 	consensus->extended_to_left = true;
 }

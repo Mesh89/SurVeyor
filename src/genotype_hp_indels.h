@@ -579,7 +579,7 @@ hp_indel_alignment_targets_t build_hp_indel_alignment_targets(std::vector<sv_t*>
     return targets;
 }
 
-void write_aligned_hp_indels_group_read_evidence(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_hp_range, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, std::unordered_map<std::string, std::pair<std::string, int>>& mateseqs_w_mapq_chr, evidence_logger_t& evidence_logger) {
+void write_aligned_hp_indels_group_read_evidence(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_hp_range, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, ext_mate_map_t& mateseqs_w_mapq_chr, evidence_logger_t& evidence_logger) {
     if (hp_indels.empty()) return;
     hp_indel_alignment_targets_t targets = build_hp_indel_alignment_targets(hp_indels, ref_hp_range, contig_seq, contig_len, stats);
 
@@ -651,14 +651,14 @@ void write_aligned_hp_indels_group_read_evidence(std::vector<sv_t*>& hp_indels, 
         if (!bam_is_rev(read) && read->core.pos >= ref_hp_range.beg-stats.max_is && read->core.pos <= ref_hp_range.beg-stats.read_len/2) {
             std::string qname = get_mate_lookup_qname(read);
             if (!mateseqs_w_mapq_chr.count(qname)) continue;
-            mate_seq = mateseqs_w_mapq_chr[qname].first;
-            mate_mapq = mateseqs_w_mapq_chr[qname].second;
+            mate_seq = mateseqs_w_mapq_chr[qname].seq;
+            mate_mapq = mateseqs_w_mapq_chr[qname].mapq;
             rc(mate_seq);
         } else if (bam_is_rev(read) && endpos >= ref_hp_range.end+stats.read_len/2 && endpos <= ref_hp_range.end+stats.max_is) {
             std::string qname = get_mate_lookup_qname(read);
             if (!mateseqs_w_mapq_chr.count(qname)) continue;
-            mate_seq = mateseqs_w_mapq_chr[qname].first;
-            mate_mapq = mateseqs_w_mapq_chr[qname].second;
+            mate_seq = mateseqs_w_mapq_chr[qname].seq;
+            mate_mapq = mateseqs_w_mapq_chr[qname].mapq;
         } else {
             continue;
         }
@@ -726,7 +726,7 @@ void write_aligned_hp_indels_group_read_evidence(std::vector<sv_t*>& hp_indels, 
 
 inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos_t ref_hp_range, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len,
     stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner,
-    std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, evidence_mode_t evidence_mode, evidence_map_t* evidence_map) {
+    ext_mate_map_t& mateseqs_w_mapq_chr, evidence_mode_t evidence_mode, evidence_map_t* evidence_map) {
 
     if (hp_indels.empty()) return;
     for (sv_t* hp_indel : hp_indels) {
@@ -842,14 +842,14 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
         if (!bam_is_rev(read) && read->core.pos >= ref_hp_range.beg-stats.max_is && read->core.pos <= ref_hp_range.beg-stats.read_len/2) {
             std::string qname = get_mate_lookup_qname(read);
             if (!mateseqs_w_mapq_chr.count(qname)) continue;
-            mate_seq = mateseqs_w_mapq_chr[qname].first;
-            mate_mapq = mateseqs_w_mapq_chr[qname].second;
+            mate_seq = mateseqs_w_mapq_chr[qname].seq;
+            mate_mapq = mateseqs_w_mapq_chr[qname].mapq;
             rc(mate_seq);
         } else if (bam_is_rev(read) && endpos >= ref_hp_range.end+stats.read_len/2 && endpos <= ref_hp_range.end+stats.max_is) {
             std::string qname = get_mate_lookup_qname(read);
             if (!mateseqs_w_mapq_chr.count(qname)) continue;
-            mate_seq = mateseqs_w_mapq_chr[qname].first;
-            mate_mapq = mateseqs_w_mapq_chr[qname].second;
+            mate_seq = mateseqs_w_mapq_chr[qname].seq;
+            mate_mapq = mateseqs_w_mapq_chr[qname].mapq;
         } else {
             continue;
         }

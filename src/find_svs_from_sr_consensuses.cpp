@@ -42,7 +42,7 @@ std::unordered_map<std::string, std::vector<std::shared_ptr<consensus_t>> > unpa
 std::unordered_map<std::string, std::vector<std::shared_ptr<cluster_t>> > ss_clusters_by_chr;
 std::unordered_map<std::string, std::vector<std::shared_ptr<breakend_t>> > dp_bnds_by_chr;
 
-std::vector<std::unordered_map<std::string, std::pair<std::string, int> > > mateseqs_w_mapq;
+std::vector<ext_mate_map_t> mateseqs_w_mapq;
 std::vector<int> active_threads_per_chr;
 std::vector<std::mutex> mutex_per_chr;
 
@@ -68,7 +68,7 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 		std::ifstream fin(fname);
 		std::string qname, read_seq, qual; int mapq;
 		while (fin >> qname >> read_seq >> qual >> mapq) {
-			mateseqs_w_mapq[contig_id][qname] = {read_seq, mapq};
+			mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
 		}
 	}
 	active_threads_per_chr[contig_id]++;
@@ -590,7 +590,7 @@ void read_consensuses(int id, int contig_id, std::string contig_name) {
 }
 
 void find_indels_from_paired_consensuses(int contig_id, std::string contig_name, 
-	std::unordered_map<std::string, std::pair<std::string, int> >* mateseqs_w_mapq,
+	ext_mate_map_t* mateseqs_w_mapq,
 	ctpl::thread_pool& thread_pool) {
 
 	mtx.lock();

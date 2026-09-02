@@ -745,7 +745,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 }
 
 void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& insertions, open_samFile_t* bam_file, config_t& config, stats_t& stats,
-	bool reassign_evidence, evidence_map_t* evidence_map, std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr) {
+	bool reassign_evidence, evidence_map_t* evidence_map, ext_mate_map_t& mateseqs_w_mapq_chr) {
 	
 	if (insertions.empty()) return;
 
@@ -788,7 +788,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
         std::string qname = get_mate_lookup_qname(read);
 		
 		if (mateseqs_w_mapq_chr.count(qname) > 0) {
-			std::string mate_seq = mateseqs_w_mapq_chr[qname].first;
+			std::string mate_seq = mateseqs_w_mapq_chr[qname].seq;
 			int mate_seq_len = mate_seq.length();
 			int min_aligned_len = (mate_seq_len+1)/2;
 			

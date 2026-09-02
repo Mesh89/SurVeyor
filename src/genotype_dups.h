@@ -297,7 +297,7 @@ void write_aligned_large_dup_read_evidence(duplication_t* dup, open_samFile_t* b
 }
 
 inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
-                std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
+                ext_mate_map_t& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
                 const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
     small_dup_alignment_targets_t alignment_targets = build_small_dup_alignment_targets(dup, contig_seq, contig_len, stats);
@@ -459,7 +459,7 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
 }
 
 inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
-                std::unordered_map<std::string, std::pair<std::string, int> >& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
+                ext_mate_map_t& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_map_t* evidence_map,
                 const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 

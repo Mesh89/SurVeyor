@@ -16,19 +16,20 @@
 #include "genotype_inss.h"
 
 config_t config;
+const bool USE_HP_SPECIFIC_PATH = false;
 
-std::vector<std::unordered_map<std::string, std::pair<std::string, int>>> mates_by_contig;
+std::vector<ext_mate_map_t> mates_by_contig;
 std::vector<std::mutex> mates_mutex_by_contig;
 std::vector<int> pending_mates_users_by_contig;
 std::vector<bool> mates_loaded_by_contig;
 std::vector<bool> mates_scheduling_complete_by_contig;
 
-std::unordered_map<std::string, std::pair<std::string, int>> load_mates(const std::string& workdir, int contig_id) {
-    std::unordered_map<std::string, std::pair<std::string, int>> mates;
+ext_mate_map_t load_mates(const std::string& workdir, int contig_id) {
+    ext_mate_map_t mates;
     std::ifstream fin(workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt");
     std::string qname, read_seq, qual;
     int mapq;
-    while (fin >> qname >> read_seq >> qual >> mapq) mates[qname] = {read_seq, mapq};
+    while (fin >> qname >> read_seq >> qual >> mapq) mates[qname] = {read_seq, qual, mapq};
     return mates;
 }
 
@@ -37,7 +38,7 @@ void register_mates_user(int contig_id) {
     pending_mates_users_by_contig[contig_id]++;
 }
 
-std::unordered_map<std::string, std::pair<std::string, int>>* acquire_mates(const std::string& workdir, int contig_id) {
+ext_mate_map_t* acquire_mates(const std::string& workdir, int contig_id) {
     std::lock_guard<std::mutex> lock(mates_mutex_by_contig[contig_id]);
     if (!mates_loaded_by_contig[contig_id]) {
         mates_by_contig[contig_id] = load_mates(workdir, contig_id);
@@ -79,7 +80,7 @@ void generate_read_evidence_block(int id, int contig_id, const std::string& chr,
     std::unordered_map<std::string, std::vector<sv_t*>> hp_indels_by_range;
 
     for (sv_t* sv : svs) {
-        if (should_genotype_as_hp_indel(sv, contig_seq, contig_len)) {
+        if (USE_HP_SPECIFIC_PATH && should_genotype_as_hp_indel(sv, contig_seq, contig_len)) {
             hts_pair_pos_t ref_hp_range = find_ref_hp_range_for_indel(sv, contig_seq, contig_len);
             hp_indels_by_range[std::to_string(ref_hp_range.beg) + ":" + std::to_string(ref_hp_range.end)].push_back(sv);
         } else if (sv->svtype() == "DEL") {
@@ -96,7 +97,7 @@ void generate_read_evidence_block(int id, int contig_id, const std::string& chr,
     }
 
     if (hp_indels_by_range.empty()) return;
-    std::unordered_map<std::string, std::pair<std::string, int>>* mates = acquire_mates(workdir, contig_id);
+    ext_mate_map_t* mates = acquire_mates(workdir, contig_id);
     for (auto& hp_indels : hp_indels_by_range) {
         hts_pair_pos_t ref_hp_range = find_ref_hp_range_for_indel(hp_indels.second[0], contig_seq, contig_len);
         write_aligned_hp_indels_group_read_evidence(hp_indels.second, ref_hp_range, bam_file, contig_seq, contig_len, stats, config, aligner, *mates, *evidence_logger);
@@ -151,7 +152,7 @@ int main(int argc, char* argv[]) {
         hts_pos_t contig_len = chr_seqs.get_len(chr);
         std::vector<sv_t*> hp_indels, dels, dups, inss;
         for (const std::shared_ptr<sv_t>& sv : svs_by_contig[contig_id]) {
-            if (should_genotype_as_hp_indel(sv.get(), contig_seq, contig_len)) hp_indels.push_back(sv.get());
+            if (USE_HP_SPECIFIC_PATH && should_genotype_as_hp_indel(sv.get(), contig_seq, contig_len)) hp_indels.push_back(sv.get());
             else if (sv->svtype() == "DEL") dels.push_back(sv.get());
             else if (sv->svtype() == "DUP") dups.push_back(sv.get());
             else if (sv->svtype() == "INS") inss.push_back(sv.get());
