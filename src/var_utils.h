@@ -99,7 +99,7 @@ inline bool aux_indel_haplotype_order(const std::shared_ptr<sv_t>& a, const std:
 }
 
 inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos_t hap_len, 
-    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps) {
+    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr) {
     
     std::sort(aux_indels.begin(), aux_indels.end(), aux_indel_haplotype_order);
     std::sort(aux_snps.begin(), aux_snps.end(), [](snp_t& a, snp_t& b) {
@@ -115,6 +115,7 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
     char* hap_seq = new char[hap_len + 1];
     std::fill(hap_seq, hap_seq + hap_len, 'N');
     hap_seq[hap_len] = '\0';
+    size_t first_edit_idx = edits == nullptr ? 0 : edits->size();
     
     hts_pos_t remaining_hap_len = hap_len;
     while (hap_end > 0 && remaining_hap_len > 0) {
@@ -133,19 +134,24 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
         if (next_indel_end+1 == copy_start) { // we insert the indel
             std::shared_ptr<sv_t> indel = aux_indels[curr_indel_idx];
             if (indel->svtype() == "DEL") {
+                if (edits != nullptr) edits->push_back({allele_edit_kind_t::INDEL, indel->start+1, indel->end+1, int(remaining_hap_len), int(remaining_hap_len), int(indel->end-indel->start)});
                 hap_end = indel->start;
             } else if (indel->svtype() == "INS") {
                 hts_pos_t copied = 0;
+                hts_pos_t inserted_len = 0;
+                for (char base : indel->ins_seq) if (base != '-') inserted_len++;
                 for (auto it = indel->ins_seq.rbegin(); it != indel->ins_seq.rend() && copied < remaining_hap_len; ++it) {
                     if (*it == '-') continue;
                     hap_seq[remaining_hap_len - copied - 1] = *it;
                     copied++;
                 }
+                if (edits != nullptr && copied == inserted_len) edits->push_back({allele_edit_kind_t::INDEL, indel->start+1, indel->end+1, int(remaining_hap_len-copied), int(remaining_hap_len), int(indel->end-indel->start+inserted_len)});
                 remaining_hap_len -= copied;
             }
             curr_indel_idx--;
         } else if (next_snp_pos+1 == copy_start && remaining_hap_len > 0) { // we insert the SNP
             hap_seq[remaining_hap_len-1] = aux_snps[curr_snp_idx].alt_base;
+            if (edits != nullptr) edits->push_back({allele_edit_kind_t::SNP, aux_snps[curr_snp_idx].pos, aux_snps[curr_snp_idx].pos+1, int(remaining_hap_len-1), int(remaining_hap_len), 1});
             remaining_hap_len--;
             hap_end--;
             curr_snp_idx--;
@@ -157,12 +163,16 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
             hap_seq[i] = hap_seq[i+remaining_hap_len];
         }
         hap_seq[hap_len-remaining_hap_len] = '\0';
+        if (edits != nullptr) for (size_t i = first_edit_idx; i < edits->size(); i++) {
+            (*edits)[i].alt_begin -= remaining_hap_len;
+            (*edits)[i].alt_end -= remaining_hap_len;
+        }
     }
     return hap_seq;
 }
 
 inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_pos_t hap_start, hts_pos_t hap_len,
-    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps) {
+    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr) {
 
     // Note that aux_indels coordinates are in VCF format
 
@@ -206,20 +216,25 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
         if (hap_start == next_indel_start+1) {
             std::shared_ptr<sv_t> indel = aux_indels[curr_indel_idx];
             if (indel->svtype() == "DEL") {
+                if (edits != nullptr) edits->push_back({allele_edit_kind_t::INDEL, indel->start+1, indel->end+1, int(out_pos), int(out_pos), int(indel->end-indel->start)});
                 hap_start = indel->end + 1;
             } else if (indel->svtype() == "INS") {
                 hts_pos_t copied = 0;
+                hts_pos_t inserted_len = 0;
+                for (char base : indel->ins_seq) if (base != '-') inserted_len++;
                 for (auto it = indel->ins_seq.begin(); it != indel->ins_seq.end() && copied < remaining_hap_len; ++it) {
                     if (*it == '-') continue;
                     hap_seq[out_pos + copied] = *it;
                     copied++;
                 }
+                if (edits != nullptr && copied == inserted_len) edits->push_back({allele_edit_kind_t::INDEL, indel->start+1, indel->end+1, int(out_pos), int(out_pos+copied), int(indel->end-indel->start+inserted_len)});
                 out_pos += copied;
                 remaining_hap_len -= copied;
             }
             curr_indel_idx++;
         } else if (hap_start == next_snp_pos && remaining_hap_len > 0) {
             hap_seq[out_pos] = aux_snps[curr_snp_idx].alt_base;
+            if (edits != nullptr) edits->push_back({allele_edit_kind_t::SNP, aux_snps[curr_snp_idx].pos, aux_snps[curr_snp_idx].pos+1, int(out_pos), int(out_pos+1), 1});
             out_pos++;
             remaining_hap_len--;
             hap_start++;       // consume this reference base

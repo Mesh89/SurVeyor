@@ -562,6 +562,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* ars2_tag = "##FORMAT=<ID=ARS2,Number=1,Type=Integer,Description=\"Score of the alignment between the alternative allele consensus for the second breakpoint and the reference.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ars2_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "CED");
+	const char* ced_tag = "##FORMAT=<ID=CED,Number=2,Type=Integer,Description=\"Covered edit distance for the alternative allele consensus alignments at breakpoints 1 and 2. An edit is counted only when both ALT and REF alignments completely traverse it.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ced_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "ASS");
 	const char* ass_tag = "##FORMAT=<ID=ASS,Number=2,Type=Integer,Description=\"How much of the alternative allele aligns to the left and right, respectively, of the breakpoint.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ass_tag, &len));
@@ -601,6 +605,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "XARS2");
 	const char* xars2_tag = "##FORMAT=<ID=XARS2,Number=1,Type=Integer,Description=\"Score of the alignment between the extended alternative allele consensus for the second breakpoint and the reference.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xars2_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "XCED");
+	const char* xced_tag = "##FORMAT=<ID=XCED,Number=2,Type=Integer,Description=\"Covered edit distance for the extended alternative allele consensus alignments at breakpoints 1 and 2. An edit is counted only when both ALT and REF alignments completely traverse it.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, xced_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "XASS");
 	const char* xass_tag = "##FORMAT=<ID=XASS,Number=2,Type=Integer,Description=\"How much of the extended alternative allele aligns to the left and right, respectively, of the breakpoint.\">";

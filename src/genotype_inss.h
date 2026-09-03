@@ -326,9 +326,10 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
     auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds);
 
     auto score_ins_consensus = [&](const std::string& consensus_seq, bool bp1) {
-        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, consensus_seq.length(), ins->aux_indels, ins->aux_snps);
+        std::vector<allele_edit_t> lf_edits, rf_edits;
+        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &lf_edits);
         int alt_lf_len = strlen(lf_seq);
-        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, consensus_seq.length(), ins->aux_indels, ins->aux_snps);
+        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &rf_edits);
         int alt_rf_len = strlen(rf_seq);
         int ins_seq_portion_len = std::min(ins->ins_seq.length(), consensus_seq.length());
         int extra_len = std::max(0, int(consensus_seq.length())-int(ins->ins_seq.length()));
@@ -343,6 +344,9 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
             strncpy(targets.alt_seq+alt_lf_len+ins_seq_portion_len, rf_seq, extra_len);
             targets.left_flank_end = alt_lf_len;
             targets.right_flank_start = alt_lf_len+ins_seq_portion_len;
+            append_allele_edits(targets.edits, lf_edits, 0, alt_lf_len, 0);
+            if (ins_seq_portion_len == ins->ins_seq.length()) targets.edits.push_back({allele_edit_kind_t::INDEL, ins_start, ins_end, alt_lf_len, alt_lf_len+ins_seq_portion_len, int(ins_end-ins_start+ins->ins_seq.length()), true});
+            append_allele_edits(targets.edits, rf_edits, 0, extra_len, alt_lf_len+ins_seq_portion_len);
         } else {
             extra_len = std::min(extra_len, alt_lf_len);
             targets.alt_len = extra_len+ins_seq_portion_len+alt_rf_len;
@@ -352,6 +356,9 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
             strncpy(targets.alt_seq+extra_len+ins_seq_portion_len, rf_seq, alt_rf_len);
             targets.left_flank_end = extra_len;
             targets.right_flank_start = extra_len+ins_seq_portion_len;
+            append_allele_edits(targets.edits, lf_edits, alt_lf_len-extra_len, alt_lf_len, 0);
+            if (ins_seq_portion_len == ins->ins_seq.length()) targets.edits.push_back({allele_edit_kind_t::INDEL, ins_start, ins_end, extra_len, extra_len+ins_seq_portion_len, int(ins_end-ins_start+ins->ins_seq.length()), true});
+            append_allele_edits(targets.edits, rf_edits, 0, alt_rf_len, extra_len+ins_seq_portion_len);
         }
         targets.alt_seq[targets.alt_len] = 0;
 
@@ -360,6 +367,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
         hts_pos_t ref_end = std::min(breakpoint+hts_pos_t(consensus_seq.length()), contig_len);
         targets.ref_seqs.push_back(contig_seq+ref_start);
         targets.ref_lens.push_back(ref_end-ref_start);
+        targets.ref_starts.push_back(ref_start);
 
         char* independent_ref_seq = concat3(lf_seq, contig_seq+ins_start, rf_seq, alt_lf_len, ins_end-ins_start, alt_rf_len);
         targets.left_independent_ref_seq = targets.right_independent_ref_seq = independent_ref_seq;

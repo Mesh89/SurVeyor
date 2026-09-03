@@ -537,6 +537,15 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSC2IA", NULL, 0);
     }
 
+    if (sv->sample_info.alt_consensus1_metrics.length > 0 || sv->sample_info.alt_consensus2_metrics.length > 0) {
+        int covered_edit_distances[] = {bcf_int32_missing, bcf_int32_missing};
+        if (sv->sample_info.alt_consensus1_metrics.length > 0 && sv->sample_info.alt_consensus1_metrics.main_edit_covered) covered_edit_distances[0] = sv->sample_info.alt_consensus1_metrics.covered_edit_distance;
+        if (sv->sample_info.alt_consensus2_metrics.length > 0 && sv->sample_info.alt_consensus2_metrics.main_edit_covered) covered_edit_distances[1] = sv->sample_info.alt_consensus2_metrics.covered_edit_distance;
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED", covered_edit_distances, 2);
+    } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED", NULL, 0);
+    }
+
     if (sv->sample_info.ext_alt_consensus1_metrics.length > 0) {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "XAAS", &(sv->sample_info.ext_alt_consensus1_metrics.alt_score), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "XARS", &(sv->sample_info.ext_alt_consensus1_metrics.ref_score), 1);
@@ -573,6 +582,15 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASS2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "XASSC2IA", NULL, 0);
+    }
+
+    if (sv->sample_info.ext_alt_consensus1_metrics.length > 0 || sv->sample_info.ext_alt_consensus2_metrics.length > 0) {
+        int covered_edit_distances[] = {bcf_int32_missing, bcf_int32_missing};
+        if (sv->sample_info.ext_alt_consensus1_metrics.length > 0 && sv->sample_info.ext_alt_consensus1_metrics.main_edit_covered) covered_edit_distances[0] = sv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance;
+        if (sv->sample_info.ext_alt_consensus2_metrics.length > 0 && sv->sample_info.ext_alt_consensus2_metrics.main_edit_covered) covered_edit_distances[1] = sv->sample_info.ext_alt_consensus2_metrics.covered_edit_distance;
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XCED", covered_edit_distances, 2);
+    } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XCED", NULL, 0);
     }
 
     if (sv->sample_info.alt1_occ_ratio != sv_t::sample_info_t::NOT_COMPUTED) {

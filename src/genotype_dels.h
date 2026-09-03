@@ -338,9 +338,10 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     }
 
     auto score_del_consensus = [&](const std::string& consensus_seq) {
-        char* lh_seq = generate_haplotype_left(contig_seq, del_start-1, consensus_seq.length(), del->aux_indels, del->aux_snps);
+        std::vector<allele_edit_t> lh_edits, rh_edits;
+        char* lh_seq = generate_haplotype_left(contig_seq, del_start-1, consensus_seq.length(), del->aux_indels, del->aux_snps, &lh_edits);
         hts_pos_t lh_len = strlen(lh_seq);
-        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, del_end, consensus_seq.length(), del->aux_indels, del->aux_snps);
+        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, del_end, consensus_seq.length(), del->aux_indels, del->aux_snps, &rh_edits);
         hts_pos_t rh_len = strlen(rh_seq);
         alignment_targets_t targets;
         targets.alt_len = lh_len+del->ins_seq.length()+rh_len;
@@ -351,6 +352,9 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
         targets.alt_seq[targets.alt_len] = 0;
         targets.left_flank_end = lh_len;
         targets.right_flank_start = lh_len+del->ins_seq.length();
+        append_allele_edits(targets.edits, lh_edits, 0, lh_len, 0);
+        targets.edits.push_back({allele_edit_kind_t::INDEL, del_start, del_end, int(lh_len), int(lh_len+del->ins_seq.length()), int(del_end-del_start+del->ins_seq.length()), true});
+        append_allele_edits(targets.edits, rh_edits, 0, rh_len, lh_len+del->ins_seq.length());
 
         hts_pos_t lh_start = std::max(hts_pos_t(0), del_start-lh_len);
         hts_pos_t rh_end = std::min(del_end+rh_len, contig_len);
@@ -358,8 +362,10 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
         hts_pos_t rbp_start = std::max(hts_pos_t(0), del_end-hts_pos_t(consensus_seq.length()));
         targets.ref_seqs.push_back(contig_seq+lh_start);
         targets.ref_lens.push_back(lbp_end-lh_start);
+        targets.ref_starts.push_back(lh_start);
         targets.ref_seqs.push_back(contig_seq+rbp_start);
         targets.ref_lens.push_back(rh_end-rbp_start);
+        targets.ref_starts.push_back(rbp_start);
 
         targets.left_independent_ref_seq = concat2(lh_seq, contig_seq+del_start, lh_len, lbp_end-del_start);
         targets.left_independent_ref_len = lh_len+lbp_end-del_start;

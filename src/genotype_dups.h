@@ -407,6 +407,10 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         targets.alt_seq[pos] = 0;
         targets.ref_seqs.push_back(contig_seq+ref_start);
         targets.ref_lens.push_back(ref_end-ref_start);
+        targets.ref_starts.push_back(ref_start);
+        int inserted_begin = dup_end-ref_start;
+        int inserted_len = n_extra_copies*svlen;
+        targets.edits.push_back({allele_edit_kind_t::INDEL, dup_end, dup_end, inserted_begin, inserted_begin+inserted_len, inserted_len, true});
         targets.left_flank_end = dup_start-ref_start;
         targets.right_flank_start = pos-(ref_end-dup_end);
         targets.right_flank_end_offset = 0;
@@ -586,8 +590,11 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         hts_pos_t ref_bp2_end = std::min(dup->end+hts_pos_t(consensus_seq.length()), contig_len);
         targets.ref_seqs.push_back(contig_seq+ref_bp1_start);
         targets.ref_lens.push_back(ref_bp1_end-ref_bp1_start);
+        targets.ref_starts.push_back(ref_bp1_start);
         targets.ref_seqs.push_back(contig_seq+ref_bp2_start);
         targets.ref_lens.push_back(ref_bp2_end-ref_bp2_start);
+        targets.ref_starts.push_back(ref_bp2_start);
+        targets.edits.push_back({allele_edit_kind_t::INDEL, dup->end, dup->end, int(lh_len), int(lh_len+dup->ins_seq.length()+dup->end-dup->start), int(dup->ins_seq.length()+dup->end-dup->start), true});
         targets.left_flank_end = lh_len;
         targets.right_flank_start = lh_len+dup->ins_seq.length();
         targets.right_flank_end_offset = 0;

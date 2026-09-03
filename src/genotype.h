@@ -34,6 +34,8 @@ struct alignment_targets_t {
     int alt_len = 0;
     std::vector<char*> ref_seqs;
     std::vector<int> ref_lens;
+    std::vector<hts_pos_t> ref_starts;
+    std::vector<allele_edit_t> edits;
 
     // The left flank is alt_seq[0:left_flank_end], while the right flank starts at right_flank_start.
     int left_flank_end = 0, right_flank_start = 0;
@@ -45,9 +47,46 @@ struct alignment_targets_t {
     int left_independent_ref_len = 0, right_independent_ref_len = 0;
 };
 
-inline int consensus_alignment_score(const StripedSmithWaterman::Alignment& alignment) {
-    return alignment.query_end - alignment.query_begin - alignment.mismatches;
+inline void append_allele_edits(std::vector<allele_edit_t>& destination, const std::vector<allele_edit_t>& source, int source_begin, int source_end, int destination_begin) {
+    for (allele_edit_t edit : source) {
+        bool included = edit.alt_begin < edit.alt_end ? source_begin <= edit.alt_begin && edit.alt_end <= source_end : source_begin < edit.alt_begin && edit.alt_begin < source_end;
+        if (!included) continue;
+        edit.alt_begin += destination_begin-source_begin;
+        edit.alt_end += destination_begin-source_begin;
+        destination.push_back(edit);
+    }
 }
+
+inline bool alignment_spans_interval(const StripedSmithWaterman::Alignment& alignment, int begin, int end) {
+    return alignment.sw_score > 0 && begin < end && alignment.ref_begin <= begin && alignment.ref_end >= end-1;
+}
+
+inline bool alignment_aligns_interval(const StripedSmithWaterman::Alignment& alignment, int begin, int end) {
+    if (!alignment_spans_interval(alignment, begin, end)) return false;
+    int ref_pos = alignment.ref_begin, covered_until = begin;
+    for (uint32_t encoded_op : alignment.cigar) {
+        int op = bam_cigar_op(encoded_op), len = bam_cigar_oplen(encoded_op);
+        if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
+            int overlap_begin = std::max(ref_pos, begin), overlap_end = std::min(ref_pos+len, end);
+            if (overlap_begin < overlap_end) {
+                if (overlap_begin > covered_until) return false;
+                covered_until = std::max(covered_until, overlap_end);
+            }
+        }
+        if (bam_cigar_type(op)&2) ref_pos += len;
+        if (covered_until >= end) return true;
+    }
+    return false;
+}
+
+inline bool alignment_crosses_breakpoint(const StripedSmithWaterman::Alignment& alignment, int breakpoint) {
+    return alignment.sw_score > 0 && alignment.ref_begin < breakpoint && alignment.ref_end >= breakpoint;
+}
+
+inline int consensus_alignment_score(const StripedSmithWaterman::Alignment& alignment) {
+    if (alignment.sw_score <= 0) return 0;
+    return alignment.query_end - alignment.query_begin + 1 - alignment.mismatches;
+}   
 
 inline consensus_alignment_metrics_t score_consensus_alignment(const std::string& consensus_seq, const alignment_targets_t& targets, StripedSmithWaterman::Aligner& aligner) {
     consensus_alignment_metrics_t metrics;
@@ -65,12 +104,39 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
     metrics.alt_ref_begin = alt_alignment.ref_begin;
     metrics.alt_ref_end = alt_alignment.ref_end;
 
+    StripedSmithWaterman::Alignment best_ref_alignment;
+    best_ref_alignment.Clear();
+    int best_ref_idx = -1;
     for (int i = 0; i < targets.ref_seqs.size() && i < targets.ref_lens.size(); i++) {
         if (targets.ref_seqs[i] == NULL || targets.ref_lens[i] <= 0) continue;
         StripedSmithWaterman::Alignment ref_alignment;
         ref_alignment.Clear();
         aligner.Align(consensus_seq.c_str(), targets.ref_seqs[i], targets.ref_lens[i], with_pos_and_cigar, &ref_alignment, 0);
-        metrics.ref_score = std::max(metrics.ref_score, consensus_alignment_score(ref_alignment));
+        int ref_score = consensus_alignment_score(ref_alignment);
+        if (best_ref_idx == -1 || ref_score > metrics.ref_score) {
+            metrics.ref_score = ref_score;
+            best_ref_alignment = ref_alignment;
+            best_ref_idx = i;
+        }
+    }
+
+    if (best_ref_idx >= 0 && best_ref_idx < targets.ref_starts.size()) {
+        hts_pos_t ref_start = targets.ref_starts[best_ref_idx];
+        for (const allele_edit_t& edit : targets.edits) {
+            int ref_begin = edit.ref_begin-ref_start, ref_end = edit.ref_end-ref_start;
+            bool alt_covered, ref_covered;
+            if (edit.kind == allele_edit_kind_t::SNP) {
+                alt_covered = alignment_aligns_interval(alt_alignment, edit.alt_begin, edit.alt_end);
+                ref_covered = alignment_aligns_interval(best_ref_alignment, ref_begin, ref_end);
+            } else {
+                alt_covered = edit.alt_begin < edit.alt_end ? alignment_aligns_interval(alt_alignment, edit.alt_begin, edit.alt_end) : alignment_crosses_breakpoint(alt_alignment, edit.alt_begin);
+                ref_covered = edit.ref_begin < edit.ref_end ? alignment_spans_interval(best_ref_alignment, ref_begin, ref_end) : alignment_crosses_breakpoint(best_ref_alignment, ref_begin);
+            }
+            if (alt_covered && ref_covered) {
+                metrics.covered_edit_distance += edit.distance;
+                if (edit.main_edit) metrics.main_edit_covered = true;
+            }
+        }
     }
 
     int left_ref_len = targets.has_left_split ? std::max(0, targets.left_flank_end-alt_alignment.ref_begin) : 0;

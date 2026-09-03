@@ -340,13 +340,23 @@ double calculate_z_score(double mean1, double stddev1, double n1, double mean2, 
     return (mean1-mean2)/std_error;
 }
 
+double consensus_normalisation_edit_distance(bcf_hdr_t* hdr, bcf1_t* record, const std::string& prefix) {
+    std::string covered_edit_distance_tag = prefix+"CED";
+    double full_edit_distance = get_edit_distance(hdr, record, get_svinsseq(hdr, record).size());
+    bool has_consensus1 = has_format(hdr, record, (prefix+"AAS").c_str()), has_consensus2 = has_format(hdr, record, (prefix+"AAS2").c_str());
+    if (!has_consensus1 && !has_consensus2) return full_edit_distance;
+    if (!has_format(hdr, record, covered_edit_distance_tag.c_str())) return (has_consensus1 ? full_edit_distance : 0)+(has_consensus2 ? full_edit_distance : 0);
+    std::vector<double> covered_edit_distances = get_format_numbers(hdr, record, covered_edit_distance_tag.c_str(), {NAN_VALUE, NAN_VALUE});
+    return (has_consensus1 ? (std::isfinite(covered_edit_distances[0]) ? covered_edit_distances[0] : full_edit_distance) : 0)+(has_consensus2 ? (std::isfinite(covered_edit_distances[1]) ? covered_edit_distances[1] : full_edit_distance) : 0);
+}
+
 double consensus_alt_ref_score_diff_to_len(bcf_hdr_t* hdr, bcf1_t* record, const std::string& prefix) {
     double aas1 = get_format_number(hdr, record, (prefix+"AAS").c_str(), 0), aas2 = get_format_number(hdr, record, (prefix+"AAS2").c_str(), 0);
     double ars1 = get_format_number(hdr, record, (prefix+"ARS").c_str(), 0), ars2 = get_format_number(hdr, record, (prefix+"ARS2").c_str(), 0);
-    return (aas1-ars1+aas2-ars2)/std::max<int64_t>(1, get_edit_distance(hdr, record, get_svinsseq(hdr, record).size()));
+    return (aas1-ars1+aas2-ars2)/std::max(1.0, consensus_normalisation_edit_distance(hdr, record, prefix));
 }
 
-void add_consensus_alignment_features(features_t& features, bcf_hdr_t* hdr, bcf1_t* record, const std::string& prefix, int read_len, int64_t edit_distance) {
+void add_consensus_alignment_features(features_t& features, bcf_hdr_t* hdr, bcf1_t* record, const std::string& prefix, int read_len) {
     double al1 = get_format_number(hdr, record, (prefix+"AL").c_str(), NAN_VALUE), al2 = get_format_number(hdr, record, (prefix+"AL2").c_str(), NAN_VALUE);
     double normalised_al1, normalised_al2;
     if (prefix.empty()) {
@@ -363,7 +373,7 @@ void add_consensus_alignment_features(features_t& features, bcf_hdr_t* hdr, bcf1
     features[prefix+"AL"] = std::isfinite(normalised_al1) || std::isfinite(normalised_al2) ? (std::isfinite(normalised_al1) ? normalised_al1 : 0)+(std::isfinite(normalised_al2) ? normalised_al2 : 0) : NAN_VALUE;
     double aas1 = get_format_number(hdr, record, (prefix+"AAS").c_str(), 0), aas2 = get_format_number(hdr, record, (prefix+"AAS2").c_str(), 0);
     double ars1 = get_format_number(hdr, record, (prefix+"ARS").c_str(), 0), ars2 = get_format_number(hdr, record, (prefix+"ARS2").c_str(), 0);
-    features[prefix+"AAS_"+prefix+"ARS_DIFF_TO_LEN"] = (aas1-ars1+aas2-ars2)/std::max<int64_t>(1, edit_distance);
+    features[prefix+"AAS_"+prefix+"ARS_DIFF_TO_LEN"] = (aas1-ars1+aas2-ars2)/std::max(1.0, consensus_normalisation_edit_distance(hdr, record, prefix));
     std::vector<double> ass1 = get_format_numbers(hdr, record, (prefix+"ASS").c_str(), {NAN_VALUE, NAN_VALUE});
     std::vector<double> ass2 = get_format_numbers(hdr, record, (prefix+"ASS2").c_str(), {NAN_VALUE, NAN_VALUE});
     features[prefix+"ASS1_LEFT_RATIO"] = ass1[0]/std::max(1.0, al1); features[prefix+"ASS1_RIGHT_RATIO"] = ass1[1]/std::max(1.0, al1);
@@ -684,8 +694,8 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     ADD_Z("SSP1_RSP1_1_NM_Z_SCORE", ssp1nma1, ssp1nms1, ssp1, rsp1nma1, rsp1nms1, rsp1); ADD_Z("SSP1_RSP1_2_NM_Z_SCORE", ssp1nma2, ssp1nms2, ssp1, rsp1nma2, rsp1nms2, rsp1);
     ADD_Z("SSP2_RSP2_1_NM_Z_SCORE", ssp2nma1, ssp2nms1, ssp2, rsp2nma1, rsp2nms1, rsp2); ADD_Z("SSP2_RSP2_2_NM_Z_SCORE", ssp2nma2, ssp2nms2, ssp2, rsp2nma2, rsp2nms2, rsp2);
 #undef ADD_Z
-    add_consensus_alignment_features(features, hdr, record, "", read_len, edit_distance);
-    add_consensus_alignment_features(features, hdr, record, "X", read_len, edit_distance);
+    add_consensus_alignment_features(features, hdr, record, "", read_len);
+    add_consensus_alignment_features(features, hdr, record, "X", read_len);
 
     std::vector<double> values;
     values.reserve(feature_names.size());
