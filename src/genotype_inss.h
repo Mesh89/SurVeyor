@@ -369,13 +369,16 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
         targets.ref_lens.push_back(ref_end-ref_start);
         targets.ref_starts.push_back(ref_start);
 
-        char* independent_ref_seq = concat3(lf_seq, contig_seq+ins_start, rf_seq, alt_lf_len, ins_end-ins_start, alt_rf_len);
-        targets.left_independent_ref_seq = targets.right_independent_ref_seq = independent_ref_seq;
-        targets.left_independent_ref_len = targets.right_independent_ref_len = alt_lf_len+ins_end-ins_start+alt_rf_len;
+        char* aux_ref_seq = concat3(lf_seq, contig_seq+ins_start, rf_seq, alt_lf_len, ins_end-ins_start, alt_rf_len);
+        int aux_ref_len = alt_lf_len+ins_end-ins_start+alt_rf_len;
+        targets.aux_ref_seqs.push_back(aux_ref_seq);
+        targets.aux_ref_lens.push_back(aux_ref_len);
+        targets.left_independent_ref_seq = targets.right_independent_ref_seq = aux_ref_seq;
+        targets.left_independent_ref_len = targets.right_independent_ref_len = aux_ref_len;
 
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
-        delete[] independent_ref_seq;
+        delete[] aux_ref_seq;
         delete[] lf_seq;
         delete[] rf_seq;
         return metrics;

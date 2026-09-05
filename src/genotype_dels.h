@@ -367,15 +367,26 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
         targets.ref_lens.push_back(rh_end-rbp_start);
         targets.ref_starts.push_back(rbp_start);
 
-        targets.left_independent_ref_seq = concat2(lh_seq, contig_seq+del_start, lh_len, lbp_end-del_start);
-        targets.left_independent_ref_len = lh_len+lbp_end-del_start;
-        targets.right_independent_ref_seq = concat2(contig_seq+rbp_start, rh_seq, del_end-rbp_start, rh_len);
-        targets.right_independent_ref_len = del_end-rbp_start+rh_len;
+        int aux_ref_main_len = std::min(del_end-del_start, int(consensus_seq.length()));
+        int left_aux_ref_rf_len = std::min(int(rh_len), int(consensus_seq.length())-aux_ref_main_len);
+        int right_aux_ref_lf_len = std::min(int(lh_len), int(consensus_seq.length())-aux_ref_main_len);
+        char* left_aux_ref_seq = concat3(lh_seq, contig_seq+del_start, rh_seq, lh_len, aux_ref_main_len, left_aux_ref_rf_len);
+        int left_aux_ref_len = lh_len+aux_ref_main_len+left_aux_ref_rf_len;
+        char* right_aux_ref_seq = concat3(lh_seq+lh_len-right_aux_ref_lf_len, contig_seq+del_end-aux_ref_main_len, rh_seq, right_aux_ref_lf_len, aux_ref_main_len, rh_len);
+        int right_aux_ref_len = right_aux_ref_lf_len+aux_ref_main_len+rh_len;
+        targets.aux_ref_seqs.push_back(left_aux_ref_seq);
+        targets.aux_ref_lens.push_back(left_aux_ref_len);
+        targets.aux_ref_seqs.push_back(right_aux_ref_seq);
+        targets.aux_ref_lens.push_back(right_aux_ref_len);
+        targets.left_independent_ref_seq = left_aux_ref_seq;
+        targets.left_independent_ref_len = left_aux_ref_len;
+        targets.right_independent_ref_seq = right_aux_ref_seq;
+        targets.right_independent_ref_len = right_aux_ref_len;
 
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
-        delete[] targets.left_independent_ref_seq;
-        delete[] targets.right_independent_ref_seq;
+        delete[] left_aux_ref_seq;
+        delete[] right_aux_ref_seq;
         delete[] lh_seq;
         delete[] rh_seq;
         return metrics;

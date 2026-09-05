@@ -134,6 +134,8 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         targets.right_flank_start = target_lf_len+inv_len;
         targets.left_independent_ref_seq = targets.right_independent_ref_seq = contig_seq+target_start;
         targets.left_independent_ref_len = targets.right_independent_ref_len = target_end-target_start;
+        targets.aux_ref_seqs.push_back(contig_seq+target_start);
+        targets.aux_ref_lens.push_back(target_end-target_start);
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
         return metrics;
@@ -158,6 +160,7 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         inv->sample_info.ext_alt_consensus1_metrics.alt_score = extended_metrics.alt_score;
         inv->sample_info.ext_alt_consensus1_metrics.ref_score = extended_metrics.ref_score;
         inv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
+        inv->sample_info.ext_alt_consensus1_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
         inv->sample_info.ext_alt_consensus1_metrics.main_edit_covered = extended_metrics.main_edit_covered;
 
         hts_pos_t target_start = std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION);
@@ -447,6 +450,8 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
             targets.right_independent_ref_seq = contig_seq+target_start;
             targets.right_independent_ref_len = target_end-target_start;
         }
+        targets.aux_ref_seqs.push_back(contig_seq+target_start);
+        targets.aux_ref_lens.push_back(target_end-target_start);
 
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
@@ -473,6 +478,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         inv->sample_info.ext_alt_consensus1_metrics.alt_score = extended_metrics.alt_score;
         inv->sample_info.ext_alt_consensus1_metrics.ref_score = extended_metrics.ref_score;
         inv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
+        inv->sample_info.ext_alt_consensus1_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
         inv->sample_info.ext_alt_consensus1_metrics.main_edit_covered = extended_metrics.main_edit_covered;
 
         hts_pos_t target_start = std::max(hts_pos_t(0), sv_start-hts_pos_t(alt_bp1_consensus_seq.length()));
@@ -502,6 +508,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         inv->sample_info.ext_alt_consensus2_metrics.alt_score = extended_metrics.alt_score;
         inv->sample_info.ext_alt_consensus2_metrics.ref_score = extended_metrics.ref_score;
         inv->sample_info.ext_alt_consensus2_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
+        inv->sample_info.ext_alt_consensus2_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
         inv->sample_info.ext_alt_consensus2_metrics.main_edit_covered = extended_metrics.main_edit_covered;
 
         hts_pos_t target_start = std::max(hts_pos_t(0), sv_end-hts_pos_t(alt_bp2_consensus_seq.length()));

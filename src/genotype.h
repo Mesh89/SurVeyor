@@ -35,6 +35,8 @@ struct alignment_targets_t {
     std::vector<char*> ref_seqs;
     std::vector<int> ref_lens;
     std::vector<hts_pos_t> ref_starts;
+    std::vector<char*> aux_ref_seqs;
+    std::vector<int> aux_ref_lens;
     std::vector<allele_edit_t> edits;
 
     // The left flank is alt_seq[0:left_flank_end], while the right flank starts at right_flank_start.
@@ -86,7 +88,16 @@ inline bool alignment_crosses_breakpoint(const StripedSmithWaterman::Alignment& 
 inline int consensus_alignment_score(const StripedSmithWaterman::Alignment& alignment) {
     if (alignment.sw_score <= 0) return 0;
     return alignment.query_end - alignment.query_begin + 1 - alignment.mismatches;
-}   
+}
+
+inline int alignment_edit_distance(const StripedSmithWaterman::Alignment& alignment) {
+    int distance = 0;
+    for (uint32_t encoded_op : alignment.cigar) {
+        int op = bam_cigar_op(encoded_op);
+        if (op == BAM_CDIFF || op == BAM_CINS || op == BAM_CDEL) distance += bam_cigar_oplen(encoded_op);
+    }
+    return distance;
+}
 
 inline consensus_alignment_metrics_t score_consensus_alignment(const std::string& consensus_seq, const alignment_targets_t& targets, StripedSmithWaterman::Aligner& aligner) {
     consensus_alignment_metrics_t metrics;
@@ -104,6 +115,23 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
     metrics.alt_ref_begin = alt_alignment.ref_begin;
     metrics.alt_ref_end = alt_alignment.ref_end;
 
+    if (alt_alignment.sw_score > 0 && alt_alignment.ref_begin >= 0 && alt_alignment.ref_end >= alt_alignment.ref_begin) {
+        std::string aligned_alt_seq(targets.alt_seq+alt_alignment.ref_begin, alt_alignment.ref_end-alt_alignment.ref_begin+1);
+        int best_local_score = -1, best_local_edit_distance = 0;
+        for (int i = 0; i < targets.ref_seqs.size() && i < targets.ref_lens.size(); i++) {
+            if (targets.ref_seqs[i] == NULL || targets.ref_lens[i] <= 0) continue;
+            StripedSmithWaterman::Alignment local_ref_alignment;
+            local_ref_alignment.Clear();
+            aligner.Align(aligned_alt_seq.c_str(), targets.ref_seqs[i], targets.ref_lens[i], with_pos_and_cigar, &local_ref_alignment, 0);
+            int local_edit_distance = alignment_edit_distance(local_ref_alignment);
+            if (local_ref_alignment.sw_score > best_local_score || (local_ref_alignment.sw_score == best_local_score && local_edit_distance < best_local_edit_distance)) {
+                best_local_score = local_ref_alignment.sw_score;
+                best_local_edit_distance = local_edit_distance;
+            }
+        }
+        if (best_local_score >= 0) metrics.local_alt_ref_edit_distance = best_local_edit_distance;
+    }
+
     StripedSmithWaterman::Alignment best_ref_alignment;
     best_ref_alignment.Clear();
     int best_ref_idx = -1;
@@ -118,6 +146,14 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
             best_ref_alignment = ref_alignment;
             best_ref_idx = i;
         }
+    }
+
+    for (int i = 0; i < targets.aux_ref_seqs.size() && i < targets.aux_ref_lens.size(); i++) {
+        if (targets.aux_ref_seqs[i] == NULL || targets.aux_ref_lens[i] <= 0) continue;
+        StripedSmithWaterman::Alignment aux_ref_alignment;
+        aux_ref_alignment.Clear();
+        aligner.Align(consensus_seq.c_str(), targets.aux_ref_seqs[i], targets.aux_ref_lens[i], with_pos_and_cigar, &aux_ref_alignment, 0);
+        metrics.aux_ref_score = std::max(metrics.aux_ref_score, consensus_alignment_score(aux_ref_alignment));
     }
 
     if (best_ref_idx >= 0 && best_ref_idx < targets.ref_starts.size()) {

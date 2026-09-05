@@ -416,6 +416,8 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         targets.right_flank_end_offset = 0;
         targets.left_independent_ref_seq = targets.right_independent_ref_seq = contig_seq+ref_start;
         targets.left_independent_ref_len = targets.right_independent_ref_len = ref_end-ref_start;
+        targets.aux_ref_seqs.push_back(contig_seq+ref_start);
+        targets.aux_ref_lens.push_back(ref_end-ref_start);
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
         return metrics;
@@ -602,6 +604,10 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         targets.left_independent_ref_len = ref_bp2_end-ref_bp2_start;
         targets.right_independent_ref_seq = contig_seq+ref_bp1_start;
         targets.right_independent_ref_len = ref_bp1_end-ref_bp1_start;
+        targets.aux_ref_seqs.push_back(contig_seq+ref_bp1_start);
+        targets.aux_ref_lens.push_back(ref_bp1_end-ref_bp1_start);
+        targets.aux_ref_seqs.push_back(contig_seq+ref_bp2_start);
+        targets.aux_ref_lens.push_back(ref_bp2_end-ref_bp2_start);
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
         return metrics;

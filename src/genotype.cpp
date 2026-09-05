@@ -504,6 +504,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AL", &(sv->sample_info.alt_consensus1_metrics.length), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AAS", &(sv->sample_info.alt_consensus1_metrics.alt_score), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS", &(sv->sample_info.alt_consensus1_metrics.ref_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS", &(sv->sample_info.alt_consensus1_metrics.aux_ref_score), 1);
         int ass[] = {sv->sample_info.alt_consensus1_metrics.split_sizes[0], sv->sample_info.alt_consensus1_metrics.split_sizes[1]};
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS", ass, 2);
         int assc[] = {sv->sample_info.alt_consensus1_metrics.split_scores[0], sv->sample_info.alt_consensus1_metrics.split_scores[1]};
@@ -514,6 +515,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AL", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AAS", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSC", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSCIA", NULL, 0);
@@ -522,6 +524,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AL2", &(sv->sample_info.alt_consensus2_metrics.length), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AAS2", &(sv->sample_info.alt_consensus2_metrics.alt_score), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS2", &(sv->sample_info.alt_consensus2_metrics.ref_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS2", &(sv->sample_info.alt_consensus2_metrics.aux_ref_score), 1);
         int ass2[] = {sv->sample_info.alt_consensus2_metrics.split_sizes[0], sv->sample_info.alt_consensus2_metrics.split_sizes[1]};
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS2", ass2, 2);
         int assc2[] = {sv->sample_info.alt_consensus2_metrics.split_scores[0], sv->sample_info.alt_consensus2_metrics.split_scores[1]};
@@ -532,6 +535,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AL2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AAS2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS2", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSC2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSC2IA", NULL, 0);
@@ -542,8 +546,13 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         if (sv->sample_info.alt_consensus1_metrics.length > 0 && sv->sample_info.alt_consensus1_metrics.main_edit_covered) covered_edit_distances[0] = sv->sample_info.alt_consensus1_metrics.covered_edit_distance;
         if (sv->sample_info.alt_consensus2_metrics.length > 0 && sv->sample_info.alt_consensus2_metrics.main_edit_covered) covered_edit_distances[1] = sv->sample_info.alt_consensus2_metrics.covered_edit_distance;
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED", covered_edit_distances, 2);
+        int local_alt_ref_edit_distances[] = {bcf_int32_missing, bcf_int32_missing};
+        if (sv->sample_info.alt_consensus1_metrics.length > 0) local_alt_ref_edit_distances[0] = sv->sample_info.alt_consensus1_metrics.local_alt_ref_edit_distance;
+        if (sv->sample_info.alt_consensus2_metrics.length > 0) local_alt_ref_edit_distances[1] = sv->sample_info.alt_consensus2_metrics.local_alt_ref_edit_distance;
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED2", local_alt_ref_edit_distances, 2);
     } else {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED2", NULL, 0);
     }
 
     if (sv->sample_info.ext_alt_consensus1_metrics.length > 0) {
@@ -589,8 +598,13 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         if (sv->sample_info.ext_alt_consensus1_metrics.length > 0 && sv->sample_info.ext_alt_consensus1_metrics.main_edit_covered) covered_edit_distances[0] = sv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance;
         if (sv->sample_info.ext_alt_consensus2_metrics.length > 0 && sv->sample_info.ext_alt_consensus2_metrics.main_edit_covered) covered_edit_distances[1] = sv->sample_info.ext_alt_consensus2_metrics.covered_edit_distance;
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "XCED", covered_edit_distances, 2);
+        int local_alt_ref_edit_distances[] = {bcf_int32_missing, bcf_int32_missing};
+        if (sv->sample_info.ext_alt_consensus1_metrics.length > 0) local_alt_ref_edit_distances[0] = sv->sample_info.ext_alt_consensus1_metrics.local_alt_ref_edit_distance;
+        if (sv->sample_info.ext_alt_consensus2_metrics.length > 0) local_alt_ref_edit_distances[1] = sv->sample_info.ext_alt_consensus2_metrics.local_alt_ref_edit_distance;
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XCED2", local_alt_ref_edit_distances, 2);
     } else {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "XCED", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "XCED2", NULL, 0);
     }
 
     if (sv->sample_info.alt1_occ_ratio != sv_t::sample_info_t::NOT_COMPUTED) {

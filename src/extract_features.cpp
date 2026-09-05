@@ -46,7 +46,7 @@ const std::vector<std::string>& default_feature_names() {
         "RIGHT_FLANKING_T_RATIO_500", "MAX_RIGHT_FLANKING_BASE_RATIO_500", "INS_PREFIX_A_RATIO", "INS_PREFIX_C_RATIO", "INS_PREFIX_G_RATIO", "INS_PREFIX_T_RATIO",
         "MAX_INS_PREFIX_BASE_COUNT_RATIO", "INS_SUFFIX_A_RATIO", "INS_SUFFIX_C_RATIO", "INS_SUFFIX_G_RATIO", "INS_SUFFIX_T_RATIO", "MAX_INS_SUFFIX_BASE_COUNT_RATIO",
         "INS_SEQ_COV_PREFIX_LEN", "INS_SEQ_COV_SUFFIX_LEN", "EXP_ALT_READS_FREQ1", "EXP_ALT_READS_FREQ2", "REF1_HP_LEN", "REF2_HP_LEN", "ALT1_HP_LEN", "ALT2_HP_LEN", "ASS1_LEFT_RATIO", "ASS1_RIGHT_RATIO",
-        "ASS2_LEFT_RATIO", "ASS2_RIGHT_RATIO", "AAS_ARS_DIFF_TO_LEN", "ASSC1_IA_RATIO", "ASSC2_IA_RATIO", "ASSC1_IA_DIFF", "ASSC2_IA_DIFF", "AL1", "AL2", "AL", "XASS1_LEFT_RATIO",
+        "ASS2_LEFT_RATIO", "ASS2_RIGHT_RATIO", "AAS_ARS_DIFF_TO_LEN", "AAS_AUXRS_DIFF_TO_LEN", "ASSC1_IA_RATIO", "ASSC2_IA_RATIO", "ASSC1_IA_DIFF", "ASSC2_IA_DIFF", "AL1", "AL2", "AL", "XASS1_LEFT_RATIO",
         "XASS1_RIGHT_RATIO", "XASS2_LEFT_RATIO", "XASS2_RIGHT_RATIO", "XAAS_XARS_DIFF_TO_LEN", "XASSC1_IA_RATIO", "XASSC2_IA_RATIO", "XASSC1_IA_DIFF", "XASSC2_IA_DIFF", "XAL1",
         "XAL2", "XAL", "MDLF", "MDSP", "MDSF", "MDRF", "MDSP_OVER_MDLF", "MDSF_OVER_MDRF", "MDLFHQ", "MDSPHQ", "MDSFHQ", "MDRFHQ", "MDSP_OVER_MDLF_HQ", "MDSF_OVER_MDRF_HQ",
         "MDLC", "MDRC", "MDLCHQ", "MDRCHQ", "TD", "AR1", "AR1_ADJ", "AR1C", "AR1C_ADJ", "AR1C_RATIO", "AR1CmQ", "AR1CMQ", "AR1CHQ", "AR1C_HQ_RATIO", "AR2", "AR2_ADJ", "AR2C",
@@ -270,13 +270,18 @@ std::string get_svinsseq(bcf_hdr_t* hdr, bcf1_t* record) {
     return "";
 }
 
-int64_t get_svlen(bcf_hdr_t* hdr, bcf1_t* record) {
+int64_t get_main_svlen(bcf_hdr_t* hdr, bcf1_t* record) {
     std::string svtype = get_svtype(hdr, record);
     std::string svinsseq = get_svinsseq(hdr, record);
     int64_t svlen;
-    if (svtype == "INS" || svtype == "INS_TO_DUP" || svtype == "DEL") svlen = svinsseq.size()-(record_stop(record)-record_pos(record));
-    else if (svtype == "DUP") svlen = record_stop(record)-record_pos(record)+svinsseq.size();
+    if (svtype == "INS" || svtype == "INS_TO_DUP" || svtype == "DEL") svlen = int64_t(svinsseq.size())-(record_stop(record)-record_pos(record));
+    else if (svtype == "DUP") svlen = record_stop(record)-record_pos(record)+int64_t(svinsseq.size());
     else throw std::runtime_error("Unexpected SVTYPE " + svtype + ".");
+    return svlen;
+}
+
+int64_t get_svlen(bcf_hdr_t* hdr, bcf1_t* record) {
+    int64_t svlen = get_main_svlen(hdr, record);
     for (const std::string& indel : get_info_strings(hdr, record, "AUX_INDELS")) {
         std::vector<std::string> fields = split(indel, ':');
         if (fields.size() < 3) throw std::runtime_error("Malformed AUX_INDELS value " + indel + ".");
@@ -341,13 +346,13 @@ double calculate_z_score(double mean1, double stddev1, double n1, double mean2, 
 }
 
 double consensus_normalisation_edit_distance(bcf_hdr_t* hdr, bcf1_t* record, const std::string& prefix) {
-    std::string covered_edit_distance_tag = prefix+"CED";
+    std::string local_edit_distance_tag = prefix+"CED2";
     double full_edit_distance = get_edit_distance(hdr, record, get_svinsseq(hdr, record).size());
     bool has_consensus1 = has_format(hdr, record, (prefix+"AAS").c_str()), has_consensus2 = has_format(hdr, record, (prefix+"AAS2").c_str());
     if (!has_consensus1 && !has_consensus2) return full_edit_distance;
-    if (!has_format(hdr, record, covered_edit_distance_tag.c_str())) return (has_consensus1 ? full_edit_distance : 0)+(has_consensus2 ? full_edit_distance : 0);
-    std::vector<double> covered_edit_distances = get_format_numbers(hdr, record, covered_edit_distance_tag.c_str(), {NAN_VALUE, NAN_VALUE});
-    return (has_consensus1 ? (std::isfinite(covered_edit_distances[0]) ? covered_edit_distances[0] : full_edit_distance) : 0)+(has_consensus2 ? (std::isfinite(covered_edit_distances[1]) ? covered_edit_distances[1] : full_edit_distance) : 0);
+    if (!has_format(hdr, record, local_edit_distance_tag.c_str())) return (has_consensus1 ? full_edit_distance : 0)+(has_consensus2 ? full_edit_distance : 0);
+    std::vector<double> local_edit_distances = get_format_numbers(hdr, record, local_edit_distance_tag.c_str(), {NAN_VALUE, NAN_VALUE});
+    return (has_consensus1 ? (std::isfinite(local_edit_distances[0]) ? local_edit_distances[0] : full_edit_distance) : 0)+(has_consensus2 ? (std::isfinite(local_edit_distances[1]) ? local_edit_distances[1] : full_edit_distance) : 0);
 }
 
 double consensus_alt_ref_score_diff_to_len(bcf_hdr_t* hdr, bcf1_t* record, const std::string& prefix) {
@@ -374,6 +379,18 @@ void add_consensus_alignment_features(features_t& features, bcf_hdr_t* hdr, bcf1
     double aas1 = get_format_number(hdr, record, (prefix+"AAS").c_str(), 0), aas2 = get_format_number(hdr, record, (prefix+"AAS2").c_str(), 0);
     double ars1 = get_format_number(hdr, record, (prefix+"ARS").c_str(), 0), ars2 = get_format_number(hdr, record, (prefix+"ARS2").c_str(), 0);
     features[prefix+"AAS_"+prefix+"ARS_DIFF_TO_LEN"] = (aas1-ars1+aas2-ars2)/std::max(1.0, consensus_normalisation_edit_distance(hdr, record, prefix));
+    if (prefix.empty()) {
+        double alt_scores[] = {get_format_number(hdr, record, "AAS", NAN_VALUE), get_format_number(hdr, record, "AAS2", NAN_VALUE)};
+        double aux_ref_scores[] = {get_format_number(hdr, record, "AUXRS", NAN_VALUE), get_format_number(hdr, record, "AUXRS2", NAN_VALUE)};
+        double score_diff = 0;
+        int n_valid = 0;
+        for (int i = 0; i < 2; i++) {
+            if (!std::isfinite(alt_scores[i]) || !std::isfinite(aux_ref_scores[i])) continue;
+            score_diff += alt_scores[i]-aux_ref_scores[i];
+            n_valid++;
+        }
+        features["AAS_AUXRS_DIFF_TO_LEN"] = n_valid > 0 ? score_diff/std::max(1.0, n_valid*double(std::abs(get_main_svlen(hdr, record)))) : NAN_VALUE;
+    }
     std::vector<double> ass1 = get_format_numbers(hdr, record, (prefix+"ASS").c_str(), {NAN_VALUE, NAN_VALUE});
     std::vector<double> ass2 = get_format_numbers(hdr, record, (prefix+"ASS2").c_str(), {NAN_VALUE, NAN_VALUE});
     features[prefix+"ASS1_LEFT_RATIO"] = ass1[0]/std::max(1.0, al1); features[prefix+"ASS1_RIGHT_RATIO"] = ass1[1]/std::max(1.0, al1);
