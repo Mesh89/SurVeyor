@@ -109,10 +109,11 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     }
 
     std::string alt_consensus_seq, ref_consensus_seq;
+    std::string alt_untrimmed_consensus_seq;
     double alt_avg_score, ref_avg_score;
     double alt_stddev_score, ref_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, nullptr);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, nullptr, &alt_untrimmed_consensus_seq);
     auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read, nullptr);
     auto score_inv_consensus = [&](const std::string& consensus_seq) {
         alignment_targets_t targets;
@@ -141,9 +142,11 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         return metrics;
     };
 
+    if (!alt_untrimmed_consensus_seq.empty()) {
+        inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_untrimmed_consensus_seq);
+    }
+
     if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
-        consensus_alignment_metrics_t unextended_metrics = score_inv_consensus(alt_consensus_seq);
-        inv->sample_info.alt_consensus1_metrics = unextended_metrics;
 
         // all we care about is the consensus sequence
         std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
@@ -378,11 +381,12 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     hts_itr_destroy(iter);
 
     std::string alt_bp1_consensus_seq, alt_bp2_consensus_seq, ref_bp1_consensus_seq, ref_bp2_consensus_seq;
+    std::string alt_bp1_untrimmed_consensus_seq, alt_bp2_untrimmed_consensus_seq;
     double alt_bp1_avg_score, alt_bp2_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_bp1_stddev_score, alt_bp2_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_bp1_is_exact_read, alt_bp2_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_bp1_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read, nullptr);
-    auto alt_bp2_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read, nullptr);
+    auto alt_bp1_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read, nullptr, &alt_bp1_untrimmed_consensus_seq);
+    auto alt_bp2_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read, nullptr, &alt_bp2_untrimmed_consensus_seq);
 
     char* ref_bp1_seq = new char[ref_bp1_len+1];
     strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
@@ -459,9 +463,11 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     };
 
     inv->sample_info.ext_alt_consensus1_metrics.length = alt_bp1_consensus_seq.length();
+    if (!alt_bp1_untrimmed_consensus_seq.empty()) {
+        inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_bp1_untrimmed_consensus_seq, true);
+    }
+
     if (alt_bp1_consensus_seq.length() >= 2*config.min_clip_len) {
-        consensus_alignment_metrics_t unextended_metrics = score_inv_consensus(alt_bp1_consensus_seq, true);
-        inv->sample_info.alt_consensus1_metrics = unextended_metrics;
 
         // all we care about is the consensus sequence
         std::shared_ptr<consensus_t> alt_bp1_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp1_consensus_seq, std::string(alt_bp1_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
@@ -489,9 +495,11 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     }
 
     inv->sample_info.ext_alt_consensus2_metrics.length = alt_bp2_consensus_seq.length();
+    if (!alt_bp2_untrimmed_consensus_seq.empty()) {
+        inv->sample_info.alt_consensus2_metrics = score_inv_consensus(alt_bp2_untrimmed_consensus_seq, false);
+    }
+
     if (alt_bp2_consensus_seq.length() >= 2*config.min_clip_len) {
-        consensus_alignment_metrics_t unextended_metrics = score_inv_consensus(alt_bp2_consensus_seq, false);
-        inv->sample_info.alt_consensus2_metrics = unextended_metrics;
 
         // all we care about is the consensus sequence
         std::shared_ptr<consensus_t> alt_bp2_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp2_consensus_seq, std::string(alt_bp2_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);

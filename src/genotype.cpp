@@ -924,7 +924,9 @@ bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_rever
 // Returns a consistency mask over reads; is_exact_match uses the same index space.
 std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<std::shared_ptr<bam1_t>>& reads, std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, 
-    std::vector<bool>& is_exact_match, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
+    std::vector<bool>& is_exact_match, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, std::string* untrimmed_consensus_seq) {
+
+    if (untrimmed_consensus_seq != nullptr) untrimmed_consensus_seq->clear();
 
     if (reads.empty()) {
         avg_score = 0;
@@ -984,11 +986,11 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             const std::string& read_seq = seqs[j];
 
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
+            curr_cum_score += double(ungapped_aln.score)/read_seq.length();
 
             bool is_reverse = bam_is_rev(read.get()) != revcomp_read[j];
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, longest_hp, hp_mismatch_rate_thresholds)) {
                 curr_consistent_reads.push_back(read);
-                curr_cum_score += double(ungapped_aln.score)/read_seq.length();
                 curr_aln_scores.push_back(double(ungapped_aln.score)/read_seq.length());
                 curr_start_positions.push_back(ungapped_aln.ref_begin);
                 curr_end_positions.push_back(ungapped_aln.ref_end);
@@ -1012,6 +1014,9 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     if (!consistent_reads.empty()) avg_score = cum_score/consistent_reads.size();
     else avg_score = 0;
     stddev_score = stddev(aln_scores);
+
+    // Save the selected consensus for alignment metrics before trimming the extension seed.
+    if (untrimmed_consensus_seq != nullptr && chosen_cseq_idx >= 0) *untrimmed_consensus_seq = consensus_seq;
 
     std::string evidence_consensus_seq;
     if (start_positions.size() >= 2) {

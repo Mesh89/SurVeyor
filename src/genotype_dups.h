@@ -377,10 +377,11 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     dup->sample_info.max_feasible_alt1_len = get_max_feasible_alt_len(alt_ref_diff_reads_expected_positions, stats.read_len);
 
     std::string alt_consensus_seq, ref_consensus_seq;
+    std::string alt_untrimmed_consensus_seq;
     double alt_avg_score, ref_avg_score;
     double alt_stddev_score, ref_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seqs[alt_with_most_reads], alt_better_reads[alt_with_most_reads], std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seqs[alt_with_most_reads], alt_better_reads[alt_with_most_reads], std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds, &alt_untrimmed_consensus_seq);
     auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_reads, std::vector<bool>(), ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read, hp_mismatch_rate_thresholds);
 
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions[alt_with_most_reads]);
@@ -423,9 +424,11 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         return metrics;
     };
 
+    if (!alt_untrimmed_consensus_seq.empty()) {
+        dup->sample_info.alt_consensus1_metrics = score_dup_consensus(alt_untrimmed_consensus_seq);
+    }
+
     if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
-        consensus_alignment_metrics_t unextended_metrics = score_dup_consensus(alt_consensus_seq);
-        dup->sample_info.alt_consensus1_metrics = unextended_metrics;
 
         std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, dup->start-GENOTYPE_CONSENSUS_EXTENSION), dup->start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
@@ -558,10 +561,11 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     ref_bp2_seq[ref_bp2_len] = 0;
 
     std::string alt_consensus_seq, ref_bp1_consensus_seq, ref_bp2_consensus_seq;
+    std::string alt_untrimmed_consensus_seq;
     double alt_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds);
+    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds, &alt_untrimmed_consensus_seq);
     auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, hp_mismatch_rate_thresholds);
     auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds);
 
@@ -613,9 +617,11 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         return metrics;
     };
 
+    if (!alt_untrimmed_consensus_seq.empty()) {
+        dup->sample_info.alt_consensus1_metrics = score_dup_consensus(alt_untrimmed_consensus_seq);
+    }
+
     if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
-        consensus_alignment_metrics_t unextended_metrics = score_dup_consensus(alt_consensus_seq);
-        dup->sample_info.alt_consensus1_metrics = unextended_metrics;
 
        // all we care about is the consensus sequence
         std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);

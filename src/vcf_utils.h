@@ -527,7 +527,7 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, axrhq_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "AL");
-	const char* al_tag = "##FORMAT=<ID=AL,Number=1,Type=Integer,Description=\"Length of the alternative allele consensus.\">";
+	const char* al_tag = "##FORMAT=<ID=AL,Number=1,Type=Integer,Description=\"Length of the alternative allele consensus before trimming.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, al_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "MFAL");
@@ -535,7 +535,7 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, mfal_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "AL2");
-	const char* al2_tag = "##FORMAT=<ID=AL2,Number=1,Type=Integer,Description=\"Length of the alternative allele consensus for the second breakpoint (only for insertions).\">";
+	const char* al2_tag = "##FORMAT=<ID=AL2,Number=1,Type=Integer,Description=\"Length of the alternative allele consensus before trimming for the second breakpoint.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, al2_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "XAL");
