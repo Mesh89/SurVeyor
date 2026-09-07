@@ -26,6 +26,7 @@ struct hp_read_info_t {
     bool hp_run_extends_into_5p_tail = false;
     bool hp_run_extends_into_3p_tail = false;
     bool ref_hp_has_non_hp_read_base = false;
+    bool hp_len_iteratively_resolved = false; // True only after successful iterative resolution.
     bool rescued = false;
 
     hp_read_info_t(int hp_len = 0, int tail_5p_len = 0, int tail_3p_len = 0,
@@ -482,6 +483,7 @@ hp_read_info_t calculate_hp_read_info_core(const std::string& read_seq, const st
     hp_read_info.hp_run_extends_into_5p_tail = hp_run_extends_into_5p_tail;
     hp_read_info.hp_run_extends_into_3p_tail = hp_run_extends_into_3p_tail;
     bool resolved = resolution.hp_len != UNDEFINED_HP_LEN;
+    hp_read_info.hp_len_iteratively_resolved = resolved;
     int left_mismatches = resolved ? resolution.left_tail_mismatches : tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos, contig_seq, contig_len, 0, left, true, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.beg);
     int right_mismatches = resolved ? resolution.right_tail_mismatches : tail_mismatch_count_from_mapping(read_seq, qpos_to_rpos, contig_seq, contig_len, right, read_seq.length(), false, left_clipped, right_clipped, tail_align_leeway, ref_hp_range.end);
     if (is_rev) {

@@ -49,6 +49,7 @@ struct hp_read_observation_t {
     int left_tail_len;
     bool is_reverse;
     double ref_3p_mismatch_rate;
+    int right_tail_len; // Includes any HP bases reassigned to this tail by gap correction.
 };
 
 struct hp_run_t {
@@ -62,6 +63,48 @@ struct hp_run_t {
 
     hp_run_t(hts_pos_t beg, hts_pos_t end, char base) : beg(beg), end(end), base(base) {}
 };
+
+// Correct direct HP expansions using a clipped 3' tail of at least min_tail_len bases.
+// Reassign the subtracted HP bases to the 3' tail; keep the 5' boundary and read sequence unchanged.
+void subtract_hp_3p_tail_gap(hp_read_info_t& hp_read_info, const hp_run_t& hp_run, char* contig_seq, hts_pos_t contig_len,
+    bool is_reverse, bool clipped_3p, int min_tail_len) {
+
+    int tail_len = hp_read_info.tail_3p_len;
+    if (hp_read_info.hp_len_iteratively_resolved || hp_read_info.hp_len <= hp_run.end - hp_run.beg || !clipped_3p || tail_len < min_tail_len || tail_len <= 0) return;
+    // Block if >=10% of qualifying 5' reads on the 3' side carry an indel: left for reverse, right for forward.
+    // No qualifying reads on that side means no supported blocker.
+    int reads = is_reverse ? hp_run.left_side_5p_reads : hp_run.right_side_5p_reads;
+    int indel_reads = is_reverse ? hp_run.left_side_5p_indel_reads : hp_run.right_side_5p_indel_reads;
+    if (reads > 0 && 10 * indel_reads >= reads) return;
+
+    const std::string& read_seq = hp_read_info.read.seq;
+    int tail_beg = is_reverse ? 0 : read_seq.length() - tail_len;
+    int best_gap = 0, best_mismatches = tail_len + 1;
+    // Remap the entire 3' tail ungapped, leaving 0-10 reference bases between it and the HP.
+    // Minimize mismatches; ascending gaps and strict improvement favor the smallest gap on ties.
+    for (int gap = 0; gap <= 10; gap++) {
+        hts_pos_t ref_beg = is_reverse ? hp_run.beg - gap - tail_len : hp_run.end + gap;
+        if (ref_beg < 0 || ref_beg + tail_len > contig_len) continue;
+        int mismatches = number_of_mismatches_fast(read_seq.c_str() + tail_beg, contig_seq + ref_beg, tail_len, best_mismatches - 1);
+        if (mismatches < best_mismatches) {
+            best_mismatches = mismatches;
+            best_gap = gap;
+            if (best_mismatches == 0) break;
+        }
+    }
+    if (best_gap == 0) return;
+    hp_read_info.hp_len -= best_gap;
+    // Negative estimates are undefined; zero remains a valid corrected length.
+    if (hp_read_info.hp_len < 0) {
+        hp_read_info.hp_len = UNDEFINED_HP_LEN;
+        return;
+    }
+    hp_read_info.tail_3p_len += best_gap;
+    // Fill the selected reference gap with the newly included query bases; do not search again.
+    int enlarged_tail_beg = is_reverse ? 0 : tail_beg - best_gap;
+    hts_pos_t enlarged_ref_beg = is_reverse ? hp_run.beg - hp_read_info.tail_3p_len : hp_run.end;
+    hp_read_info.tail_3p_mismatches = number_of_mismatches_fast(read_seq.c_str() + enlarged_tail_beg, contig_seq + enlarged_ref_beg, hp_read_info.tail_3p_len, hp_read_info.tail_3p_len);
+}
 
 bool is_usable_hp_read(const hp_read_info_t& hp_read_info, int min_clip_len, double max_seq_error) {
 
@@ -149,6 +192,7 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
     hp_positional_consensus_t consensus;
     if (observations.empty()) return consensus;
 
+    // Reverse reads' enlarged left tails place their fixed 5' boundaries at the corrected HP end.
     int hp_anchor = 0;
     for (const auto& observation : observations) {
         hp_anchor = std::max(hp_anchor, observation.left_tail_len);
@@ -188,7 +232,7 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
             std::fill(seqs[read_idx].begin(), seqs[read_idx].begin() + std::max(0, left_flank_end), 'N');
         }
         if (right_5p_reads >= MIN_SUPPORTING_READS && !observations[read_idx].is_reverse) {
-            int right_flank_beg = std::max(0, consensus.hp_end - offset);
+            int right_flank_beg = std::max(0, (int) seqs[read_idx].length() - observations[read_idx].right_tail_len);
             std::fill(seqs[read_idx].begin() + std::min((int) seqs[read_idx].length(), right_flank_beg), seqs[read_idx].end(), 'N');
         }
     }
@@ -199,11 +243,18 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
     consensus.coverage = positional_consensus.coverage;
 
     int trim_end = consensus_len;
-    while (consensus.trim_beg < trim_end && consensus.coverage[consensus.trim_beg] < MIN_SUPPORTING_READS) {
-        consensus.trim_beg++;
-    }
-    while (trim_end > consensus.trim_beg && consensus.coverage[trim_end - 1] < MIN_SUPPORTING_READS) {
-        trim_end--;
+    // Trim each flank at the failing base nearest the HP (coverage < 3 and quality < 40); discard the consensus if any HP base fails.
+    for (int i = 0; i < consensus_len; i++) {
+        if (consensus.coverage[i] >= MIN_SUPPORTING_READS || consensus.qual[i] - 33 >= 40) continue;
+        if (i < consensus.hp_beg) {
+            consensus.trim_beg = i + 1;
+        } else if (i >= consensus.hp_end) {
+            trim_end = i;
+            break;
+        } else {
+            consensus.trim_beg = trim_end;
+            break;
+        }
     }
     consensus.seq = consensus.seq.substr(consensus.trim_beg, trim_end - consensus.trim_beg);
     consensus.qual = consensus.qual.substr(consensus.trim_beg, trim_end - consensus.trim_beg);
@@ -244,7 +295,7 @@ hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_position
         }
         if (consensus.seq.empty()) continue;
 
-        int tail_beg = observation.is_reverse ? 0 : observation.left_tail_len + hp_len;
+        int tail_beg = observation.is_reverse ? 0 : (int) observation.seq.length() - observation.right_tail_len;
         int tail_end = observation.is_reverse ? observation.left_tail_len : observation.seq.length();
         int consensus_offset = consensus.read_offsets[read_idx] - consensus.trim_beg;
         tail_beg = std::max(tail_beg, -consensus_offset);
@@ -434,12 +485,15 @@ void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
     hp_read_info_t hp_read_info = calculate_hp_read_info(aln, mate_seq,
         allele_hp_range, hp_run.base, &ref_allele[0], ref_allele.length(), aln_as_rev, rescued_read, 0,
         has_no_left_indel, has_no_right_indel, max_seq_error);
+    // Rescued mates take their 3' clipping flag from the rescue SSW alignment.
+    subtract_hp_3p_tail_gap(hp_read_info, hp_run, contig_seq, contig_len, aln_as_rev, aln_as_rev ? get_left_clip_size(aln) > 0 : get_right_clip_size(aln) > 0, min_clip_len);
     if (!is_usable_hp_read(hp_read_info, min_clip_len, max_seq_error)) return;
     hp_run.usable_reads++;
     hp_run.hp_len_counts[hp_read_info.hp_len]++;
     bool is_reverse = !hp_read_info.read.mate_is_reverse;
     int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
-    hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({mate_seq, mate_quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len});
+    int right_tail_len = is_reverse ? hp_read_info.tail_5p_len : hp_read_info.tail_3p_len;
+    hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({mate_seq, mate_quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len, right_tail_len});
 }
 
 hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string contig_name,
@@ -521,15 +575,18 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 hp_read_info_t hp_read_info = calculate_hp_read_info(read.get(), hp_range, hp_run.base,
                     contig_seq, contig_len, contig_seq + ref_allele_beg, ref_allele_end - ref_allele_beg,
                     ref_allele_hp_range, has_no_left_indel, has_no_right_indel, 0, config->max_seq_error);
+                // Use the original BAM clipping flag even if HP estimation used a secondary alignment.
+                subtract_hp_3p_tail_gap(hp_read_info, hp_run, contig_seq, contig_len, bam_is_rev(read.get()), bam_is_rev(read.get()) ? get_left_clip_size(read.get()) > 0 : get_right_clip_size(read.get()) > 0, config->min_clip_len);
                 if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
                 bool is_reverse = !hp_read_info.read.mate_is_reverse;
                 int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
+                int right_tail_len = is_reverse ? hp_read_info.tail_5p_len : hp_read_info.tail_3p_len;
                 const uint8_t* bam_quals = bam_get_qual(read.get());
                 std::vector<uint8_t> quals(bam_quals, bam_quals + read->core.l_qseq);
                 std::replace(quals.begin(), quals.end(), uint8_t(255), uint8_t(0));
-                hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({hp_read_info.read.seq, quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len});
+                hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({hp_read_info.read.seq, quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len, right_tail_len});
             }
 
             if (read->core.qual < min_anchor_mapq || !is_dc_pair(read.get()) || mateseqs_w_mapq_chr.empty()) continue;
