@@ -167,6 +167,7 @@ void release_mates(int contig_id) {
 struct hp_positional_consensus_t {
     std::string seq, qual;
     std::vector<int> coverage;
+    std::vector<int> base_quality_margins;
     std::vector<int> read_offsets;
     int trim_beg = 0;
     int hp_beg = 0, hp_end = 0;
@@ -241,6 +242,18 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
     consensus.seq = positional_consensus.seq;
     consensus.qual = positional_consensus.qual;
     consensus.coverage = positional_consensus.coverage;
+    consensus.base_quality_margins.assign(consensus_len, 0);
+    // Sum uncapped read qualities for the chosen base minus all other A/C/G/T bases, after tail masking.
+    for (int read_idx = 0; read_idx < seqs.size(); read_idx++) {
+        int offset = consensus.read_offsets[read_idx];
+        for (int qpos = 0; qpos < seqs[read_idx].length(); qpos++) {
+            int base_idx = base_to_index(seqs[read_idx][qpos]);
+            if (base_idx < 0) continue;
+            int pos = offset + qpos;
+            int qual = quals[read_idx][qpos];
+            consensus.base_quality_margins[pos] += base_idx == base_to_index(consensus.seq[pos]) ? qual : -qual;
+        }
+    }
 
     int trim_end = consensus_len;
     // Trim each flank at the failing base nearest the HP (coverage < 3 and quality < 40); discard the consensus if any HP base fails.
@@ -259,6 +272,7 @@ hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_rea
     consensus.seq = consensus.seq.substr(consensus.trim_beg, trim_end - consensus.trim_beg);
     consensus.qual = consensus.qual.substr(consensus.trim_beg, trim_end - consensus.trim_beg);
     consensus.coverage = std::vector<int>(consensus.coverage.begin() + consensus.trim_beg, consensus.coverage.begin() + trim_end);
+    consensus.base_quality_margins = std::vector<int>(consensus.base_quality_margins.begin() + consensus.trim_beg, consensus.base_quality_margins.begin() + trim_end);
     consensus.hp_beg -= consensus.trim_beg;
     consensus.hp_end -= consensus.trim_beg;
     consensus.callable_beg = std::max(0, consensus.callable_beg - consensus.trim_beg);
@@ -392,8 +406,12 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
         aln.cigar.empty() || aln.ref_begin < 0) {
         return;
     }
-    if (is_clipped(aln, config.min_clip_len)) return;
     if (aln.ref_begin > alt_hp_beg || aln.ref_end < alt_hp_end - 1) return;
+    // Clipping disables AUX calls only on that flank; both flanks still require a fully spanned HP.
+    bool callable_left = !is_left_clipped(aln, config.min_clip_len);
+    bool callable_right = !is_right_clipped(aln, config.min_clip_len);
+    int callable_beg = std::max(consensus.callable_beg, aln.query_begin);
+    int callable_end = std::min(consensus.callable_end, aln.query_end + 1);
 
     auto alt_base_to_genomic = [&](int alt_pos) -> hts_pos_t {
         if (alt_pos < alt_hp_beg) return ref_beg + alt_pos;
@@ -407,20 +425,22 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
     hp_alignment_summary_t aln_summary = summarize_hp_alignment(normalized_cigar(aln), aln.ref_begin, consensus.seq,
         {alt_hp_beg, alt_hp_end}, hp_run.base);
     std::pair<hts_pos_t, hts_pos_t> callable_range = get_highq_ref_range(aln.cigar, aln.ref_begin,
-        consensus.seq.length(), consensus.callable_beg, consensus.seq.length() - consensus.callable_end);
-    callable_range.first = std::min<hts_pos_t>(callable_range.first, alt_hp_beg);
-    callable_range.second = std::max<hts_pos_t>(callable_range.second, alt_hp_end);
+        consensus.seq.length(), callable_beg, consensus.seq.length() - callable_end);
+    callable_range.first = callable_left ? std::min<hts_pos_t>(callable_range.first, alt_hp_beg) : alt_hp_beg;
+    callable_range.second = callable_right ? std::max<hts_pos_t>(callable_range.second, alt_hp_end) : alt_hp_end;
     hp_indel->junction_remap_ref_beg = ref_beg + callable_range.first;
     hp_indel->junction_remap_ref_end = hp_run.end + callable_range.second - alt_hp_end;
 
     for (snp_t snp : alt_hp->aux_snps) {
         int alt_pos = snp.pos - ref_beg;
         if (alt_hp_beg <= alt_pos && alt_pos < alt_hp_end) continue;
+        if (alt_pos < alt_hp_beg ? !callable_left : !callable_right) continue;
         auto qpos_it = std::find(aln_summary.qpos_to_rpos.begin(), aln_summary.qpos_to_rpos.end(), alt_pos);
         if (qpos_it == aln_summary.qpos_to_rpos.end()) continue;
         int qpos = qpos_it - aln_summary.qpos_to_rpos.begin();
+        if (qpos >= consensus.base_quality_margins.size() || consensus.base_quality_margins[qpos] < 40) continue;
         snp.pos = alt_base_to_genomic(alt_pos);
-        if (consensus.callable_beg <= qpos && qpos < consensus.callable_end) {
+        if (callable_beg <= qpos && qpos < callable_end) {
             hp_indel->aux_snps.push_back(snp);
         }
     }
@@ -430,16 +450,19 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
         int qpos = aux_indel->left_anchor_aln->seq_len;
         if (aux_indel->svtype() == "INS") {
             if (alt_hp_beg <= alt_beg && alt_beg <= alt_hp_end) continue;
+            if (alt_beg < alt_hp_beg ? !callable_left : !callable_right) continue;
             hts_pos_t genomic_boundary = alt_base_to_genomic(alt_beg);
-            if (genomic_boundary > 0 && qpos >= consensus.callable_beg && qpos + aux_indel->ins_seq.length() <= consensus.callable_end) {
+            if (genomic_boundary > 0 && qpos >= callable_beg && qpos + aux_indel->ins_seq.length() <= callable_end) {
                 aux_indel->start = aux_indel->end = genomic_boundary - 1;
                 hp_indel->aux_indels.push_back(aux_indel);
             }
         } else {
             if (alt_beg < alt_hp_end && alt_end > alt_hp_beg) continue;
+            if (alt_end <= alt_hp_beg ? !callable_left : !callable_right) continue;
+            if (alt_beg < callable_range.first || alt_end > callable_range.second) continue;
             hts_pos_t genomic_beg = alt_base_to_genomic(alt_beg);
             hts_pos_t genomic_end = alt_base_to_genomic(alt_end - 1) + 1;
-            if (genomic_beg > 0 && consensus.callable_beg < qpos && qpos < consensus.callable_end) {
+            if (genomic_beg > 0 && callable_beg < qpos && qpos < callable_end) {
                 aux_indel->start = genomic_beg - 1;
                 aux_indel->end = genomic_end - 1;
                 hp_indel->aux_indels.push_back(aux_indel);
@@ -580,7 +603,7 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
-                bool is_reverse = !hp_read_info.read.mate_is_reverse;
+                bool is_reverse = bam_is_rev(read.get());
                 int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
                 int right_tail_len = is_reverse ? hp_read_info.tail_5p_len : hp_read_info.tail_3p_len;
                 const uint8_t* bam_quals = bam_get_qual(read.get());
