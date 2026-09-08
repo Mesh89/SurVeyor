@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -50,6 +51,7 @@ struct hp_read_observation_t {
     bool is_reverse;
     double ref_3p_mismatch_rate;
     int right_tail_len; // Includes any HP bases reassigned to this tail by gap correction.
+    std::vector<uint8_t> original_quals; // Preserves input qualities when normalization or tail recalibration changes the working qualities.
 };
 
 struct hp_run_t {
@@ -182,10 +184,76 @@ struct hp_read_mismatch_rate_t {
     int sequenced_hp_base_idx;
 };
 
+// Key: sequenced HP base, corrected HP length, 1-based distance from HP into the 3' tail, original Phred quality.
+using hp_tail_error_table_t = std::map<std::array<int, 4>, std::pair<uint64_t, uint64_t>>; // Compared bases, mismatches.
+using hp_tail_quality_table_t = std::map<std::array<int, 4>, int>; // Cached Phred qualities; -1 means no calibration data.
+using hp_tail_error_bin_t = std::pair<std::array<int, 4>, std::pair<uint64_t, uint64_t>>;
+
+struct hp_tail_quality_model_t {
+    std::map<std::array<int, 2>, std::vector<hp_tail_error_bin_t>> bins_by_base_and_pos;
+    uint64_t min_observations = 100;
+};
+
+hp_tail_quality_model_t make_hp_tail_quality_model(const hp_tail_error_table_t& error_table) {
+    hp_tail_quality_model_t model;
+    for (const auto& entry : error_table) {
+        if (entry.second.first > 0) model.bins_by_base_and_pos[{entry.first[0], entry.first[2]}].push_back(entry);
+    }
+    return model;
+}
+
+int estimate_hp_tail_quality(const std::array<int, 4>& key, const hp_tail_quality_model_t& model) {
+    auto group = model.bins_by_base_and_pos.find({key[0], key[2]});
+    if (group == model.bins_by_base_and_pos.end()) return -1;
+    std::vector<std::pair<int, const hp_tail_error_bin_t*>> neighbors;
+    for (const auto& bin : group->second) {
+        if (bin.first[1] < (key[1] + 1) / 2 || bin.first[1] > 2 * key[1]) continue;
+        int distance = std::abs(bin.first[1] - key[1]) + std::abs(bin.first[3] - key[3]);
+        neighbors.push_back({distance, &bin});
+    }
+    std::sort(neighbors.begin(), neighbors.end(), [](const std::pair<int, const hp_tail_error_bin_t*>& a, const std::pair<int, const hp_tail_error_bin_t*>& b) { return a.first < b.first; });
+    uint64_t observations = 0, errors = 0;
+    // Pool equally near HP-length/quality bins together, stopping once the sample target is reached.
+    for (size_t i = 0; i < neighbors.size() && observations < model.min_observations;) {
+        int distance = neighbors[i].first;
+        do {
+            observations += neighbors[i].second->second.first;
+            errors += neighbors[i].second->second.second;
+            i++;
+        } while (i < neighbors.size() && neighbors[i].first == distance);
+    }
+    if (observations < model.min_observations) return -1;
+    // Phred Q = -10 log10(P(error)); zero observed errors receive the existing Q40 cap.
+    double qual = errors == 0 ? 40.0 : -10.0 * std::log10(double(errors) / observations);
+    return std::max(0, std::min(40, (int) std::lround(qual)));
+}
+
+void recalibrate_hp_3p_tail_qualities(std::vector<hp_read_observation_t>& observations, int hp_len, char hp_base, const hp_tail_quality_model_t& model, hp_tail_quality_table_t& quality_cache) {
+    int hp_base_idx = base_to_index(hp_base);
+    if (hp_base_idx < 0 || hp_len < 0 || model.bins_by_base_and_pos.empty()) return;
+    for (hp_read_observation_t& observation : observations) {
+        int sequenced_hp_base_idx = observation.is_reverse ? 3 - hp_base_idx : hp_base_idx;
+        int tail_beg = observation.is_reverse ? 0 : (int) observation.seq.length() - observation.right_tail_len;
+        int tail_end = observation.is_reverse ? observation.left_tail_len : observation.seq.length();
+        for (int qpos = tail_beg; qpos < tail_end; qpos++) {
+            int original_qual = observation.original_quals.empty() ? observation.quals[qpos] : observation.original_quals[qpos];
+            if (original_qual == 255 || base_to_index(observation.seq[qpos]) < 0) continue;
+            int tail_pos = observation.is_reverse ? observation.left_tail_len - qpos : qpos - tail_beg + 1;
+            std::array<int, 4> key = {sequenced_hp_base_idx, hp_len, tail_pos, original_qual};
+            auto it = quality_cache.find(key);
+            if (it == quality_cache.end()) it = quality_cache.emplace(key, estimate_hp_tail_quality(key, model)).first;
+            if (it->second < 0) continue;
+            if (observation.original_quals.empty()) observation.original_quals = observation.quals;
+            observation.quals[qpos] = it->second;
+        }
+    }
+}
+
 struct hp_chunk_result_t {
     std::vector<std::shared_ptr<sv_t>> hp_indels;
     std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
     hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
+    hp_tail_error_table_t tail_error_table;
 };
 
 hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_read_observation_t>& observations, int hp_len) {
@@ -286,7 +354,7 @@ struct hp_read_mismatch_rates_t {
 };
 
 hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_positional_consensus_t& consensus, const std::vector<hp_read_observation_t>& observations,
-    int hp_len, char hp_base) {
+    int hp_len, char hp_base, hp_tail_error_table_t& tail_error_table) {
 
     hp_read_mismatch_rates_t mismatch_rates;
     if (hp_len < 0) return mismatch_rates;
@@ -321,6 +389,19 @@ hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_position
         double mismatch_rate = double(mismatches) / compared_bases;
         mismatch_rates.candidate_rates.push_back({mismatch_rate, sequenced_hp_base_idx});
         mismatch_rates.threshold_estimation_rates.push_back({mismatch_rate, sequenced_hp_base_idx});
+        const std::vector<uint8_t>& original_quals = observation.original_quals.empty() ? observation.quals : observation.original_quals;
+        for (int qpos = tail_beg; qpos < tail_end; qpos++) {
+            int cpos = consensus_offset + qpos;
+            int read_base = base_to_index(observation.seq[qpos]);
+            int consensus_base = base_to_index(consensus.seq[cpos]);
+            if (read_base < 0 || consensus_base < 0 || qpos >= original_quals.size() || original_quals[qpos] == 255) continue;
+            // The compared 3' reads are masked here; require reliable independent 5' support at this position.
+            if (consensus.coverage[cpos] < MIN_SUPPORTING_READS || consensus.qual[cpos] - 33 < 40) continue;
+            int tail_pos = observation.is_reverse ? observation.left_tail_len - qpos : qpos - ((int) observation.seq.length() - observation.right_tail_len) + 1;
+            auto& counts = tail_error_table[{sequenced_hp_base_idx, hp_len, tail_pos, original_quals[qpos]}];
+            counts.first++;
+            counts.second += read_base != consensus_base;
+        }
     }
     return mismatch_rates;
 }
@@ -381,6 +462,21 @@ void write_hp_mismatch_rate_thresholds(const std::array<std::vector<double>, 4>&
         for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) fout << "\t" << thresholds_by_base[hp_base_idx][hp_len];
         fout << "\n";
     }
+    if (!fout) throw std::runtime_error("Unable to write " + fname + ".");
+}
+
+void write_hp_tail_error_table(const hp_tail_error_table_t& table, const std::string& fname) {
+    std::ofstream fout(fname);
+    if (!fout) throw std::runtime_error("Unable to open " + fname + " for writing.");
+    fout << "# Empirical mismatches against independent 5' consensus (coverage >= 3, consensus Q >= 40); ambiguous bases and missing qualities excluded.\n";
+    fout << "# HP_BASE is in sequencing orientation; HP_LEN is corrected; TAIL_POS starts at 1 next to the HP. Only observed bins are listed.\n";
+    fout << "HP_BASE\tHP_LEN\tTAIL_POS\tBASE_QUAL\tOBSERVATIONS\tERRORS\tERROR_PROBABILITY\n" << std::setprecision(17);
+    for (const auto& entry : table) {
+        const auto& key = entry.first;
+        const auto& counts = entry.second;
+        fout << "ACGT"[key[0]] << "\t" << key[1] << "\t" << key[2] << "\t" << key[3] << "\t" << counts.first << "\t" << counts.second << "\t" << double(counts.second) / counts.first << "\n";
+    }
+    fout.close();
     if (!fout) throw std::runtime_error("Unable to write " + fname + ".");
 }
 
@@ -522,9 +618,10 @@ void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
 hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string contig_name,
     char* contig_seq, hts_pos_t contig_len, hts_pos_t chunk_beg, hts_pos_t chunk_end,
     config_t* config, stats_t* stats, bam_pool_t* bam_pool,
-    StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter, bool generate_candidates) {
+    StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter, bool generate_candidates, const hp_tail_quality_model_t& quality_model) {
 
     hp_chunk_result_t result;
+    hp_tail_quality_table_t quality_cache;
     if (contig_len == 0) return result;
 
     std::vector<hp_run_t> hp_runs = find_hp_runs(contig_seq, contig_len, chunk_beg, chunk_end);
@@ -608,8 +705,10 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 int right_tail_len = is_reverse ? hp_read_info.tail_5p_len : hp_read_info.tail_3p_len;
                 const uint8_t* bam_quals = bam_get_qual(read.get());
                 std::vector<uint8_t> quals(bam_quals, bam_quals + read->core.l_qseq);
+                std::vector<uint8_t> original_quals;
+                if (std::find(quals.begin(), quals.end(), uint8_t(255)) != quals.end()) original_quals = quals;
                 std::replace(quals.begin(), quals.end(), uint8_t(255), uint8_t(0));
-                hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({hp_read_info.read.seq, quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len, right_tail_len});
+                hp_run.observations_by_hp_len[hp_read_info.hp_len].push_back({hp_read_info.read.seq, quals, left_tail_len, is_reverse, double(hp_read_info.tail_3p_mismatches) / hp_read_info.tail_3p_len, right_tail_len, std::move(original_quals)});
             }
 
             if (read->core.qual < min_anchor_mapq || !is_dc_pair(read.get()) || mateseqs_w_mapq_chr.empty()) continue;
@@ -650,8 +749,15 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
 
                 auto observations_it = hp_run.observations_by_hp_len.find(alt_hp_len);
                 if (observations_it == hp_run.observations_by_hp_len.end()) continue;
-                hp_positional_consensus_t consensus = build_hp_positional_consensus(observations_it->second, alt_hp_len);
-                hp_read_mismatch_rates_t read_mismatch_rates = calculate_hp_consensus_mismatch_rates(consensus, observations_it->second, alt_hp_len, hp_run.base);
+                std::vector<hp_read_observation_t> calibrated_observations;
+                const std::vector<hp_read_observation_t>* consensus_observations = &observations_it->second;
+                if (generate_candidates) {
+                    calibrated_observations = observations_it->second;
+                    recalibrate_hp_3p_tail_qualities(calibrated_observations, alt_hp_len, hp_run.base, quality_model, quality_cache);
+                    consensus_observations = &calibrated_observations;
+                }
+                hp_positional_consensus_t consensus = build_hp_positional_consensus(*consensus_observations, alt_hp_len);
+                hp_read_mismatch_rates_t read_mismatch_rates = calculate_hp_consensus_mismatch_rates(consensus, observations_it->second, alt_hp_len, hp_run.base, result.tail_error_table);
                 for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.candidate_rates) {
                     hp_mismatch_rates_by_len_t& rates_by_hp_len = result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx];
                     if (rates_by_hp_len.size() <= alt_hp_len) rates_by_hp_len.resize(alt_hp_len + 1);
@@ -729,25 +835,35 @@ int main(int argc, char* argv[]) {
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
     StripedSmithWaterman::Filter filter;
 
-    std::vector<std::future<hp_chunk_result_t>> futures;
-    ctpl::thread_pool thread_pool(config.threads);
-    for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
-        std::string contig_name = contig_map.get_name(contig_id);
-        hts_pos_t contig_len = chr_seqs.get_len(contig_name);
-        for (hts_pos_t chunk_beg = 0; chunk_beg < contig_len; chunk_beg += CHUNK_SIZE) {
-            futures.push_back(thread_pool.push(find_hp_indels_for_chunk, contig_id, contig_name, chr_seqs.get_seq(contig_name), contig_len,
-                chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool, std::ref(aligner), std::cref(filter), !thresholds_only));
+    auto run_discovery_pass = [&](bool generate_candidates, const hp_tail_quality_model_t& quality_model) {
+        std::vector<std::future<hp_chunk_result_t>> futures;
+        ctpl::thread_pool thread_pool(config.threads);
+        for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
+            std::string contig_name = contig_map.get_name(contig_id);
+            hts_pos_t contig_len = chr_seqs.get_len(contig_name);
+            for (hts_pos_t chunk_beg = 0; chunk_beg < contig_len; chunk_beg += CHUNK_SIZE) {
+                futures.push_back(thread_pool.push(find_hp_indels_for_chunk, contig_id, contig_name, chr_seqs.get_seq(contig_name), contig_len,
+                    chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool, std::ref(aligner), std::cref(filter), generate_candidates, std::cref(quality_model)));
+            }
         }
-    }
-    thread_pool.stop(true);
+        thread_pool.stop(true);
+        return futures;
+    };
+    // Train on original qualities before applying the fixed, run-wide model to candidate consensuses.
+    hp_tail_quality_model_t empty_quality_model;
+    std::vector<std::future<hp_chunk_result_t>> futures = run_discovery_pass(false, empty_quality_model);
 
     std::vector<std::shared_ptr<sv_t>> hp_indels;
     std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
     hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
+    hp_tail_error_table_t tail_error_table;
     for (std::future<hp_chunk_result_t>& future : futures) {
         hp_chunk_result_t chunk_result = future.get();
-        hp_indels.insert(hp_indels.end(), chunk_result.hp_indels.begin(), chunk_result.hp_indels.end());
-        hp_indel_3p_mismatch_rates.insert(hp_indel_3p_mismatch_rates.end(), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.begin()), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.end()));
+        for (const auto& entry : chunk_result.tail_error_table) {
+            auto& counts = tail_error_table[entry.first];
+            counts.first += entry.second.first;
+            counts.second += entry.second.second;
+        }
         for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) {
             hp_mismatch_rates_by_len_t& threshold_estimation_rates_by_hp_len = threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
             const hp_mismatch_rates_by_len_t& chunk_threshold_estimation_rates_by_hp_len = chunk_result.threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
@@ -763,7 +879,15 @@ int main(int argc, char* argv[]) {
     std::array<std::vector<double>, 4> hp_mismatch_rate_thresholds_by_base;
     for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) hp_mismatch_rate_thresholds_by_base[hp_base_idx] = estimate_hp_mismatch_rate_thresholds(threshold_estimation_rates_by_hp_len_and_base[hp_base_idx], config.max_seq_error);
     write_hp_mismatch_rate_thresholds(hp_mismatch_rate_thresholds_by_base, workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    write_hp_tail_error_table(tail_error_table, workdir + "/hp_3p_tail_error_probabilities.txt");
     if (thresholds_only) return 0;
+    hp_tail_quality_model_t quality_model = make_hp_tail_quality_model(tail_error_table);
+    futures = run_discovery_pass(true, quality_model);
+    for (std::future<hp_chunk_result_t>& future : futures) {
+        hp_chunk_result_t chunk_result = future.get();
+        hp_indels.insert(hp_indels.end(), chunk_result.hp_indels.begin(), chunk_result.hp_indels.end());
+        hp_indel_3p_mismatch_rates.insert(hp_indel_3p_mismatch_rates.end(), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.begin()), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.end()));
+    }
     std::vector<std::shared_ptr<sv_t>> filtered_hp_indels;
     for (int hp_indel_idx = 0; hp_indel_idx < hp_indels.size(); hp_indel_idx++) {
         std::shared_ptr<sv_t>& hp_indel = hp_indels[hp_indel_idx];
