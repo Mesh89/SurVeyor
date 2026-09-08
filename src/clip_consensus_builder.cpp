@@ -393,7 +393,7 @@ std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer
         for (int i = 0; i < clipped.size(); i++) selected_idxs[i] = i;
     }
 
-    std::string consensus_seq = build_full_consensus_seq(seqs, quals, read_start_offsets, lowq_prefix, lowq_suffix, consensus_qual);
+    std::string consensus_seq = build_full_consensus_seq(seqs, quals, read_start_offsets, lowq_prefix, lowq_suffix, consensus_qual, true);
 
     std::vector<int> selected_accepted = find_accepted_reads(consensus_seq, selected_clipped, read_start_offsets);
 

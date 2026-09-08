@@ -36,7 +36,7 @@ inline int base_to_index(char base) {
 }
 
 inline positional_consensus_t build_positional_consensus(const std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals,
-    const std::vector<hts_pos_t>& read_start_offsets) {
+    const std::vector<hts_pos_t>& read_start_offsets, bool subtract_opposing_qualities = false) {
 
     positional_consensus_t consensus;
     if (seqs.size() != quals.size() || seqs.size() != read_start_offsets.size()) return consensus;
@@ -60,13 +60,23 @@ inline positional_consensus_t build_positional_consensus(const std::vector<std::
             if (base_idx < 0) continue;
             consensus.coverage[i]++;
             base_scores[base_idx].freq++;
-            base_scores[base_idx].qual += quals[j][qpos];
+            int qual = quals[j][qpos];
+            // BAM uses 255 for missing qualities; clip consensuses treat these as zero support.
+            if (subtract_opposing_qualities && qual == 255) qual = 0;
+            base_scores[base_idx].qual += qual;
         }
 
         base_score_t best_base_score = std::max(std::max(base_scores[0], base_scores[1]), std::max(base_scores[2], base_scores[3]));
         if (best_base_score.freq > 0) {
             consensus.seq[i] = best_base_score.base;
-            consensus.qual[i] = std::min(best_base_score.qual, 40) + 33;
+            int qual = best_base_score.qual;
+            if (subtract_opposing_qualities) {
+                // Clip consensuses subtract all opposing A/C/G/T support before capping the quality.
+                for (const base_score_t& base_score : base_scores) {
+                    if (base_score.base != best_base_score.base) qual -= base_score.qual;
+                }
+            }
+            consensus.qual[i] = std::max(0, std::min(qual, 40)) + 33;
         }
         consensus.max_base_freq[i] = best_base_score.freq;
     }
@@ -74,10 +84,10 @@ inline positional_consensus_t build_positional_consensus(const std::vector<std::
 }
 
 inline std::string build_full_consensus_seq(std::vector<std::string>& seqs, std::vector<uint8_t*>& quals,
-    std::vector<hts_pos_t> read_start_offsets, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual) {
+    std::vector<hts_pos_t> read_start_offsets, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual, bool subtract_opposing_qualities = false) {
 
     std::vector<const uint8_t*> const_quals(quals.begin(), quals.end());
-    positional_consensus_t consensus = build_positional_consensus(seqs, const_quals, read_start_offsets);
+    positional_consensus_t consensus = build_positional_consensus(seqs, const_quals, read_start_offsets, subtract_opposing_qualities);
     consensus_qual = consensus.qual;
 
     lowq_prefix = 0;
