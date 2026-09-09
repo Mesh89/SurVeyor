@@ -37,6 +37,7 @@
 #include "genotype_invs.h"
 #include "genotype_hp_indels.h"
 #include "consensus.h"
+#include "hp_mismatch_rate_thresholds.h"
 
 chr_seqs_map_t chr_seqs;
 config_t config;
@@ -46,6 +47,7 @@ const bool USE_HP_SPECIFIC_PATH = false;
 
 std::string bam_fname, reference_fname, workdir;
 bam_pool_t* bam_pool;
+hp_tail_quality_model_t hp_tail_quality_model;
 
 std::vector<hts_pos_t> global_isize_dist;
 
@@ -828,7 +830,7 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std
         consistent_avg_score, consistent_stddev_score);
 }
 
-std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals) {
+std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals, const std::vector<hts_pos_t>& read_start_offsets) {
     std::vector<std::string> temp1, temp2;
     std::vector<StripedSmithWaterman::Alignment> consensus_contigs_alns;
 
@@ -843,16 +845,6 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     }
     std::vector<std::string> consensus_seqs2 = assemble_reads(temp3, seqs_w_pp, temp4, config, stats);
     consensus_seqs.insert(consensus_seqs.end(), consensus_seqs2.begin(), consensus_seqs2.end());
-
-    std::vector<hts_pos_t> read_start_offsets;
-    hts_pos_t min_read_start_offset = 0;
-    for (std::string& seq : seqs) {
-        ungapped_aln_t aln = best_ungapped_aln(seq.c_str(), seq.length(), ref_seq.c_str(), ref_seq.length(), config.min_clip_len - 1);
-        hts_pos_t read_start_offset = aln.ref_begin - aln.query_begin;
-        if (read_start_offsets.empty() || read_start_offset < min_read_start_offset) min_read_start_offset = read_start_offset;
-        read_start_offsets.push_back(read_start_offset);
-    }
-    for (hts_pos_t& read_start_offset : read_start_offsets) read_start_offset -= min_read_start_offset;
 
     positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets);
     consensus_seqs.push_back("");
@@ -921,6 +913,41 @@ bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_rever
     return five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= hp_mismatch_rate_thresholds->get_threshold(longest_hp.length(), sequenced_hp_base);
 }
 
+// The candidate allele fixes the HP length; reuse these ungapped placements for positional consensus.
+std::vector<std::vector<uint8_t>> get_genotyping_consensus_qualities(const std::string& allele_seq, const std::vector<std::shared_ptr<bam1_t>>& reads, const std::vector<bool>& revcomp_read, std::vector<std::string>& seqs, std::vector<hts_pos_t>& read_start_offsets) {
+    hts_pair_pos_t hp = longest_homopolymer(allele_seq.c_str(), allele_seq.length());
+    int hp_len = hp.end - hp.beg;
+    thread_local hp_tail_quality_table_t quality_cache;
+    std::vector<std::vector<uint8_t>> quals;
+    hts_pos_t min_read_start_offset = 0;
+    for (int i = 0; i < reads.size(); i++) {
+        bam1_t* read = reads[i].get();
+        std::string seq = get_sequence(read);
+        const uint8_t* raw_quals = bam_get_qual(read);
+        std::vector<uint8_t> original_quals(raw_quals, raw_quals + read->core.l_qseq);
+        if (revcomp_read[i]) {
+            rc(seq);
+            std::reverse(original_quals.begin(), original_quals.end());
+        }
+        seqs.push_back(seq);
+        quals.push_back(original_quals);
+        std::replace(quals.back().begin(), quals.back().end(), uint8_t(255), uint8_t(0));
+        ungapped_aln_t aln = best_ungapped_aln(seq.c_str(), seq.length(), allele_seq.c_str(), allele_seq.length(), config.min_clip_len - 1);
+        hts_pos_t offset = aln.ref_begin - aln.query_begin;
+        if (read_start_offsets.empty() || offset < min_read_start_offset) min_read_start_offset = offset;
+        read_start_offsets.push_back(offset);
+        if (hp_tail_quality_model.bins_by_base_and_pos.empty() || hp_len < MIN_REF_HP_LEN) continue;
+        if (aln.ref_begin > hp.beg || aln.ref_end < hp.end) continue; // The read must cover the candidate HP.
+        int left_tail_len = hp.beg - offset, right_tail_len = seq.length() - (hp.end - offset);
+        bool is_reverse = bam_is_rev(read) != revcomp_read[i];
+        std::vector<hp_read_observation_t> observations{{seq, quals.back(), left_tail_len, is_reverse, 0.0, right_tail_len, std::move(original_quals)}};
+        recalibrate_hp_3p_tail_qualities(observations, hp_len, allele_seq[hp.beg], hp_tail_quality_model, quality_cache);
+        quals.back() = std::move(observations[0].quals);
+    }
+    for (hts_pos_t& offset : read_start_offsets) offset -= min_read_start_offset;
+    return quals;
+}
+
 // Returns a consistency mask over reads; is_exact_match uses the same index space.
 std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<std::shared_ptr<bam1_t>>& reads, std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, 
@@ -941,18 +968,8 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     }
 
     std::vector<std::string> seqs;
-    std::vector<std::vector<uint8_t>> quals_storage;
-    for (int i = 0; i < reads.size(); i++) {
-        std::shared_ptr<bam1_t> read = reads[i];
-        std::string seq = get_sequence(read.get());
-        const uint8_t* read_quals = bam_get_qual(read.get());
-        quals_storage.emplace_back(read_quals, read_quals + read->core.l_qseq);
-        if (revcomp_read[i]) {
-            rc(seq);
-            std::reverse(quals_storage.back().begin(), quals_storage.back().end());
-        }
-        seqs.push_back(seq);
-    }
+    std::vector<hts_pos_t> read_start_offsets;
+    std::vector<std::vector<uint8_t>> quals_storage = get_genotyping_consensus_qualities(ref_seq, reads, revcomp_read, seqs, read_start_offsets);
 
     std::vector<const uint8_t*> quals;
     for (const std::vector<uint8_t>& read_quals : quals_storage) {
@@ -960,7 +977,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     }
 
     avg_score = 0;
-    std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs, quals);
+    std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs, quals, read_start_offsets);
 
     std::vector<std::shared_ptr<bam1_t>> consistent_reads;
     std::vector<int> start_positions, end_positions;
@@ -1298,6 +1315,7 @@ int main(int argc, char* argv[]) {
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
     hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
     chr_seqs.read_fasta_into_map(reference_fname);
     bam_pool = new bam_pool_t(config.threads, bam_fname, reference_fname);
