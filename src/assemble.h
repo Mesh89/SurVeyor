@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <tuple>
 #include <unordered_set>
@@ -29,11 +30,11 @@ struct seq_w_pp_t {
 	}
 };
 
-void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}) {
+void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4) {
 
 	std::vector<ungapped_aln_t> ungapped_alns;
 	for (std::string& read : reads) {
-		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1));
+		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, mismatch_score));
 	}
 	std::vector<int> As(contig.length()), Cs(contig.length()), Gs(contig.length()), Ts(contig.length());
 	std::vector<int> A_quals(contig.length()), C_quals(contig.length()), G_quals(contig.length()), T_quals(contig.length());
@@ -42,7 +43,7 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 		if (ungapped_aln.query_end <= ungapped_aln.query_begin) continue;
 
 		double mismatch_rate = double(ungapped_aln.mismatches)/(ungapped_aln.query_end-ungapped_aln.query_begin);
-		if (mismatch_rate <= max_acceptable_error_rate) {
+		if (accept_read ? accept_read(i, ungapped_aln) : mismatch_rate <= max_acceptable_error_rate) {
 			for (int j = ungapped_aln.query_begin; j < ungapped_aln.query_end; j++) {
 				int ref_pos = j - ungapped_aln.query_begin + ungapped_aln.ref_begin;
 

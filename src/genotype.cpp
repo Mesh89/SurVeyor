@@ -835,33 +835,6 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std
         consistent_avg_score, consistent_stddev_score);
 }
 
-std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals, const std::vector<hts_pos_t>& read_start_offsets) {
-    std::vector<std::string> temp1, temp2;
-    std::vector<StripedSmithWaterman::Alignment> consensus_contigs_alns;
-
-    std::vector<std::string> consensus_seqs; 
-
-    consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false);
-    consensus_seqs.push_back("");
-
-    std::vector<seq_w_pp_t> seqs_w_pp, temp3, temp4;
-    for (std::string& seq : seqs) {
-        seqs_w_pp.push_back({seq, true, true});
-    }
-    std::vector<std::string> consensus_seqs2 = assemble_reads(temp3, seqs_w_pp, temp4, config, stats);
-    consensus_seqs.insert(consensus_seqs.end(), consensus_seqs2.begin(), consensus_seqs2.end());
-
-    positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets);
-    consensus_seqs.push_back("");
-    consensus_seqs.push_back(positional_consensus.seq);
-
-    for (std::string& consensus_seq : consensus_seqs) {
-        if (!consensus_seq.empty() && consensus_seq != "HAS_CYCLE") correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals);
-    }
-
-    return consensus_seqs;
-}
-
 struct consensus_hp_region_t {
     int beg, end;
     char base;
@@ -916,6 +889,39 @@ bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_rever
     double mismatch_rate_3p = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, three_p_beg, three_p_end);
     char sequenced_hp_base = is_reverse ? complement_hp_base(longest_hp.base) : longest_hp.base;
     return five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= hp_mismatch_rate_thresholds->get_threshold(longest_hp.length(), sequenced_hp_base);
+}
+
+std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals, const std::vector<hts_pos_t>& read_start_offsets, const std::vector<bool>& read_is_reverse, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
+    std::vector<std::string> temp1, temp2;
+    std::vector<StripedSmithWaterman::Alignment> consensus_contigs_alns;
+
+    std::vector<std::string> consensus_seqs; 
+
+    consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false);
+    consensus_seqs.push_back("");
+
+    std::vector<seq_w_pp_t> seqs_w_pp, temp3, temp4;
+    for (std::string& seq : seqs) {
+        seqs_w_pp.push_back({seq, true, true});
+    }
+    std::vector<std::string> consensus_seqs2 = assemble_reads(temp3, seqs_w_pp, temp4, config, stats);
+    consensus_seqs.insert(consensus_seqs.end(), consensus_seqs2.begin(), consensus_seqs2.end());
+
+    positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets);
+    consensus_seqs.push_back("");
+    consensus_seqs.push_back(positional_consensus.seq);
+
+    for (std::string& consensus_seq : consensus_seqs) {
+        if (consensus_seq.empty() || consensus_seq == "HAS_CYCLE") continue;
+        consensus_hp_region_t longest_hp = find_longest_consensus_hp_region(consensus_seq);
+        auto accept_read = [&](int i, const ungapped_aln_t& aln) {
+            return passes_consensus_mismatch_filter(seqs[i], read_is_reverse[i], consensus_seq, aln, longest_hp, hp_mismatch_rate_thresholds);
+        };
+        // Use ARC's placement scoring and acceptance policy before accumulating base-quality votes.
+        correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals, accept_read, 0);
+    }
+
+    return consensus_seqs;
 }
 
 // The candidate allele fixes the HP length; reuse these ungapped placements for positional consensus.
@@ -982,7 +988,9 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     }
 
     avg_score = 0;
-    std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs, quals, read_start_offsets);
+    std::vector<bool> read_is_reverse;
+    for (int i = 0; i < reads.size(); i++) read_is_reverse.push_back(bam_is_rev(reads[i].get()) != revcomp_read[i]);
+    std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs, quals, read_start_offsets, read_is_reverse, hp_mismatch_rate_thresholds);
 
     std::vector<std::shared_ptr<bam1_t>> consistent_reads;
     std::vector<int> start_positions, end_positions;
@@ -1010,7 +1018,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
             curr_cum_score += double(ungapped_aln.score)/read_seq.length();
 
-            bool is_reverse = bam_is_rev(read.get()) != revcomp_read[j];
+            bool is_reverse = read_is_reverse[j];
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, longest_hp, hp_mismatch_rate_thresholds)) {
                 curr_consistent_reads.push_back(read);
                 curr_aln_scores.push_back(double(ungapped_aln.score)/read_seq.length());
@@ -1073,7 +1081,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
                 evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
 
-            bool is_reverse = bam_is_rev(reads[i].get()) != revcomp_read[i];
+            bool is_reverse = read_is_reverse[i];
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, longest_hp, hp_mismatch_rate_thresholds)) {
                 is_consistent_read[i] = true;
                 is_exact_match[i] = ungapped_aln.mismatches == 0;
