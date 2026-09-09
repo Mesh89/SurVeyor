@@ -367,17 +367,24 @@ bool is_homopolymer(std::string seq, double threshold = 0.8) {
 	return is_homopolymer(seq.data(), seq.length(), threshold);
 }
 
-int longest_homopolymer_len(const char* seq, hts_pos_t len) {
-    int longest_len = 0, current_len = 0;
+// Return [beg, end); ties keep the first run, and no valid base gives [0, 0).
+hts_pair_pos_t longest_homopolymer(const char* seq, hts_pos_t len) {
+    hts_pair_pos_t hp = {0, 0};
+    hts_pos_t current_len = 0;
     char previous_base = 0;
     for (hts_pos_t i = 0; seq && i < len; i++) {
         char base = toupper(seq[i]);
         bool valid_base = base == 'A' || base == 'C' || base == 'G' || base == 'T';
         current_len = valid_base ? (base == previous_base ? current_len+1 : 1) : 0;
-        longest_len = std::max(longest_len, current_len);
+        if (current_len > hp.end - hp.beg) hp = {i - current_len + 1, i + 1};
         previous_base = valid_base ? base : 0;
     }
-    return longest_len;
+    return hp;
+}
+
+int longest_homopolymer_len(const char* seq, hts_pos_t len) {
+    hts_pair_pos_t hp = longest_homopolymer(seq, len);
+    return hp.end - hp.beg;
 }
 
 // hp_prefix must be allocated and of size (at least) len
