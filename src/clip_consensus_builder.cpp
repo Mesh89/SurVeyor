@@ -15,6 +15,7 @@
 #include "utils.h"
 #include "assemble.h"
 #include "consensus.h"
+#include "hp_mismatch_rate_thresholds.h"
 #include "../libs/cptl_stl.h"
 
 std::mutex mtx;
@@ -22,6 +23,7 @@ config_t config;
 stats_t stats;
 std::string workdir, workspace;
 chr_seqs_map_t contigs;
+hp_tail_quality_model_t hp_tail_quality_model;
 
 std::unordered_map<std::string, int> detected_svs_count;
 std::unordered_set<std::string> detected_svs_count_is_hq;
@@ -100,7 +102,7 @@ std::pair<int, int> get_dels_ins_in_first_n_chars(std::vector<uint32_t>& cigar, 
         char op = bam_cigar_opchr(c);
 
         // since we are "unrolling" soft-clipped bases, they must be accounted for
-        bool consumes_ref = bam_cigar_type(c) & 2 || op == 'S';
+        bool consumes_ref = bam_cigar_type(bam_cigar_op(c)) & 2 || op == 'S';
         if (consumes_ref && offset + len > n) {
             len = n-offset;
         }
@@ -353,7 +355,7 @@ std::vector<int> find_accepted_reads(std::string& consensus_seq, std::deque<bam1
 }
 
 std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer_selection,
-                                     std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual) {
+                                     std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual, std::unordered_map<bam1_t*, std::vector<uint8_t>>& recalibrated_quals) {
 
     std::vector<std::string> seqs;
     std::vector<uint8_t*> quals;
@@ -361,7 +363,7 @@ std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer
 
     for (bam1_t* r : clipped) {
         seqs.push_back(get_sequence(r));
-        quals.push_back(bam_get_qual(r));
+        quals.push_back(recalibrated_quals.at(r).data());
     }
 
     std::deque<bam1_t*> selected_clipped;
@@ -430,7 +432,7 @@ void dedup_cluster(std::deque<bam1_t*>& cluster) {
     cluster.swap(unique_cluster);
 }
 
-std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deque<bam1_t*> clipped, std::deque<bool>& used) {
+std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deque<bam1_t*> clipped, std::deque<bool>& used, open_samFile_t* evidence_bam, hp_tail_quality_table_t& quality_cache) {
 
     if (clipped.size() <= 2 || clipped.size() > 20*stats.get_max_depth(contig_name)) {
         return {};
@@ -445,6 +447,23 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
 
     dedup_cluster(clipped);
 
+    char* contig_seq = contigs.get_seq(contig_name);
+    hts_pos_t contig_len = contigs.get_len(contig_name);
+    hts_pos_t hp_beg = contig_len, hp_end = 0;
+    for (bam1_t* read : clipped) {
+        hp_beg = std::min(hp_beg, read->core.pos);
+        hp_end = std::max(hp_end, bam_endpos(read));
+    }
+    // Include an HP that starts before the first read's mapped interval.
+    while (hp_beg > 0 && hp_beg < contig_len && contig_seq[hp_beg - 1] == contig_seq[hp_beg]) hp_beg--;
+    std::vector<hp_run_context_t> hp_runs;
+    if (!hp_tail_quality_model.bins_by_base_and_pos.empty()) {
+        hp_runs = find_hp_runs(contig_seq, contig_len, hp_beg, std::min(hp_end, contig_len));
+        collect_hp_5p_blocker_evidence(evidence_bam, contig_name, hp_runs, config, stats);
+    }
+    std::unordered_map<bam1_t*, std::vector<uint8_t>> recalibrated_quals;
+    for (bam1_t* read : clipped) recalibrated_quals.emplace(read, recalibrate_clip_read_qualities(read, hp_runs, contig_seq, contig_len, config, hp_tail_quality_model, quality_cache));
+
     std::unordered_set<bam1_t*> used_reads; // reads used to build a consensus
 
     std::vector<consensus_t*> consensuses;
@@ -452,11 +471,11 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
         std::vector<bool> accepted;
         int lowq_prefix, lowq_suffix;
         std::string consensus_qual;
-        std::string consensus_seq = build_full_consensus_seq(clipped, true, accepted, lowq_prefix, lowq_suffix, consensus_qual);
+        std::string consensus_seq = build_full_consensus_seq(clipped, true, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals);
 
         int accepted_reads_n = std::count(accepted.begin(), accepted.end(), true);
         if (accepted_reads_n < 3) {
-            consensus_seq = build_full_consensus_seq(clipped, false, accepted, lowq_prefix, lowq_suffix, consensus_qual);
+            consensus_seq = build_full_consensus_seq(clipped, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals);
         }
         accepted_reads_n = std::count(accepted.begin(), accepted.end(), true);
 
@@ -484,7 +503,7 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
             for (bam1_t* r : accepted_reads) used_reads.insert(r);
 
             // rebuild consensus sequence using only accepted reads
-            consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix, consensus_qual);
+            consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals);
 
             hts_pos_t start = get_unclipped_start(accepted_reads[0]), end = 0;
             for (bam1_t* r : accepted_reads) end = std::max(end, get_unclipped_end(r));
@@ -619,7 +638,9 @@ void drop_invalid_other_bp_intervals(std::vector<consensus_t*>& consensuses) {
     consensuses.erase(std::remove(consensuses.begin(), consensuses.end(), nullptr), consensuses.end());
 }
 
-void build_consensuses(int id, std::string contig_name, std::vector<std::string> bam_fnames, std::string clip_fname) {
+void build_consensuses(int id, std::string contig_name, std::vector<std::string> bam_fnames, std::string clip_fname, bam_pool_t* evidence_pool) {
+    open_samFile_t* evidence_bam = evidence_pool->get_bam_reader(id);
+    hp_tail_quality_table_t quality_cache;
     
     std::ofstream clip_fout(clip_fname);
     std::deque<bam1_t*> cluster;
@@ -641,7 +662,7 @@ void build_consensuses(int id, std::string contig_name, std::vector<std::string>
         }
 
         if (cluster.size() >= 3 && !reads_belong_to_same_cluster(cluster.front(), read)) { // candidate cluster complete
-            std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus);
+            std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, evidence_bam, quality_cache);
             route_consensuses(consensuses, lc_consensuses, rc_consensuses);
         }
         while (!cluster.empty() && !reads_belong_to_same_cluster(cluster.front(), read)) {
@@ -655,7 +676,7 @@ void build_consensuses(int id, std::string contig_name, std::vector<std::string>
     }
 
     if (cluster.size() >= 3) {
-        std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus);
+        std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, evidence_bam, quality_cache);
         route_consensuses(consensuses, lc_consensuses, rc_consensuses);
     }
     for (int i = 0; i < used_for_consensus.size(); i++) {
@@ -694,6 +715,10 @@ void build_consensuses(int id, std::string contig_name, std::vector<std::string>
 }
 
 int main(int argc, char* argv[]) {
+    if (argc != 5) {
+        std::cerr << "Usage: clip_consensus_builder <workdir> <reference.fa> <sample> <alignments.bam|cram>\n";
+        return 1;
+    }
     workdir = argv[1];
     workspace = workdir + "/workspace";
 
@@ -705,6 +730,8 @@ int main(int argc, char* argv[]) {
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
     contigs.read_fasta_into_map(reference_fname);
+    hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
+    bam_pool_t evidence_pool(config.threads, argv[4], reference_fname);
 
     std::vector<std::future<void> > futures;
     ctpl::thread_pool thread_pool(config.threads);
@@ -715,7 +742,7 @@ int main(int argc, char* argv[]) {
         std::string sr_bam_fname = workspace + "/sr/" + std::to_string(contig_id) + ".bam";
         std::string hsr_bam_fname = workspace + "/hsr/" + std::to_string(contig_id) + ".bam";
         future = thread_pool.push(build_consensuses, contig_name, std::vector<std::string>{sr_bam_fname, hsr_bam_fname}, 
-            workspace + "/consensuses/" + std::to_string(contig_id) + ".txt");
+            workspace + "/consensuses/" + std::to_string(contig_id) + ".txt", &evidence_pool);
         futures.push_back(std::move(future));
     }
     thread_pool.stop(true);

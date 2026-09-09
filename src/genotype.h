@@ -21,10 +21,11 @@
 #include "extend_1sr_consensus.h"
 #include "htslib/sam.h"
 #include "sam_utils.h"
-#include "hp_mismatch_rate_thresholds.h"
 #include "types.h"
 #include "var_utils.h"
 #include "vcf_utils.h"
+
+struct hp_mismatch_rate_thresholds_t;
 
 constexpr double MIN_EPR = 0.05;
 constexpr hts_pos_t GENOTYPE_CONSENSUS_EXTENSION = 500;

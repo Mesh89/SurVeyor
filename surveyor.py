@@ -416,12 +416,12 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     with open(workdir + "/config.txt", "a") as config_file:
         config_file.write("max_trans_size %d\n" % cmd_args.max_trans_size)
 
-    mkdir_clean(workdir + "/workspace/consensuses")
-    clip_consensus_builder_cmd = SURVEYOR_PATH + "/bin/clip_consensus_builder %s %s %s" % (workdir, reference_fname, sample_name)
-    run_cmd(clip_consensus_builder_cmd)
-
     find_hp_indels_cmd = SURVEYOR_PATH + "/bin/find_hp_indels %s %s %s %s/intermediate_results/hp.vcf.gz" % (workdir, reference_fname, bam_fname, workdir)
     run_cmd(find_hp_indels_cmd)
+
+    mkdir_clean(workdir + "/workspace/consensuses")
+    clip_consensus_builder_cmd = SURVEYOR_PATH + "/bin/clip_consensus_builder %s %s %s %s" % (workdir, reference_fname, sample_name, bam_fname)
+    run_cmd(clip_consensus_builder_cmd)
 
     find_svs_from_sr_consensuses_cmd = SURVEYOR_PATH + "/bin/find_svs_from_sr_consensuses %s %s %s %s" % (bam_fname, workdir, reference_fname, sample_name)
     run_cmd(find_svs_from_sr_consensuses_cmd)
