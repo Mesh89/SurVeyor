@@ -544,6 +544,10 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     }
 
     if (sv->sample_info.alt_consensus1_metrics.length > 0 || sv->sample_info.alt_consensus2_metrics.length > 0) {
+        int alt_extra_gaps[] = {bcf_int32_missing, bcf_int32_missing};
+        if (sv->sample_info.alt_consensus1_metrics.length > 0) alt_extra_gaps[0] = sv->sample_info.alt_consensus1_metrics.alt_extra_gaps;
+        if (sv->sample_info.alt_consensus2_metrics.length > 0) alt_extra_gaps[1] = sv->sample_info.alt_consensus2_metrics.alt_extra_gaps;
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "AASEG", alt_extra_gaps, 2);
         int covered_edit_distances[] = {bcf_int32_missing, bcf_int32_missing};
         if (sv->sample_info.alt_consensus1_metrics.length > 0 && sv->sample_info.alt_consensus1_metrics.main_edit_covered) covered_edit_distances[0] = sv->sample_info.alt_consensus1_metrics.covered_edit_distance;
         if (sv->sample_info.alt_consensus2_metrics.length > 0 && sv->sample_info.alt_consensus2_metrics.main_edit_covered) covered_edit_distances[1] = sv->sample_info.alt_consensus2_metrics.covered_edit_distance;
@@ -553,6 +557,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         if (sv->sample_info.alt_consensus2_metrics.length > 0) local_alt_ref_edit_distances[1] = sv->sample_info.alt_consensus2_metrics.local_alt_ref_edit_distance;
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED2", local_alt_ref_edit_distances, 2);
     } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "AASEG", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "CED2", NULL, 0);
     }

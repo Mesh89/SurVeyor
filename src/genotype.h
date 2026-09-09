@@ -113,6 +113,10 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
     alt_alignment.Clear();
     aligner.Align(consensus_seq.c_str(), targets.alt_seq, targets.alt_len, with_pos_and_cigar, &alt_alignment, 0);
     metrics.alt_score = consensus_alignment_score(alt_alignment);
+    for (uint32_t encoded_op : alt_alignment.cigar) {
+        int op = bam_cigar_op(encoded_op);
+        if (op == BAM_CINS || op == BAM_CDEL) metrics.alt_extra_gaps += bam_cigar_oplen(encoded_op);
+    }
     metrics.alt_ref_begin = alt_alignment.ref_begin;
     metrics.alt_ref_end = alt_alignment.ref_end;
 
