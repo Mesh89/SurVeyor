@@ -135,6 +135,7 @@ void cluster_ow_dps(int contig_id, std::string contig_name, std::vector<std::sha
 			auto right_anchor_aln = std::make_shared<sv_t::anchor_aln_t>(c->ra_start, c->ra_end, c->ra_end-c->ra_start, 0);
 			dup = std::make_shared<duplication_t>(contig_name, c->la_start, c->ra_end, "", nullptr, nullptr, left_anchor_aln, right_anchor_aln);
 			dup->imprecise = true;
+			dup->cn_unresolved = true;
 		}
 		
 		if (dup && dup->svlen() >= config.min_sv_size) {

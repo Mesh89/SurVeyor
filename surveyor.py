@@ -1,7 +1,7 @@
 import sys, os, argparse, pysam, timeit, shutil
 from run_classifier import Classifier
 
-VERSION = "0.12.1"
+VERSION = "0.12.2"
 
 def valid_min_sv_size(arg):
     try:

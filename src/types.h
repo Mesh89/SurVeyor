@@ -347,6 +347,7 @@ struct deletion_t : sv_t {
 struct duplication_t : sv_t {
     using sv_t::sv_t;
     double ins_to_dup_similarity = 0.0;
+    bool cn_unresolved = false;
 
     std::string svtype() { return "DUP"; }
     hts_pos_t svlen() { return end - start + ins_seq.length(); }
