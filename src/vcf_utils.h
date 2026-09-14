@@ -562,10 +562,6 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* imaux2_tag = "##FORMAT=<ID=IMAUX2,Number=1,Type=Integer,Description=\"Inferred missing auxiliary context for the second breakpoint alternative allele consensus, calculated as for IMAUX.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, imaux2_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "AASEG");
-	const char* aaseg_tag = "##FORMAT=<ID=AASEG,Number=2,Type=Integer,Description=\"Total number of inserted and deleted bases in the alternative allele consensus alignments to the original alternative allele at breakpoints 1 and 2. Clipping is excluded.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, aaseg_tag, &len));
-
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "ARS");
 	const char* ars_tag = "##FORMAT=<ID=ARS,Number=1,Type=Integer,Description=\"Score of the alignment between the alternative allele consensus and the reference.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ars_tag, &len));
