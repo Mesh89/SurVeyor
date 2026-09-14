@@ -396,14 +396,18 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         targets.alt_seq = new char[targets.alt_len+1];
         int pos = 0;
         strncpy(targets.alt_seq, contig_seq+ref_start, dup_end-ref_start);
+        append_reference_mapping(targets.alt_ref_map, ref_start, dup_end-ref_start);
         pos += dup_end-ref_start;
         for (int i = 0; i < n_extra_copies; i++) {
             strncpy(targets.alt_seq+pos, dup->ins_seq.c_str(), dup->ins_seq.length());
+            targets.alt_ref_map.resize(targets.alt_ref_map.size()+dup->ins_seq.length());
             pos += dup->ins_seq.length();
             strncpy(targets.alt_seq+pos, contig_seq+dup_start, dup_end-dup_start);
+            append_reference_mapping(targets.alt_ref_map, dup_start, dup_end-dup_start);
             pos += dup_end-dup_start;
         }
         strncpy(targets.alt_seq+pos, contig_seq+dup_end, ref_end-dup_end);
+        append_reference_mapping(targets.alt_ref_map, dup_end, ref_end-dup_end);
         pos += ref_end-dup_end;
         targets.alt_seq[pos] = 0;
         targets.ref_seqs.push_back(contig_seq+ref_start);
@@ -419,6 +423,8 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         targets.left_independent_ref_len = targets.right_independent_ref_len = ref_end-ref_start;
         targets.aux_ref_seqs.push_back(contig_seq+ref_start);
         targets.aux_ref_lens.push_back(ref_end-ref_start);
+        targets.aux_ref_maps.push_back({});
+        append_reference_mapping(targets.aux_ref_maps.back(), ref_start, ref_end-ref_start);
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
         return metrics;
@@ -587,8 +593,11 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         targets.alt_len = lh_len+dup->ins_seq.length()+rh_len;
         targets.alt_seq = new char[targets.alt_len+1];
         strncpy(targets.alt_seq, contig_seq+lh_start, lh_len);
+        append_reference_mapping(targets.alt_ref_map, lh_start, lh_len);
         strncpy(targets.alt_seq+lh_len, dup->ins_seq.c_str(), dup->ins_seq.length());
+        targets.alt_ref_map.resize(lh_len+dup->ins_seq.length());
         strncpy(targets.alt_seq+lh_len+dup->ins_seq.length(), contig_seq+rh_start, rh_len);
+        append_reference_mapping(targets.alt_ref_map, rh_start, rh_len);
         targets.alt_seq[targets.alt_len] = 0;
         hts_pos_t ref_bp1_start = std::max(hts_pos_t(0), dup->start-hts_pos_t(consensus_seq.length()));
         hts_pos_t ref_bp1_end = std::min(dup->start+hts_pos_t(consensus_seq.length()), contig_len);
@@ -610,8 +619,12 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
         targets.right_independent_ref_len = ref_bp1_end-ref_bp1_start;
         targets.aux_ref_seqs.push_back(contig_seq+ref_bp1_start);
         targets.aux_ref_lens.push_back(ref_bp1_end-ref_bp1_start);
+        targets.aux_ref_maps.push_back({});
+        append_reference_mapping(targets.aux_ref_maps.back(), ref_bp1_start, ref_bp1_end-ref_bp1_start);
         targets.aux_ref_seqs.push_back(contig_seq+ref_bp2_start);
         targets.aux_ref_lens.push_back(ref_bp2_end-ref_bp2_start);
+        targets.aux_ref_maps.push_back({});
+        append_reference_mapping(targets.aux_ref_maps.back(), ref_bp2_start, ref_bp2_end-ref_bp2_start);
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
         return metrics;

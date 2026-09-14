@@ -98,8 +98,12 @@ inline bool aux_indel_haplotype_order(const std::shared_ptr<sv_t>& a, const std:
     return a->ins_seq < b->ins_seq;
 }
 
+inline void append_reference_mapping(std::vector<allele_base_mapping_t>& mapping, hts_pos_t ref_start, int len, bool reverse = false) {
+    for (int i = 0; i < len; i++) mapping.push_back({reverse ? ref_start+len-1-i : ref_start+i, reverse});
+}
+
 inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos_t hap_len, 
-    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr) {
+    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr, std::vector<allele_base_mapping_t>* mapping = nullptr) {
     
     std::sort(aux_indels.begin(), aux_indels.end(), aux_indel_haplotype_order);
     std::sort(aux_snps.begin(), aux_snps.end(), [](snp_t& a, snp_t& b) {
@@ -116,6 +120,7 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
     std::fill(hap_seq, hap_seq + hap_len, 'N');
     hap_seq[hap_len] = '\0';
     size_t first_edit_idx = edits == nullptr ? 0 : edits->size();
+    if (mapping != nullptr) mapping->assign(hap_len, {});
     
     hts_pos_t remaining_hap_len = hap_len;
     while (hap_end > 0 && remaining_hap_len > 0) {
@@ -128,6 +133,7 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
         hts_pos_t copy_len = hap_end - copy_start + 1;
 
         strncpy(hap_seq + remaining_hap_len - copy_len, chrom_seq + copy_start, copy_len);
+        if (mapping != nullptr) for (hts_pos_t i = 0; i < copy_len; i++) (*mapping)[remaining_hap_len-copy_len+i] = {copy_start+i};
         remaining_hap_len -= copy_len;
         hap_end -= copy_len;
 
@@ -151,6 +157,7 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
             curr_indel_idx--;
         } else if (next_snp_pos+1 == copy_start && remaining_hap_len > 0) { // we insert the SNP
             hap_seq[remaining_hap_len-1] = aux_snps[curr_snp_idx].alt_base;
+            if (mapping != nullptr) (*mapping)[remaining_hap_len-1] = {aux_snps[curr_snp_idx].pos};
             if (edits != nullptr) edits->push_back({allele_edit_kind_t::SNP, aux_snps[curr_snp_idx].pos, aux_snps[curr_snp_idx].pos+1, int(remaining_hap_len-1), int(remaining_hap_len), 1});
             remaining_hap_len--;
             hap_end--;
@@ -163,6 +170,7 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
             hap_seq[i] = hap_seq[i+remaining_hap_len];
         }
         hap_seq[hap_len-remaining_hap_len] = '\0';
+        if (mapping != nullptr) mapping->erase(mapping->begin(), mapping->begin()+remaining_hap_len);
         if (edits != nullptr) for (size_t i = first_edit_idx; i < edits->size(); i++) {
             (*edits)[i].alt_begin -= remaining_hap_len;
             (*edits)[i].alt_end -= remaining_hap_len;
@@ -172,7 +180,7 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
 }
 
 inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_pos_t hap_start, hts_pos_t hap_len,
-    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr) {
+    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr, std::vector<allele_base_mapping_t>* mapping = nullptr) {
 
     // Note that aux_indels coordinates are in VCF format
 
@@ -191,6 +199,7 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
     std::fill(hap_seq, hap_seq + hap_len, 'N');
     hap_seq[hap_len] = '\0';
 
+    if (mapping != nullptr) mapping->assign(hap_len, {});
     hts_pos_t remaining_hap_len = hap_len;
     hts_pos_t out_pos = 0; // next write position in hap_seq (left-to-right)
 
@@ -209,6 +218,7 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
         hts_pos_t copy_len = copy_end - hap_start;
 
         strncpy(hap_seq + out_pos, chrom_seq + hap_start, copy_len);
+        if (mapping != nullptr) for (hts_pos_t i = 0; i < copy_len; i++) (*mapping)[out_pos+i] = {hap_start+i};
         out_pos += copy_len;
         remaining_hap_len -= copy_len;
         hap_start = copy_end;
@@ -234,6 +244,7 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
             curr_indel_idx++;
         } else if (hap_start == next_snp_pos && remaining_hap_len > 0) {
             hap_seq[out_pos] = aux_snps[curr_snp_idx].alt_base;
+            if (mapping != nullptr) (*mapping)[out_pos] = {aux_snps[curr_snp_idx].pos};
             if (edits != nullptr) edits->push_back({allele_edit_kind_t::SNP, aux_snps[curr_snp_idx].pos, aux_snps[curr_snp_idx].pos+1, int(out_pos), int(out_pos+1), 1});
             out_pos++;
             remaining_hap_len--;
@@ -244,6 +255,7 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
 
     // If we couldn't fill the requested length (ran off chromosome), truncate to actual length
     hap_seq[out_pos] = '\0';
+    if (mapping != nullptr) mapping->resize(out_pos);
     return hap_seq;
 }
 

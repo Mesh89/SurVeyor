@@ -340,9 +340,10 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
 
     auto score_del_consensus = [&](const std::string& consensus_seq) {
         std::vector<allele_edit_t> lh_edits, rh_edits;
-        char* lh_seq = generate_haplotype_left(contig_seq, del_start-1, consensus_seq.length(), del->aux_indels, del->aux_snps, &lh_edits);
+        std::vector<allele_base_mapping_t> lh_map, rh_map;
+        char* lh_seq = generate_haplotype_left(contig_seq, del_start-1, consensus_seq.length(), del->aux_indels, del->aux_snps, &lh_edits, &lh_map);
         hts_pos_t lh_len = strlen(lh_seq);
-        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, del_end, consensus_seq.length(), del->aux_indels, del->aux_snps, &rh_edits);
+        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, del_end, consensus_seq.length(), del->aux_indels, del->aux_snps, &rh_edits, &rh_map);
         hts_pos_t rh_len = strlen(rh_seq);
         alignment_targets_t targets;
         targets.alt_len = lh_len+del->ins_seq.length()+rh_len;
@@ -351,6 +352,9 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
         strncpy(targets.alt_seq+lh_len, del->ins_seq.c_str(), del->ins_seq.length());
         strncpy(targets.alt_seq+lh_len+del->ins_seq.length(), rh_seq, rh_len);
         targets.alt_seq[targets.alt_len] = 0;
+        targets.alt_ref_map = lh_map;
+        targets.alt_ref_map.resize(lh_len+del->ins_seq.length());
+        targets.alt_ref_map.insert(targets.alt_ref_map.end(), rh_map.begin(), rh_map.end());
         targets.left_flank_end = lh_len;
         targets.right_flank_start = lh_len+del->ins_seq.length();
         append_allele_edits(targets.edits, lh_edits, 0, lh_len, 0);
@@ -379,6 +383,12 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
         targets.aux_ref_lens.push_back(left_aux_ref_len);
         targets.aux_ref_seqs.push_back(right_aux_ref_seq);
         targets.aux_ref_lens.push_back(right_aux_ref_len);
+        targets.aux_ref_maps.push_back(lh_map);
+        append_reference_mapping(targets.aux_ref_maps.back(), del_start, aux_ref_main_len);
+        targets.aux_ref_maps.back().insert(targets.aux_ref_maps.back().end(), rh_map.begin(), rh_map.begin()+left_aux_ref_rf_len);
+        targets.aux_ref_maps.push_back(std::vector<allele_base_mapping_t>(lh_map.end()-right_aux_ref_lf_len, lh_map.end()));
+        append_reference_mapping(targets.aux_ref_maps.back(), del_end-aux_ref_main_len, aux_ref_main_len);
+        targets.aux_ref_maps.back().insert(targets.aux_ref_maps.back().end(), rh_map.begin(), rh_map.end());
         targets.left_independent_ref_seq = left_aux_ref_seq;
         targets.left_independent_ref_len = left_aux_ref_len;
         targets.right_independent_ref_seq = right_aux_ref_seq;

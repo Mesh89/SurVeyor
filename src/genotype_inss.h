@@ -328,9 +328,10 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
 
     auto score_ins_consensus = [&](const std::string& consensus_seq, bool bp1) {
         std::vector<allele_edit_t> lf_edits, rf_edits;
-        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &lf_edits);
+        std::vector<allele_base_mapping_t> lf_map, rf_map;
+        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &lf_edits, &lf_map);
         int alt_lf_len = strlen(lf_seq);
-        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &rf_edits);
+        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &rf_edits, &rf_map);
         int alt_rf_len = strlen(rf_seq);
         int ins_seq_portion_len = std::min(ins->ins_seq.length(), consensus_seq.length());
         int extra_len = std::max(0, int(consensus_seq.length())-int(ins->ins_seq.length()));
@@ -345,6 +346,9 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
             strncpy(targets.alt_seq+alt_lf_len+ins_seq_portion_len, rf_seq, extra_len);
             targets.left_flank_end = alt_lf_len;
             targets.right_flank_start = alt_lf_len+ins_seq_portion_len;
+            targets.alt_ref_map = lf_map;
+            targets.alt_ref_map.resize(alt_lf_len+ins_seq_portion_len);
+            targets.alt_ref_map.insert(targets.alt_ref_map.end(), rf_map.begin(), rf_map.begin()+extra_len);
             append_allele_edits(targets.edits, lf_edits, 0, alt_lf_len, 0);
             if (ins_seq_portion_len == ins->ins_seq.length()) targets.edits.push_back({allele_edit_kind_t::INDEL, ins_start, ins_end, alt_lf_len, alt_lf_len+ins_seq_portion_len, int(ins_end-ins_start+ins->ins_seq.length()), true});
             append_allele_edits(targets.edits, rf_edits, 0, extra_len, alt_lf_len+ins_seq_portion_len);
@@ -357,6 +361,9 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
             strncpy(targets.alt_seq+extra_len+ins_seq_portion_len, rf_seq, alt_rf_len);
             targets.left_flank_end = extra_len;
             targets.right_flank_start = extra_len+ins_seq_portion_len;
+            targets.alt_ref_map.assign(lf_map.end()-extra_len, lf_map.end());
+            targets.alt_ref_map.resize(extra_len+ins_seq_portion_len);
+            targets.alt_ref_map.insert(targets.alt_ref_map.end(), rf_map.begin(), rf_map.end());
             append_allele_edits(targets.edits, lf_edits, alt_lf_len-extra_len, alt_lf_len, 0);
             if (ins_seq_portion_len == ins->ins_seq.length()) targets.edits.push_back({allele_edit_kind_t::INDEL, ins_start, ins_end, extra_len, extra_len+ins_seq_portion_len, int(ins_end-ins_start+ins->ins_seq.length()), true});
             append_allele_edits(targets.edits, rf_edits, 0, alt_rf_len, extra_len+ins_seq_portion_len);
@@ -374,6 +381,9 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
         int aux_ref_len = alt_lf_len+ins_end-ins_start+alt_rf_len;
         targets.aux_ref_seqs.push_back(aux_ref_seq);
         targets.aux_ref_lens.push_back(aux_ref_len);
+        targets.aux_ref_maps.push_back(lf_map);
+        append_reference_mapping(targets.aux_ref_maps.back(), ins_start, ins_end-ins_start);
+        targets.aux_ref_maps.back().insert(targets.aux_ref_maps.back().end(), rf_map.begin(), rf_map.end());
         targets.left_independent_ref_seq = targets.right_independent_ref_seq = aux_ref_seq;
         targets.left_independent_ref_len = targets.right_independent_ref_len = aux_ref_len;
 

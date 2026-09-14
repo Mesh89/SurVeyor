@@ -17,6 +17,13 @@
 
 enum class allele_edit_kind_t { SNP, INDEL };
 
+struct allele_base_mapping_t {
+    hts_pos_t pos; // Zero-based reference position; -1 for inserted sequence.
+    bool reverse;
+
+    allele_base_mapping_t(hts_pos_t pos = -1, bool reverse = false) : pos(pos), reverse(reverse) {}
+};
+
 struct allele_edit_t {
     allele_edit_kind_t kind;
     hts_pos_t ref_begin, ref_end;
@@ -28,7 +35,7 @@ struct allele_edit_t {
 };
 
 struct consensus_alignment_metrics_t {
-    int length = 0, alt_score = 0, alt_extra_gaps = 0, ref_score = 0, aux_ref_score = 0, covered_edit_distance = 0, local_alt_ref_edit_distance = 0;
+    int length = 0, alt_score = 0, alt_extra_gaps = 0, ref_score = 0, aux_ref_score = 0, inferred_missing_aux = 0, covered_edit_distance = 0, local_alt_ref_edit_distance = 0;
     bool main_edit_covered = false;
     int alt_ref_begin = 0, alt_ref_end = -1;
     std::array<int, 2> split_ref_lengths{{0, 0}};

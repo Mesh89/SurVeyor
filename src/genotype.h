@@ -33,11 +33,13 @@ constexpr hts_pos_t GENOTYPE_CONSENSUS_EXTENSION = 500;
 struct alignment_targets_t {
     char* alt_seq = NULL;
     int alt_len = 0;
+    std::vector<allele_base_mapping_t> alt_ref_map;
     std::vector<char*> ref_seqs;
     std::vector<int> ref_lens;
     std::vector<hts_pos_t> ref_starts;
     std::vector<char*> aux_ref_seqs;
     std::vector<int> aux_ref_lens;
+    std::vector<std::vector<allele_base_mapping_t>> aux_ref_maps;
     std::vector<allele_edit_t> edits;
 
     // The left flank is alt_seq[0:left_flank_end], while the right flank starts at right_flank_start.
@@ -100,6 +102,59 @@ inline int alignment_edit_distance(const StripedSmithWaterman::Alignment& alignm
     return distance;
 }
 
+struct alignment_difference_t {
+    hts_pos_t ref_begin, ref_end; // Zero-based, half-open; equal for an insertion.
+    std::string ins_seq; // Consensus bases in reference orientation; empty for a deletion.
+
+    alignment_difference_t(hts_pos_t ref_begin, hts_pos_t ref_end, const std::string& ins_seq) : ref_begin(ref_begin), ref_end(ref_end), ins_seq(ins_seq) {}
+
+    bool operator<(const alignment_difference_t& other) const { return std::tie(ref_begin, ref_end, ins_seq) < std::tie(other.ref_begin, other.ref_end, other.ins_seq); }
+};
+
+inline std::vector<alignment_difference_t> extract_alignment_differences(const std::string& consensus_seq, const StripedSmithWaterman::Alignment& alignment, const std::vector<allele_base_mapping_t>& mapping) {
+    std::vector<alignment_difference_t> differences;
+    if (alignment.sw_score <= 0 || alignment.ref_begin < 0 || alignment.query_begin < 0 || mapping.empty()) return differences;
+    int ref_pos = alignment.ref_begin, query_pos = alignment.query_begin;
+    // The aligner reports =/X operations. query_begin already accounts for leading soft clipping.
+    for (uint32_t encoded_op : alignment.cigar) {
+        int op = bam_cigar_op(encoded_op), len = bam_cigar_oplen(encoded_op);
+        if (op == BAM_CSOFT_CLIP) continue;
+        if (op == BAM_CDIFF) {
+            for (int i = 0; i < len && ref_pos+i < mapping.size(); i++) {
+                const allele_base_mapping_t& base = mapping[ref_pos+i];
+                if (base.pos < 0) continue;
+                std::string alt_base = consensus_seq.substr(query_pos+i, 1);
+                if (base.reverse) rc(alt_base);
+                differences.push_back({base.pos, base.pos+1, alt_base});
+            }
+        } else if (op == BAM_CINS && ref_pos > 0 && ref_pos < mapping.size()) {
+            const allele_base_mapping_t& left = mapping[ref_pos-1];
+            const allele_base_mapping_t& right = mapping[ref_pos];
+            // Both sides must identify the same reference boundary, outside inserted sequence.
+            if (left.pos >= 0 && right.pos >= 0 && left.reverse == right.reverse && right.pos == left.pos+(left.reverse ? -1 : 1)) {
+                hts_pos_t pos = std::min(left.pos, right.pos)+1;
+                std::string ins_seq = consensus_seq.substr(query_pos, len);
+                if (left.reverse) rc(ins_seq);
+                differences.push_back({pos, pos, ins_seq});
+            }
+        } else if (op == BAM_CDEL && ref_pos < mapping.size() && len <= mapping.size()-ref_pos) {
+            const allele_base_mapping_t& first = mapping[ref_pos];
+            bool contiguous = first.pos >= 0;
+            for (int i = 1; i < len && contiguous; i++) {
+                const allele_base_mapping_t& base = mapping[ref_pos+i];
+                contiguous = base.pos >= 0 && base.reverse == first.reverse && base.pos == first.pos+(first.reverse ? -i : i);
+            }
+            if (contiguous) {
+                hts_pos_t last_pos = mapping[ref_pos+len-1].pos;
+                differences.push_back({std::min(first.pos, last_pos), std::max(first.pos, last_pos)+1, ""});
+            }
+        }
+        if (bam_cigar_type(op)&1) query_pos += len;
+        if (bam_cigar_type(op)&2) ref_pos += len;
+    }
+    return differences;
+}
+
 inline consensus_alignment_metrics_t score_consensus_alignment(const std::string& consensus_seq, const alignment_targets_t& targets, StripedSmithWaterman::Aligner& aligner) {
     consensus_alignment_metrics_t metrics;
     metrics.length = consensus_seq.length();
@@ -153,12 +208,21 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
         }
     }
 
+    std::set<alignment_difference_t> aux_differences;
     for (int i = 0; i < targets.aux_ref_seqs.size() && i < targets.aux_ref_lens.size(); i++) {
         if (targets.aux_ref_seqs[i] == NULL || targets.aux_ref_lens[i] <= 0) continue;
         StripedSmithWaterman::Alignment aux_ref_alignment;
         aux_ref_alignment.Clear();
         aligner.Align(consensus_seq.c_str(), targets.aux_ref_seqs[i], targets.aux_ref_lens[i], with_pos_and_cigar, &aux_ref_alignment, 0);
         metrics.aux_ref_score = std::max(metrics.aux_ref_score, consensus_alignment_score(aux_ref_alignment));
+        if (i < targets.aux_ref_maps.size()) {
+            std::vector<alignment_difference_t> differences = extract_alignment_differences(consensus_seq, aux_ref_alignment, targets.aux_ref_maps[i]);
+            aux_differences.insert(differences.begin(), differences.end());
+        }
+    }
+    for (const alignment_difference_t& difference : extract_alignment_differences(consensus_seq, alt_alignment, targets.alt_ref_map)) {
+        // Erase matched differences so each reference-coordinate difference contributes only once.
+        if (aux_differences.erase(difference)) metrics.inferred_missing_aux += std::max(difference.ref_end-difference.ref_begin, hts_pos_t(difference.ins_seq.length()));
     }
 
     if (best_ref_idx >= 0 && best_ref_idx < targets.ref_starts.size()) {
