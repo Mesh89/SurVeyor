@@ -61,7 +61,6 @@ std::vector<int> active_threads_per_chr;
 std::vector<std::mutex> mutex_per_chr;
 std::vector<std::vector<sv_t*>> evidence_svs_by_contig;
 std::vector<std::unique_ptr<evidence_map_t>> evidence_maps_by_contig;
-std::vector<bool> evidence_map_load_attempted;
 evidence_map_t empty_evidence_map;
 bool load_evidence_maps = false;
 evidence_mode_t evidence_mode = evidence_mode_t::CACHED;
@@ -1165,8 +1164,7 @@ std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_i
 			mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
 		}
     }
-	if (load_evidence_maps && !evidence_map_load_attempted[contig_id]) {
-        evidence_map_load_attempted[contig_id] = true;
+	if (load_evidence_maps && active_threads_per_chr[contig_id] == 0) {
         std::string contig_name = contig_map.get_name(contig_id);
         std::string alt_fname = reads_association_dir + "/" + contig_name + ".alt.txt";
         std::string ref_fname = reads_association_dir + "/" + contig_name + ".ref.txt";
@@ -1197,7 +1195,6 @@ void release_chromosome_data(int contig_id) {
 	if (active_threads_per_chr[contig_id] == 0) {
 		mateseqs_w_mapq[contig_id].clear();
 		evidence_maps_by_contig[contig_id].reset();
-		evidence_map_load_attempted[contig_id] = false;
 	}
 	mutex_per_chr[contig_id].unlock();
 }
@@ -1366,7 +1363,6 @@ int main(int argc, char* argv[]) {
 	mutex_per_chr = std::vector<std::mutex>(contig_map.size());
     evidence_svs_by_contig.resize(contig_map.size());
     evidence_maps_by_contig.resize(contig_map.size());
-    evidence_map_load_attempted = std::vector<bool>(contig_map.size());
 
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
     if (in_vcf_file == NULL) {
