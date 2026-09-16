@@ -155,6 +155,62 @@ inline std::vector<alignment_difference_t> extract_alignment_differences(const s
     return differences;
 }
 
+inline bool alignment_spans_reference_edit(const StripedSmithWaterman::Alignment& alignment, const std::vector<allele_base_mapping_t>& mapping, const allele_edit_t& edit) {
+    if (alignment.sw_score <= 0 || alignment.ref_begin < 0) return false;
+    bool left = false, right = false;
+    int ref_pos = alignment.ref_begin;
+    for (uint32_t encoded_op : alignment.cigar) {
+        int op = bam_cigar_op(encoded_op), len = bam_cigar_oplen(encoded_op);
+        if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
+            for (int i = 0; i < len && ref_pos+i < mapping.size(); i++) {
+                hts_pos_t pos = mapping[ref_pos+i].pos;
+                if (pos < 0) continue;
+                left |= pos < edit.ref_begin;
+                right |= pos >= edit.ref_end;
+                if (left && right) return true;
+            }
+        }
+        if (bam_cigar_type(op)&2) ref_pos += len;
+    }
+    return false;
+}
+
+inline std::pair<int, int> shared_flanking_clipping(const StripedSmithWaterman::Alignment& alt, const std::vector<allele_base_mapping_t>& alt_map, const StripedSmithWaterman::Alignment& aux, const std::vector<allele_base_mapping_t>& aux_map, const std::vector<allele_edit_t>& edits) {
+    if (alt.sw_score <= 0 || aux.sw_score <= 0 || alt.cigar.size() < 2 || aux.cigar.size() < 2) return {0, 0};
+    if (alt.ref_begin < 0 || aux.ref_begin < 0 || alt.ref_end < alt.ref_begin || aux.ref_end < aux.ref_begin || alt.ref_end >= alt_map.size() || aux.ref_end >= aux_map.size()) return {0, 0};
+    int clips[] = {0, 0};
+    for (int end = 0; end < 2; end++) {
+        int alt_idx = end ? alt.cigar.size()-1 : 0, aux_idx = end ? aux.cigar.size()-1 : 0;
+        if (bam_cigar_op(alt.cigar[alt_idx]) != BAM_CSOFT_CLIP || bam_cigar_op(aux.cigar[aux_idx]) != BAM_CSOFT_CLIP) continue;
+        int len = bam_cigar_oplen(alt.cigar[alt_idx]);
+        if (len != bam_cigar_oplen(aux.cigar[aux_idx]) || (end ? alt.query_end != aux.query_end : alt.query_begin != aux.query_begin)) continue;
+        int alt_op = bam_cigar_op(alt.cigar[alt_idx+(end ? -1 : 1)]), aux_op = bam_cigar_op(aux.cigar[aux_idx+(end ? -1 : 1)]);
+        // The base next to the clip must consume both query and target (M, = or X).
+        if (!(bam_cigar_type(alt_op)&1) || !(bam_cigar_type(alt_op)&2) || !(bam_cigar_type(aux_op)&1) || !(bam_cigar_type(aux_op)&2)) continue;
+        int alt_pos = end ? alt.ref_end : alt.ref_begin, aux_pos = end ? aux.ref_end : aux.ref_begin;
+        const allele_base_mapping_t& alt_base = alt_map[alt_pos];
+        const allele_base_mapping_t& aux_base = aux_map[aux_pos];
+        if (alt_base.pos < 0 || alt_base.pos != aux_base.pos || alt_base.reverse != aux_base.reverse) continue;
+        bool outside = true;
+        for (const allele_edit_t& edit : edits) {
+            if (edit.main_edit && ((edit.alt_begin <= alt_pos && alt_pos < edit.alt_end) || (edit.ref_begin <= alt_base.pos && alt_base.pos < edit.ref_end))) outside = false;
+        }
+        if (outside) clips[end] = len;
+    }
+    if (clips[0] == 0 && clips[1] == 0) return {0, 0};
+    bool main_edit = false;
+    // Partial main alleles have no full main edit, or cannot align both flanks of its ALT interval.
+    for (const allele_edit_t& edit : edits) {
+        if (!edit.main_edit) continue;
+        main_edit = true;
+        if (!alignment_crosses_breakpoint(alt, edit.alt_begin) || !alignment_crosses_breakpoint(alt, edit.alt_end)) return {0, 0};
+        if (edit.alt_begin < edit.alt_end && !alignment_aligns_interval(alt, edit.alt_begin, edit.alt_end)) return {0, 0};
+        if (!alignment_spans_reference_edit(aux, aux_map, edit)) return {0, 0};
+    }
+    if (!main_edit) return {0, 0};
+    return {clips[0], clips[1]};
+}
+
 inline consensus_alignment_metrics_t score_consensus_alignment(const std::string& consensus_seq, const alignment_targets_t& targets, StripedSmithWaterman::Aligner& aligner) {
     consensus_alignment_metrics_t metrics;
     metrics.length = consensus_seq.length();
@@ -205,6 +261,7 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
     }
 
     std::set<alignment_difference_t> aux_differences;
+    int left_clip = 0, right_clip = 0;
     for (int i = 0; i < targets.aux_ref_seqs.size() && i < targets.aux_ref_lens.size(); i++) {
         if (targets.aux_ref_seqs[i] == NULL || targets.aux_ref_lens[i] <= 0) continue;
         StripedSmithWaterman::Alignment aux_ref_alignment;
@@ -214,12 +271,16 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
         if (i < targets.aux_ref_maps.size()) {
             std::vector<alignment_difference_t> differences = extract_alignment_differences(consensus_seq, aux_ref_alignment, targets.aux_ref_maps[i]);
             aux_differences.insert(differences.begin(), differences.end());
+            auto clips = shared_flanking_clipping(alt_alignment, targets.alt_ref_map, aux_ref_alignment, targets.aux_ref_maps[i], targets.edits);
+            left_clip = std::max(left_clip, clips.first);
+            right_clip = std::max(right_clip, clips.second);
         }
     }
     for (const alignment_difference_t& difference : extract_alignment_differences(consensus_seq, alt_alignment, targets.alt_ref_map)) {
         // Erase matched differences so each reference-coordinate difference contributes only once.
         if (aux_differences.erase(difference)) metrics.inferred_missing_aux += std::max(difference.ref_end-difference.ref_begin, hts_pos_t(difference.ins_seq.length()));
     }
+    metrics.inferred_missing_aux += left_clip+right_clip;
 
     if (best_ref_idx >= 0 && best_ref_idx < targets.ref_starts.size()) {
         hts_pos_t ref_start = targets.ref_starts[best_ref_idx];

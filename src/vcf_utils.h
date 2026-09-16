@@ -555,11 +555,11 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, aas2_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "IMAUX");
-	const char* imaux_tag = "##FORMAT=<ID=IMAUX,Number=1,Type=Integer,Description=\"Inferred missing auxiliary context for the first alternative allele consensus: differences shared by its ALT alignment and at least one REF+AUX alignment, identical in reference coordinates and sequence. Each distinct mismatch counts 1 and each gap counts its length. Clipping and differences without an unambiguous reference mapping, including those inside inserted sequence, are excluded.\">";
+	const char* imaux_tag = "##FORMAT=<ID=IMAUX,Number=1,Type=Integer,Description=\"Inferred missing auxiliary context for the first alternative allele consensus: differences shared by its ALT alignment and at least one REF+AUX alignment, identical in reference coordinates and sequence. Each distinct mismatch counts 1 and each gap counts its length. Shared flanking soft clipping counts its length once per consensus end when query boundaries and adjacent reference coordinates and orientations match outside the main variant. Both alignments must span both main breakpoints, with the full main edit represented and the entire ALT inserted interval aligned without deletions. Differences without an unambiguous reference mapping, including those inside inserted sequence, are excluded.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, imaux_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "IMAUX2");
-	const char* imaux2_tag = "##FORMAT=<ID=IMAUX2,Number=1,Type=Integer,Description=\"Inferred missing auxiliary context for the second breakpoint alternative allele consensus, calculated as for IMAUX.\">";
+	const char* imaux2_tag = "##FORMAT=<ID=IMAUX2,Number=1,Type=Integer,Description=\"Inferred missing auxiliary context for the second breakpoint alternative allele consensus, including shared aligned edits and qualifying shared flanking soft clipping, calculated as for IMAUX.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, imaux2_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "ARS");
