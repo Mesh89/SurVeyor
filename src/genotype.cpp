@@ -994,8 +994,12 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<std::vector<uint8_t>> quals_storage = get_genotyping_consensus_qualities(ref_seq, reads, revcomp_read, seqs, read_start_offsets);
 
     std::vector<const uint8_t*> quals;
+    std::vector<double> total_quals;
     for (const std::vector<uint8_t>& read_quals : quals_storage) {
         quals.push_back(read_quals.data());
+        double total_qual = 0;
+        for (uint8_t qual : read_quals) total_qual += qual;
+        total_quals.push_back(total_qual);
     }
 
     avg_score = 0;
@@ -1027,7 +1031,11 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             const std::string& read_seq = seqs[j];
 
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
-            curr_cum_score += double(ungapped_aln.score)/read_seq.length();
+            double matching_qual = 0;
+            for (int k = ungapped_aln.query_begin; k < ungapped_aln.query_end; k++) {
+                if (read_seq[k] == cseq[ungapped_aln.ref_begin + k - ungapped_aln.query_begin]) matching_qual += quals[j][k];
+            }
+            if (total_quals[j] > 0) curr_cum_score += matching_qual/total_quals[j];
 
             bool is_reverse = read_is_reverse[j];
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds)) {
