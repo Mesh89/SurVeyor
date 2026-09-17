@@ -314,10 +314,11 @@ std::vector<int> select_reads_by_kmer(std::vector<std::string>& seqs, std::vecto
     return selected_idxs;
 }
 
-// vector<int> contains the number of mismatches for each read, negative if the read is rejected, non-negative if accepted
-std::vector<int> find_accepted_reads(std::string& consensus_seq, std::deque<bam1_t*>& reads, std::vector<hts_pos_t>& read_start_offsets) {
+// Returns an acceptance mask in the same order as reads.
+std::vector<bool> find_accepted_reads(std::string& consensus_seq, std::deque<bam1_t*>& reads, std::vector<hts_pos_t>& read_start_offsets, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
-    std::vector<int> accepted(reads.size(), 0);
+    std::vector<bool> accepted(reads.size(), false);
+    std::vector<consensus_hp_region_t> hp_regions = find_consensus_hp_regions(consensus_seq);
     for (int i = 0; i < reads.size(); i++) {
         bam1_t* r = reads[i];
         hts_pos_t offset = read_start_offsets[i];
@@ -334,10 +335,9 @@ std::vector<int> find_accepted_reads(std::string& consensus_seq, std::deque<bam1
             }
         }
 
-        // Keep rejected reads strictly negative, including reads with zero
-        // mismatches to the consensus. Accepted reads store their mismatch count.
-        accepted[i] = -(mm + 1);
-        if (mm <= std::ceil(config.max_seq_error * r->core.l_qseq)) {
+        std::string read_seq = get_sequence(r);
+        ungapped_aln_t aln(0, r->core.l_qseq, offset, offset + r->core.l_qseq, mm, r->core.l_qseq - mm);
+        if (passes_consensus_mismatch_filter(read_seq, bam_is_rev(r), consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config, true)) {
             // The read should either map much better to the consensus than to the reference,
             // or contain an SV-sized net indel with respect to the reference.
             int orig_score = compute_read_score(r, 1, -4, -6, -1);
@@ -347,7 +347,7 @@ std::vector<int> find_accepted_reads(std::string& consensus_seq, std::deque<bam1
             bool has_sv_sized_indel = std::abs(indels.dels-indels.inss) >= config.min_sv_size;
             bool indel_explained = has_sv_sized_indel && new_score > orig_score;
             if (improved_alignment || indel_explained) {
-                accepted[i] = mm;
+                accepted[i] = true;
             }
         }
     }
@@ -355,7 +355,7 @@ std::vector<int> find_accepted_reads(std::string& consensus_seq, std::deque<bam1
 }
 
 std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer_selection,
-                                     std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual, std::unordered_map<bam1_t*, std::vector<uint8_t>>& recalibrated_quals) {
+                                     std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual, std::unordered_map<bam1_t*, std::vector<uint8_t>>& recalibrated_quals, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds = nullptr) {
 
     std::vector<std::string> seqs;
     std::vector<uint8_t*> quals;
@@ -397,12 +397,12 @@ std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer
 
     std::string consensus_seq = build_full_consensus_seq(seqs, quals, read_start_offsets, lowq_prefix, lowq_suffix, consensus_qual, true);
 
-    std::vector<int> selected_accepted = find_accepted_reads(consensus_seq, selected_clipped, read_start_offsets);
+    std::vector<bool> selected_accepted = find_accepted_reads(consensus_seq, selected_clipped, read_start_offsets, hp_mismatch_rate_thresholds);
 
     int n_accepted = 0;
     accepted = std::vector<bool>(clipped.size(), false);
     for (int i = 0; i < selected_accepted.size(); i++) {
-        if (selected_accepted[i] >= 0) {
+        if (selected_accepted[i]) {
             accepted[selected_idxs[i]] = true;
             n_accepted++;
         }
@@ -432,7 +432,7 @@ void dedup_cluster(std::deque<bam1_t*>& cluster) {
     cluster.swap(unique_cluster);
 }
 
-std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deque<bam1_t*> clipped, std::deque<bool>& used, hp_tail_quality_table_t& quality_cache) {
+std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deque<bam1_t*> clipped, std::deque<bool>& used, hp_tail_quality_table_t& quality_cache, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
     if (clipped.size() <= 2 || clipped.size() > 20*stats.get_max_depth(contig_name)) {
         return {};
@@ -457,11 +457,11 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
         std::vector<bool> accepted;
         int lowq_prefix, lowq_suffix;
         std::string consensus_qual;
-        std::string consensus_seq = build_full_consensus_seq(clipped, true, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals);
+        std::string consensus_seq = build_full_consensus_seq(clipped, true, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals, hp_mismatch_rate_thresholds);
 
         int accepted_reads_n = std::count(accepted.begin(), accepted.end(), true);
         if (accepted_reads_n < 3) {
-            consensus_seq = build_full_consensus_seq(clipped, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals);
+            consensus_seq = build_full_consensus_seq(clipped, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals, hp_mismatch_rate_thresholds);
         }
         accepted_reads_n = std::count(accepted.begin(), accepted.end(), true);
 
@@ -489,7 +489,7 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
             for (bam1_t* r : accepted_reads) used_reads.insert(r);
 
             // rebuild consensus sequence using only accepted reads
-            consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals);
+            consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals, hp_mismatch_rate_thresholds);
 
             hts_pos_t start = get_unclipped_start(accepted_reads[0]), end = 0;
             for (bam1_t* r : accepted_reads) end = std::max(end, get_unclipped_end(r));
@@ -624,7 +624,7 @@ void drop_invalid_other_bp_intervals(std::vector<consensus_t*>& consensuses) {
     consensuses.erase(std::remove(consensuses.begin(), consensuses.end(), nullptr), consensuses.end());
 }
 
-void build_consensuses(int id, std::string contig_name, std::vector<std::string> bam_fnames, std::string clip_fname) {
+void build_consensuses(int id, std::string contig_name, std::vector<std::string> bam_fnames, std::string clip_fname, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
     hp_tail_quality_table_t quality_cache;
     
     std::ofstream clip_fout(clip_fname);
@@ -647,7 +647,7 @@ void build_consensuses(int id, std::string contig_name, std::vector<std::string>
         }
 
         if (cluster.size() >= 3 && !reads_belong_to_same_cluster(cluster.front(), read)) { // candidate cluster complete
-            std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, quality_cache);
+            std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, quality_cache, hp_mismatch_rate_thresholds);
             route_consensuses(consensuses, lc_consensuses, rc_consensuses);
         }
         while (!cluster.empty() && !reads_belong_to_same_cluster(cluster.front(), read)) {
@@ -661,7 +661,7 @@ void build_consensuses(int id, std::string contig_name, std::vector<std::string>
     }
 
     if (cluster.size() >= 3) {
-        std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, quality_cache);
+        std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, quality_cache, hp_mismatch_rate_thresholds);
         route_consensuses(consensuses, lc_consensuses, rc_consensuses);
     }
     for (int i = 0; i < used_for_consensus.size(); i++) {
@@ -717,6 +717,8 @@ int main(int argc, char* argv[]) {
     contigs.read_fasta_into_map(reference_fname);
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
+    hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+
     std::vector<std::future<void> > futures;
     ctpl::thread_pool thread_pool(config.threads);
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
@@ -726,7 +728,7 @@ int main(int argc, char* argv[]) {
         std::string sr_bam_fname = workspace + "/sr/" + std::to_string(contig_id) + ".bam";
         std::string hsr_bam_fname = workspace + "/hsr/" + std::to_string(contig_id) + ".bam";
         future = thread_pool.push(build_consensuses, contig_name, std::vector<std::string>{sr_bam_fname, hsr_bam_fname}, 
-            workspace + "/consensuses/" + std::to_string(contig_id) + ".txt");
+            workspace + "/consensuses/" + std::to_string(contig_id) + ".txt", &hp_mismatch_rate_thresholds);
         futures.push_back(std::move(future));
     }
     thread_pool.stop(true);

@@ -833,75 +833,6 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std
         consistent_avg_score, consistent_stddev_score);
 }
 
-struct consensus_hp_region_t {
-    int beg, end;
-    char base;
-
-    consensus_hp_region_t(int beg = 0, int end = 0, char base = 'N') : beg(beg), end(end), base(base) {}
-    int length() const { return end - beg; }
-};
-
-char uppercase_hp_base(char base) {
-    return base >= 'a' && base <= 'z' ? base - ('a' - 'A') : base;
-}
-
-char complement_hp_base(char base) {
-    if (base == 'A') return 'T';
-    if (base == 'C') return 'G';
-    if (base == 'G') return 'C';
-    if (base == 'T') return 'A';
-    return 'N';
-}
-
-std::vector<consensus_hp_region_t> find_consensus_hp_regions(const std::string& seq) {
-    std::vector<consensus_hp_region_t> hp_regions;
-    for (int hp_beg = 0; hp_beg < seq.length();) {
-        char hp_base = uppercase_hp_base(seq[hp_beg]);
-        int hp_end = hp_beg + 1;
-        while (hp_end < seq.length() && uppercase_hp_base(seq[hp_end]) == hp_base) hp_end++;
-        if ((hp_base == 'A' || hp_base == 'C' || hp_base == 'G' || hp_base == 'T') && hp_end - hp_beg >= 5) hp_regions.push_back({hp_beg, hp_end, hp_base});
-        hp_beg = hp_end;
-    }
-    return hp_regions;
-}
-
-double ungapped_mismatch_rate_for_ref_range(const std::string& read_seq, const std::string& consensus_seq, const ungapped_aln_t& aln, int ref_beg, int ref_end) {
-    int range_len = ref_end - ref_beg;
-    int query_beg = aln.query_begin + ref_beg - aln.ref_begin;
-    int mismatches = number_of_mismatches_fast(read_seq.c_str() + query_beg, consensus_seq.c_str() + ref_beg, range_len, range_len);
-    return double(mismatches) / range_len;
-}
-
-bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_reverse, const std::string& consensus_seq, const ungapped_aln_t& aln,
-    const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
-
-    int aligned_len = aln.query_end - aln.query_begin;
-    const consensus_hp_region_t* selected_hp = nullptr;
-    double selected_threshold = -1;
-    if (hp_mismatch_rate_thresholds != nullptr) {
-        for (const consensus_hp_region_t& hp : hp_regions) {
-            int tail_3p_len = is_reverse ? hp.beg - aln.ref_begin : aln.ref_end - hp.end;
-            if (aln.ref_begin >= hp.beg || aln.ref_end <= hp.end || tail_3p_len < config.min_clip_len) continue;
-            char sequenced_hp_base = is_reverse ? complement_hp_base(hp.base) : hp.base;
-            double threshold = hp_mismatch_rate_thresholds->get_threshold(hp.length(), sequenced_hp_base);
-            if (selected_hp == nullptr || threshold > selected_threshold || (threshold == selected_threshold && hp.length() > selected_hp->length())) {
-                selected_hp = &hp;
-                selected_threshold = threshold;
-            }
-        }
-    }
-    if (selected_hp == nullptr) return aligned_len > 0 && double(aln.mismatches) / aligned_len <= config.max_seq_error;
-
-    // Select by the sample allowance before testing mismatches; the same HP fixes both boundaries.
-    int five_p_and_hp_beg = is_reverse ? selected_hp->beg : aln.ref_begin;
-    int five_p_and_hp_end = is_reverse ? aln.ref_end : selected_hp->end;
-    int three_p_beg = is_reverse ? aln.ref_begin : selected_hp->end;
-    int three_p_end = is_reverse ? selected_hp->beg : aln.ref_end;
-    double five_p_and_hp_mismatch_rate = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, five_p_and_hp_beg, five_p_and_hp_end);
-    double mismatch_rate_3p = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, three_p_beg, three_p_end);
-    return five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= selected_threshold;
-}
-
 std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals, const std::vector<hts_pos_t>& read_start_offsets, const std::vector<bool>& read_is_reverse, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
     std::vector<std::string> temp1, temp2;
     std::vector<StripedSmithWaterman::Alignment> consensus_contigs_alns;
@@ -926,7 +857,7 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
         if (consensus_seq.empty() || consensus_seq == "HAS_CYCLE") continue;
         std::vector<consensus_hp_region_t> hp_regions = find_consensus_hp_regions(consensus_seq);
         auto accept_read = [&](int i, const ungapped_aln_t& aln) {
-            return passes_consensus_mismatch_filter(seqs[i], read_is_reverse[i], consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds);
+            return passes_consensus_mismatch_filter(seqs[i], read_is_reverse[i], consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config);
         };
         // Use ARC's placement scoring and acceptance policy before accumulating base-quality votes.
         correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals, accept_read, 0);
@@ -1038,7 +969,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             if (total_quals[j] > 0) curr_cum_score += matching_qual/total_quals[j];
 
             bool is_reverse = read_is_reverse[j];
-            if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds)) {
+            if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds, config)) {
                 curr_consistent_reads.push_back(read);
                 curr_aln_scores.push_back(double(ungapped_aln.score)/read_seq.length());
                 curr_start_positions.push_back(ungapped_aln.ref_begin);
@@ -1100,7 +1031,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
 
             bool is_reverse = read_is_reverse[i];
-            if (passes_consensus_mismatch_filter(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds)) {
+            if (passes_consensus_mismatch_filter(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds, config)) {
                 is_consistent_read[i] = true;
                 is_exact_match[i] = ungapped_aln.mismatches == 0;
                 n_consistent_reads++;

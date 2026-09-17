@@ -13,6 +13,7 @@
 
 #include "hp_read_info.h"
 #include "consensus.h"
+#include "sw_utils.h"
 
 static const char HP_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "hp_3p_mismatch_rate_thresholds.tsv";
 
@@ -64,6 +65,80 @@ private:
         return -1;
     }
 };
+
+struct consensus_hp_region_t {
+    int beg, end;
+    char base;
+
+    consensus_hp_region_t(int beg = 0, int end = 0, char base = 'N') : beg(beg), end(end), base(base) {}
+    int length() const { return end - beg; }
+};
+
+inline char uppercase_hp_base(char base) {
+    return base >= 'a' && base <= 'z' ? base - ('a' - 'A') : base;
+}
+
+inline char complement_hp_base(char base) {
+    if (base == 'A') return 'T';
+    if (base == 'C') return 'G';
+    if (base == 'G') return 'C';
+    if (base == 'T') return 'A';
+    return 'N';
+}
+
+inline std::vector<consensus_hp_region_t> find_consensus_hp_regions(const std::string& seq) {
+    std::vector<consensus_hp_region_t> hp_regions;
+    for (int hp_beg = 0; hp_beg < seq.length();) {
+        char hp_base = uppercase_hp_base(seq[hp_beg]);
+        int hp_end = hp_beg + 1;
+        while (hp_end < seq.length() && uppercase_hp_base(seq[hp_end]) == hp_base) hp_end++;
+        if ((hp_base == 'A' || hp_base == 'C' || hp_base == 'G' || hp_base == 'T') && hp_end - hp_beg >= 5) hp_regions.push_back({hp_beg, hp_end, hp_base});
+        hp_beg = hp_end;
+    }
+    return hp_regions;
+}
+
+inline double ungapped_mismatch_rate_for_ref_range(const std::string& read_seq, const std::string& consensus_seq, const ungapped_aln_t& aln, int ref_beg, int ref_end) {
+    int range_len = ref_end - ref_beg;
+    int query_beg = aln.query_begin + ref_beg - aln.ref_begin;
+    int mismatches = number_of_mismatches_fast(read_seq.c_str() + query_beg, consensus_seq.c_str() + ref_beg, range_len, range_len);
+    return double(mismatches) / range_len;
+}
+
+inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_reverse, const std::string& consensus_seq, const ungapped_aln_t& aln,
+    const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, const config_t& config, bool round_up_non_hp_threshold = false) {
+
+    int aligned_len = aln.query_end - aln.query_begin;
+    const consensus_hp_region_t* selected_hp = nullptr;
+    double selected_threshold = -1;
+    if (hp_mismatch_rate_thresholds != nullptr) {
+        for (const consensus_hp_region_t& hp : hp_regions) {
+            int tail_3p_len = is_reverse ? hp.beg - aln.ref_begin : aln.ref_end - hp.end;
+            if (aln.ref_begin >= hp.beg || aln.ref_end <= hp.end || tail_3p_len < config.min_clip_len) continue;
+            char sequenced_hp_base = is_reverse ? complement_hp_base(hp.base) : hp.base;
+            double threshold = hp_mismatch_rate_thresholds->get_threshold(hp.length(), sequenced_hp_base);
+            if (selected_hp == nullptr || threshold > selected_threshold || (threshold == selected_threshold && hp.length() > selected_hp->length())) {
+                selected_hp = &hp;
+                selected_threshold = threshold;
+            }
+        }
+    }
+    if (selected_hp == nullptr) {
+        if (aligned_len <= 0) return false;
+        // Clip acceptance historically rounds its whole-read mismatch allowance up.
+        if (round_up_non_hp_threshold) return aln.mismatches <= std::ceil(config.max_seq_error * aligned_len);
+        return double(aln.mismatches) / aligned_len <= config.max_seq_error;
+    }
+
+    // Select by the sample allowance before testing mismatches; the same HP fixes both boundaries.
+    int five_p_and_hp_beg = is_reverse ? selected_hp->beg : aln.ref_begin;
+    int five_p_and_hp_end = is_reverse ? aln.ref_end : selected_hp->end;
+    int three_p_beg = is_reverse ? aln.ref_begin : selected_hp->end;
+    int three_p_end = is_reverse ? selected_hp->beg : aln.ref_end;
+    double five_p_and_hp_mismatch_rate = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, five_p_and_hp_beg, five_p_and_hp_end);
+    double mismatch_rate_3p = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, three_p_beg, three_p_end);
+    return five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= selected_threshold;
+}
 
 struct hp_read_observation_t {
     std::string seq;
