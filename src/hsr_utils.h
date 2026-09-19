@@ -163,6 +163,48 @@ consensus_ref_classification_t classify_consensus_against_ref(
 	}
 }
 
+bool is_poly_g_tail_consensus(const consensus_t* consensus, char* contig_seq, hts_pos_t contig_len, const config_t& config) {
+	bool forward_only = consensus->fwd_reads > 0 && consensus->rev_reads == 0;
+	bool reverse_only = consensus->rev_reads > 0 && consensus->fwd_reads == 0;
+	if (!forward_only && !reverse_only) return false;
+
+	// Inspect the full sequence so low-quality tails remain available to the filter.
+	const std::string& query = consensus->sequence;
+	hts_pos_t ref_start = std::max<hts_pos_t>(0, consensus->start - 10);
+	hts_pos_t ref_end = std::min(contig_len, consensus->end + 10);
+	if (query.empty() || ref_start >= ref_end) return false;
+	StripedSmithWaterman::Aligner aligner(2, 2, 4, 1, true);
+	StripedSmithWaterman::Filter filter;
+	StripedSmithWaterman::Alignment aln;
+	if (!aligner.Align(query.c_str(), contig_seq + ref_start, ref_end - ref_start, filter, &aln, 0) || aln.cigar.empty() || aln.query_begin < 0 || aln.query_end < aln.query_begin) return false;
+
+	int left_clip_len = get_left_clip_size(aln), right_clip_len = get_right_clip_size(aln);
+	int tail_len = forward_only ? right_clip_len : left_clip_len;
+	int opposite_clip_len = forward_only ? left_clip_len : right_clip_len;
+	if (tail_len < config.min_clip_len || opposite_clip_len >= config.min_clip_len || aln.query_end - aln.query_begin + 1 < config.min_clip_len) return false;
+
+	int mismatches = 0;
+	for (uint32_t op : aln.cigar) {
+		char opchar = cigar_int_to_op(op);
+		if (opchar == 'I' || opchar == 'D') return false;
+		if (opchar == 'X') mismatches += cigar_int_to_len(op);
+	}
+	if (mismatches >= config.min_diff_hsr) return false;
+
+	int tail_beg = forward_only ? query.length() - tail_len : 0;
+	char tail_base = forward_only ? 'G' : 'C';
+	int poly_g_bases = std::count(query.begin() + tail_beg, query.begin() + tail_beg + tail_len, tail_base);
+	return int64_t(poly_g_bases)*5 >= int64_t(tail_len)*4;
+}
+
+void filter_poly_g_tail_consensuses(std::vector<consensus_t*>& consensuses, char* contig_seq, hts_pos_t contig_len, const config_t& config) {
+	consensuses.erase(std::remove_if(consensuses.begin(), consensuses.end(), [&](consensus_t* consensus) {
+		if (!is_poly_g_tail_consensus(consensus, contig_seq, contig_len, config)) return false;
+		delete consensus;
+		return true;
+	}), consensuses.end());
+}
+
 // Remove consensues that are completely contained within another consensues and their sequence is a substring of the other consensus
 void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 	std::vector<consensus_t*> sorted = consensuses;
@@ -229,6 +271,10 @@ void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 }
 
 bool merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consensus_t* target, int min_overlap) {
+	hts_pos_t lower = std::max(c1->other_bp_lower_boundary, c2->other_bp_lower_boundary);
+	hts_pos_t upper = std::min(c1->other_bp_upper_boundary, c2->other_bp_upper_boundary);
+	if (lower >= upper) return false;
+
 	// only merge if the overlap is at least half of the length of the shorter consensus
 	hts_pos_t overlap = c1->end - c2->start;
 	if (overlap < (int) std::min(c1->sequence.length(), c2->sequence.length())/2) return false;

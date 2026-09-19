@@ -513,7 +513,7 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
 
                 max_mapq = std::max(max_mapq, r->core.qual);
 
-                if (!is_samechr(r) || is_samestr(r)) continue;
+                if (!is_proper_pair(r, stats.min_is, stats.max_is)) continue;
                 if (left_clipped && bam_is_rev(r) && !is_mate_left_clipped(r)) {
                     other_bp_lower_boundary = std::max(other_bp_lower_boundary, r->core.mpos);
                     other_bp_upper_boundary = std::min(other_bp_upper_boundary, r->core.mpos+stats.max_is);
@@ -677,6 +677,9 @@ void build_consensuses(int id, std::string contig_name, std::vector<std::string>
 
     drop_invalid_other_bp_intervals(rc_consensuses);
     drop_invalid_other_bp_intervals(lc_consensuses);
+
+    filter_poly_g_tail_consensuses(rc_consensuses, contigs.get_seq(contig_name), contigs.get_len(contig_name), config);
+    filter_poly_g_tail_consensuses(lc_consensuses, contigs.get_seq(contig_name), contigs.get_len(contig_name), config);
 
     enforce_max_ploidy(rc_consensuses, 4);
     enforce_max_ploidy(lc_consensuses, 4);
