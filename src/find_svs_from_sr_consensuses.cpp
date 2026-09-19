@@ -92,10 +92,10 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 		for (std::shared_ptr<consensus_t> consensus : consensuses_to_consider) {
 			if (consensus->left_clipped != extend_in_clip_direction) {
 				extend_consensus_to_right(consensus, candidate_reads_for_extension_itree, consensus->right_ext_target_start(stats.max_is, stats.read_len), 
-					consensus->right_ext_target_end(stats.max_is, stats.read_len), chr_seqs.get_len(contig_name), config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id]);
+					consensus->right_ext_target_end(stats.max_is, stats.read_len), chr_seqs.get_len(contig_name), config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id], 500);
 			} else {
 				extend_consensus_to_left(consensus, candidate_reads_for_extension_itree, consensus->left_ext_target_start(stats.max_is, stats.read_len), 
-					consensus->left_ext_target_end(stats.max_is, stats.read_len), chr_seqs.get_len(contig_name), config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id]);
+					consensus->left_ext_target_end(stats.max_is, stats.read_len), chr_seqs.get_len(contig_name), config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id], 500);
 			}
 		}
 		for (ext_read_t* ext_read : candidate_reads_for_extension) delete ext_read;

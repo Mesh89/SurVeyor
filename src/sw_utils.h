@@ -848,7 +848,20 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	free(prefix_scores);
 	free(suffix_scores);
 
-    if (max_score == 0) return std::vector<std::shared_ptr<sv_t>>(); // no good alignment found
+	// Extract the full alignment independently so its AUX context is not shared with split candidates.
+	bool full_remap_eligible = overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) > 0;
+	StripedSmithWaterman::Alignment full_aln;
+	std::vector<std::shared_ptr<sv_t>> full_svs;
+	if (full_remap_eligible) {
+		hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
+		hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
+		StripedSmithWaterman::Filter filter;
+		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_end-remap_start, filter, &full_aln, 0);
+		full_svs = detect_svs_from_aln(full_aln, contig_name, remap_start, junction_seq,
+			junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
+	}
+
+    if (max_score == 0) return full_svs; // no good split alignment found
 
     std::string left_part = junction_seq.substr(0, best_i);
     std::string middle_part = junction_seq.substr(best_i, best_j-best_i);
@@ -856,18 +869,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 
 	// if either the left or right part is fully lowq, find variants by realigning the full junction
 	if (left_part.length() <= lowq_junction_prefix || right_part.length() <= lowq_junction_suffix) {
-		if (overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) == 0) {
-			return std::vector<std::shared_ptr<sv_t>>();
-		}
-		hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
-		hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
-		hts_pos_t remap_len = remap_end - remap_start;
-		StripedSmithWaterman::Filter filter;
-		StripedSmithWaterman::Alignment aln;
-		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
-		std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start, junction_seq,
-			junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
-		return remapped_svs;
+		return full_svs;
 	}
 
     std::vector<StripedSmithWaterman::Alignment> left_part_alns = get_best_alns(ref_lh_cstr, 0, ref_remap_lh_len, (char*) left_part.c_str(), aligner);
@@ -888,18 +890,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	// if either the left or right part is fully lowq, find variants by realigning the full junction
 	if ((left_part_aln.query_end-left_part_aln.query_begin)/(double) left_part.length() < 0.5 
 	|| (right_part_aln.query_end-right_part_aln.query_begin)/(double) right_part.length() < 0.5) {
-		if (overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) == 0) {
-			return std::vector<std::shared_ptr<sv_t>>();
-		}
-		hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
-		hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
-		hts_pos_t remap_len = remap_end - remap_start;
-		StripedSmithWaterman::Filter filter;
-		StripedSmithWaterman::Alignment aln;
-		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
-		std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start, junction_seq,
-			junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
-		return remapped_svs;
+		return full_svs;
 	}
 
     hts_pos_t left_anchor_start = ref_remap_lh_start + left_part_aln.ref_begin;
@@ -967,18 +958,8 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		hts_pos_t alt_span_len = static_cast<hts_pos_t>(middle_part.length());
 		if (ref_span_len > alt_span_len) { // length of ALT < REF, deletion
 			// // For small deletions with non empty middle part, we may be able to obtain a simpler representation by realigning the whole junction sequence
-			if (right_bp - left_bp <= 50 && !middle_part.empty() && overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) > 0) {
-				hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
-				hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
-				hts_pos_t remap_len = remap_end - remap_start;
-				StripedSmithWaterman::Filter filter;
-				StripedSmithWaterman::Alignment aln;
-				aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
-				if (!is_clipped(aln, config.min_clip_len)) {
-					std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start,
-						junction_seq, junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
-					return remapped_svs;
-				}
+			if (right_bp - left_bp <= 50 && !middle_part.empty() && full_remap_eligible) {
+				if (!is_clipped(full_aln, config.min_clip_len)) return full_svs;
 			}
 
 			std::shared_ptr<sv_t> sv = std::make_shared<deletion_t>(contig_name, left_bp, right_bp, middle_part, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
@@ -988,18 +969,8 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 			// This is because split alignments that support duplications have an unfair advantage compared to regular insertions,
 			// since the inserted sequence is also aligned to the sequence. This can lead to suboptimal duplications being called instead of correct insertions
 			// Furthermore, for complex small insertions (i.e., left bp < right bp), we can sometimes obtain a simpler representation this way
-			if ((prefix_mh_len > 0 || left_bp < right_bp) && overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) > 0 && middle_part.length() <= 50) {
-				hts_pos_t remap_start = std::min(ref_remap_lh_start, ref_remap_rh_start);
-				hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
-				hts_pos_t remap_len = remap_end - remap_start;
-				StripedSmithWaterman::Filter filter;
-				StripedSmithWaterman::Alignment aln;
-				aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_len, filter, &aln, 0);
-				if (!is_clipped(aln, config.min_clip_len)) {
-					std::vector<std::shared_ptr<sv_t>> remapped_svs = detect_svs_from_aln(aln, contig_name, remap_start,
-						junction_seq, junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
-					return remapped_svs;
-				}
+			if ((prefix_mh_len > 0 || left_bp < right_bp) && full_remap_eligible && middle_part.length() <= 50) {
+				if (!is_clipped(full_aln, config.min_clip_len)) return full_svs;
 			}
 
 			std::shared_ptr<sv_t> sv = std::make_shared<insertion_t>(contig_name, left_bp, right_bp, middle_part, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
@@ -1074,6 +1045,8 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 			std::max(left_highq_ref_range.second, right_highq_ref_range.second), stats, config);
 	}
 
+	// Keep both interpretations after their AUX contexts and remap ranges are complete.
+	svs.insert(svs.end(), full_svs.begin(), full_svs.end());
     return svs;
 }
 
