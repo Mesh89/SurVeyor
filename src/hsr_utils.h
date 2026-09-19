@@ -205,7 +205,7 @@ void filter_poly_g_tail_consensuses(std::vector<consensus_t*>& consensuses, char
 	}), consensuses.end());
 }
 
-// Remove consensues that are completely contained within another consensues and their sequence is a substring of the other consensus
+// Remove geometrically contained consensuses when an ungapped placement has no confident mismatches.
 void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 	std::vector<consensus_t*> sorted = consensuses;
 	std::sort(sorted.begin(), sorted.end(), [](const consensus_t* c1, const consensus_t* c2) {
@@ -221,8 +221,25 @@ void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 			if (sorted[j]->end <= sorted[i]->end) {
 				// j is contained within i
 				std::string highq_seq = sorted[j]->highq_sequence();
-				if (sorted[i]->sequence.find(highq_seq) != std::string::npos) {
+				std::string highq_qual = sorted[j]->qual.substr(sorted[j]->lowq_prefix, highq_seq.length());
+				for (size_t pos = 0; pos + highq_seq.length() <= sorted[i]->sequence.length(); pos++) {
+					bool compatible = true;
+					for (size_t k = 0; k < highq_seq.length(); k++) {
+						if (sorted[i]->sequence[pos+k] != highq_seq[k] && sorted[i]->qual[pos+k] >= 40+33 && highq_qual[k] >= 40+33) {
+							compatible = false;
+							break;
+						}
+					}
+					if (!compatible) continue;
+					// Apply higher-quality bases only after the entire placement passes.
+					for (size_t k = 0; k < highq_seq.length(); k++) {
+						if (highq_qual[k] > sorted[i]->qual[pos+k]) {
+							sorted[i]->sequence[pos+k] = highq_seq[k];
+							sorted[i]->qual[pos+k] = highq_qual[k];
+						}
+					}
 					to_delete[j] = true;
+					break;
 				}
 			}
 		}
