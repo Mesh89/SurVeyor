@@ -354,8 +354,9 @@ std::vector<bool> find_accepted_reads(std::string& consensus_seq, std::deque<bam
     return accepted;
 }
 
-std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer_selection,
-                                     std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, std::string& consensus_qual, std::unordered_map<bam1_t*, std::vector<uint8_t>>& recalibrated_quals, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds = nullptr) {
+std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer_selection, std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, 
+    std::string& consensus_qual, std::unordered_map<bam1_t*, std::vector<uint8_t>>& recalibrated_quals, 
+    const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds = nullptr) {
 
     std::vector<std::string> seqs;
     std::vector<uint8_t*> quals;

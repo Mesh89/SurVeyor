@@ -11,6 +11,7 @@
 #include "sam_utils.h"
 #include "types.h"
 #include "utils.h"
+#include "haplotype_quality.h"
 
 int get_left_clip_size(StripedSmithWaterman::Alignment& aln) {
 	if (aln.cigar.empty()) return 0;
@@ -651,7 +652,7 @@ std::pair<hts_pos_t, hts_pos_t> get_highq_ref_range(std::vector<uint32_t>& cigar
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& cigar, hts_pos_t ref_begin, hts_pos_t ref_end, int aln_score,
 	std::string contig_name, std::string junction_seq, std::string junction_qual, std::shared_ptr<sv_t> main_sv, 
 	int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config,
-	bool record_junction_remap_ref_range = false) {
+	bool record_junction_remap_ref_range = false, junction_query_origins_t* query_origins = nullptr, hts_pos_t query_offset = 0) {
 	// do not find aux SNPs in low-quality regions of the junction sequence
 
 	std::shared_ptr<sv_t> input_main_sv = main_sv;
@@ -674,18 +675,22 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 			svs.push_back(sv);
 		} else if (op == 'I') {
 			std::shared_ptr<sv_t> sv = std::make_shared<insertion_t>(contig_name, current_pos-1, current_pos-1, ins_seq, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
+			if (query_origins != nullptr) query_origins->add_insertion(sv.get(), query_offset+junction_pos);
 			svs.push_back(sv);
 		} else if (op == 'X') {
 			for (int j = 0; j < op_length; j++) {	
 				char alt_base = junction_seq[junction_pos+j];
 				if (!is_genomic_base(alt_base)) continue;
-				if (junction_pos+j >= lowq_junction_prefix && 
-					junction_pos+j < (junction_seq.length() - lowq_junction_suffix) &&
-					junction_pos+j < junction_qual.length() && (uint8_t) junction_qual[junction_pos+j] - 33 >= 40) {
+				if (passes_aux_snp_quality(junction_pos+j, junction_seq.length(), junction_qual, lowq_junction_prefix, lowq_junction_suffix)) {
 					snps.push_back(snp_t(current_pos+j, alt_base));
+					if (query_origins != nullptr) query_origins->add_snp(current_pos+j, alt_base, query_offset+junction_pos+j);
 				}
 			}
 		}
+
+        if (query_origins != nullptr && (op == '=' || op == 'X' || op == 'M')) {
+            for (int j = 0; j < op_length; j++) query_origins->add_reference(current_pos+j, query_offset+junction_pos+j);
+        }
 
         if (op != 'I' && op != 'S') {
             current_pos += op_length;
@@ -767,9 +772,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(StripedSmithWaterman::Alignment& aln, std::string contig_name, hts_pos_t ref_start,
 	std::string junction_seq, std::string junction_qual, std::shared_ptr<sv_t> main_sv, int lowq_junction_prefix, int lowq_junction_suffix, stats_t& stats, config_t& config,
-	bool record_junction_remap_ref_range = false) {
+	bool record_junction_remap_ref_range = false, junction_query_origins_t* query_origins = nullptr, hts_pos_t query_offset = 0) {
 	return detect_svs_from_aln(aln.cigar, ref_start + aln.ref_begin, ref_start + aln.ref_end, aln.sw_score, contig_name,
-		junction_seq, junction_qual, main_sv, lowq_junction_prefix, lowq_junction_suffix, stats, config, record_junction_remap_ref_range);
+		junction_seq, junction_qual, main_sv, lowq_junction_prefix, lowq_junction_suffix, stats, config, record_junction_remap_ref_range, query_origins, query_offset);
 }
 
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string contig_name,
@@ -790,10 +795,12 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_name, char* contig_seq, std::string junction_seq, std::string junction_qual,
 		hts_pos_t ref_remap_lh_start, hts_pos_t ref_remap_lh_end, hts_pos_t ref_remap_rh_start, hts_pos_t ref_remap_rh_end, 
 		StripedSmithWaterman::Aligner& aligner, int lowq_junction_prefix, int lowq_junction_suffix,
-	stats_t& stats, config_t& config) {
+	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000) {
 		// do not find aux SNPs in low-quality regions of the junction sequence
 
 	const int MAX_REF_REMAP_LEN = 100000;
+	if (contig_len < 0) contig_len = std::max(ref_remap_lh_end, ref_remap_rh_end);
+	haplotype_normalization::normalization_context_t normalization_context(contig_seq, contig_len, normalization_extend);
 
     hts_pos_t ref_remap_lh_len = ref_remap_lh_end - ref_remap_lh_start;
     hts_pos_t ref_remap_rh_len = ref_remap_rh_end - ref_remap_rh_start;
@@ -857,8 +864,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		hts_pos_t remap_end = std::max(ref_remap_lh_end, ref_remap_rh_end);
 		StripedSmithWaterman::Filter filter;
 		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_end-remap_start, filter, &full_aln, 0);
+		junction_query_origins_t full_query_origins;
 		full_svs = detect_svs_from_aln(full_aln, contig_name, remap_start, junction_seq,
-			junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true);
+			junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true, &full_query_origins);
+		for (auto& sv : full_svs) sv = filter_decomposed_aux_snps(sv, normalization_context, junction_seq, junction_qual, lowq_junction_prefix, lowq_junction_suffix, full_query_origins);
 	}
 
     if (max_score == 0) return full_svs; // no good split alignment found
@@ -908,6 +917,8 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	auto right_part_anchor_aln = std::make_shared<sv_t::anchor_aln_t>(right_anchor_start, right_anchor_end, right_part.length(), right_part_aln.sw_score);
 
 	int prefix_mh_len = 0;
+	hts_pos_t middle_query_begin = best_i - get_right_clip_size(left_part_aln);
+	junction_query_origins_t split_query_origins;
 	std::vector<std::shared_ptr<sv_t>> svs;
     if (left_bp > right_bp) { // there is microhomology in the inserted seq or it's a duplication
         int mh_len = left_bp - right_bp;
@@ -946,6 +957,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
             mh = left_part.substr(left_part.length() - query_mh_bases);
             left_bp = right_bp - left_bp_adjustment;
             middle_part = mh + middle_part + right_part.substr(0, get_left_clip_size(right_part_aln));
+			middle_query_begin = best_i - query_mh_bases;
 			prefix_mh_len = mh.length();
         }
     } else {
@@ -981,9 +993,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		}
 		svs[0]->mh_len = prefix_mh_len;
 	}
+	split_query_origins.add_insertion(svs[0].get(), middle_query_begin);
 
 	std::vector<std::shared_ptr<sv_t>> extra_svs = detect_svs_from_aln(left_part_aln, contig_name, ref_remap_lh_start,
-		left_part, junction_qual.substr(0, best_i), svs[0], lowq_junction_prefix, 0, stats, config, true);
+		left_part, junction_qual.substr(0, best_i), svs[0], lowq_junction_prefix, 0, stats, config, true, &split_query_origins);
 	for (const auto& sv : extra_svs) {
 		if (sv != svs[0] && sv->end <= svs[0]->start) {
 			svs.push_back(sv);
@@ -1009,7 +1022,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	backup_aux_snps.swap(svs[0]->aux_snps);
 
 	extra_svs = detect_svs_from_aln(right_part_aln, contig_name, ref_remap_rh_start, right_part, junction_qual.substr(best_j), svs[0],
-		0, lowq_junction_suffix, stats, config, true);
+		0, lowq_junction_suffix, stats, config, true, &split_query_origins, best_j);
 	for (const auto& sv : extra_svs) {
 		if (sv != svs[0] && sv->start >= svs[0]->end) {
 			svs.push_back(sv);
@@ -1046,6 +1059,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	}
 
 	// Keep both interpretations after their AUX contexts and remap ranges are complete.
+	for (auto& sv : svs) sv = filter_decomposed_aux_snps(sv, normalization_context, junction_seq, junction_qual, lowq_junction_prefix, lowq_junction_suffix, split_query_origins);
 	svs.insert(svs.end(), full_svs.begin(), full_svs.end());
     return svs;
 }
@@ -1153,7 +1167,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs(std::string& contig_name, char* co
 
 	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, consensus_junction_seq, consensus_junction_qual, ref_remap_lh_start, 
 		ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end, aligner, lowq_junction_prefix, lowq_junction_suffix,
-		stats, config);
+		stats, config, contig_len, stats.max_is);
 	for (const auto& sv : svs) {
 		sv->rc_consensus = rc_consensus;
 		sv->lc_consensus = lc_consensus;
