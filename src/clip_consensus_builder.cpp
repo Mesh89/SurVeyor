@@ -363,7 +363,7 @@ std::vector<bool> find_accepted_reads(std::string& consensus_seq, std::deque<bam
             // The read should either map much better to the consensus than to the reference,
             // or contain an SV-sized net indel with respect to the reference.
             int orig_score = compute_read_score(r, 1, -4, -6, -1);
-            int new_score = (r->core.l_qseq-mm)*1 - mm*4;
+            int new_score = fixed_ungapped_aln(read_seq.c_str(), read_seq.length(), consensus_seq.c_str(), consensus_seq.length(), offset, 1, -4, get_left_clip_size(r), get_right_clip_size(r)).score;
             indel_summary_t indels = get_indel_summary(r);
             bool improved_alignment = new_score - orig_score >= config.min_diff_hsr*5; // each mismatch costs 5 points
             bool has_sv_sized_indel = std::abs(indels.dels-indels.inss) >= config.min_sv_size;
@@ -728,8 +728,8 @@ void build_consensuses(int id, std::string contig_name, std::vector<std::string>
     filter_poly_g_tail_consensuses(rc_consensuses, contigs.get_seq(contig_name), contigs.get_len(contig_name), config);
     filter_poly_g_tail_consensuses(lc_consensuses, contigs.get_seq(contig_name), contigs.get_len(contig_name), config);
 
-    enforce_max_ploidy(rc_consensuses, 4);
-    enforce_max_ploidy(lc_consensuses, 4);
+    enforce_max_ploidy(rc_consensuses, 8);
+    enforce_max_ploidy(lc_consensuses, 8);
 
     if (lc_consensuses.empty() && rc_consensuses.empty()) return;
 

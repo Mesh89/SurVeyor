@@ -467,63 +467,76 @@ struct ungapped_aln_t {
 	double mismatch_rate() { return (query_end - query_begin) > 0 ? double(mismatches)/(query_end - query_begin) : 1; }
 };
 
-// Finds the best ungapped placement of query against ref, allowing query overhang
-// on either side of the reference. Query bases outside ref count as clips, not mismatches.
-// Each side of the query may extend by at most max_ref_overflow bases beyond the reference.
-// query_begin/query_end and ref_begin/ref_end describe the overlapped intervals [begin, end).
-// score is the ungapped alignment score on the overlapped interval only.
+// Score a fixed placement (ref coordinate of query[0]) without gaps or shifting.
+// Total query clipping on each side, including reference overhang, cannot exceed its limit.
+// Invalid or empty placements return an empty interval with score INT32_MIN.
+ungapped_aln_t fixed_ungapped_aln(const char* query, int query_len, const char* ref, int ref_len, hts_pos_t placement,
+                                int match_score = 1, int mismatch_score = -4, int max_left_clip = 0, int max_right_clip = 0) {
+    ungapped_aln_t best_aln(0, 0, 0, 0, 0, INT32_MIN);
+    if (query_len <= 0 || ref_len <= 0 || placement <= -hts_pos_t(query_len) || placement >= ref_len) return best_aln;
+    max_left_clip = std::max(0, max_left_clip);
+    max_right_clip = std::max(0, max_right_clip);
+    int begin = std::max<hts_pos_t>(0, -placement);
+    int end = std::min<hts_pos_t>(query_len, ref_len - placement);
+    if (begin > max_left_clip || query_len-end > max_right_clip) return best_aln;
+
+    if (begin == max_left_clip && query_len-end == max_right_clip) {
+        int mismatches = number_of_mismatches_fast(query + begin, ref + placement + begin, end-begin, INT32_MAX);
+        int score = (end-begin-mismatches)*match_score + mismatches*mismatch_score;
+        return ungapped_aln_t(begin, end, placement+begin, placement+end, mismatches, score);
+    }
+
+    int prefix_score = 0, prefix_mismatches = 0;
+    int min_prefix_score = 0, min_prefix_mismatches = 0, best_begin = begin;
+    for (int pos = begin; pos < end; pos++) {
+        // Eligible starts never expire. On equal prefix scores, keep the earlier (longer) start.
+        if (pos <= max_left_clip && prefix_score < min_prefix_score) {
+            min_prefix_score = prefix_score;
+            min_prefix_mismatches = prefix_mismatches;
+            best_begin = pos;
+        }
+        bool mismatch = query[pos] != ref[placement+pos];
+        prefix_score += mismatch ? mismatch_score : match_score;
+        prefix_mismatches += mismatch;
+        int query_end = pos+1;
+        if (query_len-query_end > max_right_clip) continue;
+        int score = prefix_score-min_prefix_score;
+        if (score > best_aln.score || (score == best_aln.score && query_end-best_begin > best_aln.query_end-best_aln.query_begin)) {
+            best_aln = ungapped_aln_t(best_begin, query_end, placement+best_begin, placement+query_end, prefix_mismatches-min_prefix_mismatches, score);
+        }
+    }
+    return best_aln;
+}
+
+// Find the best placement, allowing up to max_ref_overflow reference overhang per side.
+// With max_query_clip == 0, retain the full overlap and the legacy placement/tie behavior.
+// Otherwise each side's TOTAL clipping, including overhang, is limited by max_query_clip.
 ungapped_aln_t best_ungapped_aln(const char* query, int query_len, const char* ref, int ref_len,
-                                 int max_ref_overflow = 0, int match_score = 1, int mismatch_score = -4) {
-    if (query_len <= 0) {
-        return ungapped_aln_t(0, 0, 0, 0, 0, 0);
-    }
-    if (ref_len <= 0) {
-        return ungapped_aln_t(0, 0, 0, 0, 0, 0);
-    }
-
-	if (max_ref_overflow < 0) max_ref_overflow = 0;
-
-    const int query_len_rounded = (query_len + BYTES_PER_BLOCK_16 - 1)/BYTES_PER_BLOCK_16*BYTES_PER_BLOCK_16;
-    const int query_pad_len = query_len_rounded - query_len;
-    const int ref_pad_len = max_ref_overflow;
-    const char query_pad_char = '\0';
-    const char ref_pad_char = '\1';
-
-    std::vector<char> padded_query(query_len_rounded, query_pad_char);
-    std::memcpy(padded_query.data(), query, query_len);
-
-	int padded_ref_len = std::max(ref_len + 2*ref_pad_len + query_pad_len, query_len_rounded);
-    std::vector<char> padded_ref(padded_ref_len, ref_pad_char);
-    std::memcpy(padded_ref.data() + ref_pad_len, ref, ref_len);
+                                 int max_ref_overflow = 0, int match_score = 1, int mismatch_score = -4, int max_query_clip = 0) {
+    if (query_len <= 0 || ref_len <= 0) return ungapped_aln_t(0, 0, 0, 0, 0, 0);
+    max_ref_overflow = std::max(0, max_ref_overflow);
+    max_query_clip = std::max(0, max_query_clip);
 
     ungapped_aln_t best_aln(0, 0, 0, 0, 0, INT32_MIN);
-    int best_score = INT32_MIN;
-    for (int i = 0; i <= padded_ref.size()-query_len_rounded; i++) {
-
-		int valid_overlap = overlap(ref_pad_len, ref_pad_len + ref_len, i, i + query_len); // the remaining query_len_rounded - mismatches are guaranteed to be mismatches
-		int guaranteed_mismatches = query_len_rounded - valid_overlap;
-
-		int max_mismatches = query_len_rounded;
-		if (best_score != INT32_MIN) {
-			// max_mismatches = the number of mismatches that would make this alignment's score equal to the current best score, plus the guaranteed mismatches
-			int max_possible_score = valid_overlap * match_score;
-			max_mismatches = (max_possible_score - best_score) / (match_score - mismatch_score) + guaranteed_mismatches; 
-		}
-		int mismatches = number_of_mismatches_fast(padded_query.data(), padded_ref.data() + i, query_len_rounded, max_mismatches);
-		if (mismatches > max_mismatches) continue; // cannot be better than current best
-		
-		int actual_mismatches = mismatches - guaranteed_mismatches;
-
-		int score = (valid_overlap - actual_mismatches) * match_score + actual_mismatches * mismatch_score;
-		if (score > best_score) {
-			best_score = score;
-			int query_begin = i < ref_pad_len ? ref_pad_len - i : 0;
-			int query_end = query_begin + valid_overlap;
-			int ref_begin = std::max(0, i - ref_pad_len);
-			int ref_end = ref_begin + valid_overlap;
-			best_aln = ungapped_aln_t(query_begin, query_end, ref_begin, ref_end, actual_mismatches, score);
-		}
-		if (best_score == query_len * match_score) break; // cannot do better than a perfect match
+    // These are the same placements as the former padded-reference search, including its
+    // single placement when the query is longer than the reference plus both overhangs.
+    hts_pos_t last_placement = std::max<hts_pos_t>(-max_ref_overflow, hts_pos_t(ref_len)+max_ref_overflow-query_len);
+    for (hts_pos_t placement = -max_ref_overflow; placement <= last_placement; placement++) {
+        int left_overhang = std::max<hts_pos_t>(0, -placement);
+        int right_overhang = std::max<hts_pos_t>(0, placement+query_len-ref_len);
+        if (max_query_clip > 0 && (left_overhang > max_ref_overflow || right_overhang > max_ref_overflow)) continue;
+        int left_clip = max_query_clip > 0 ? max_query_clip : left_overhang;
+        int right_clip = max_query_clip > 0 ? max_query_clip : right_overhang;
+        ungapped_aln_t aln = fixed_ungapped_aln(query, query_len, ref, ref_len, placement, match_score, mismatch_score, left_clip, right_clip);
+        // Preserve zero-overlap candidates from the legacy search only when clipping is disabled.
+        if (max_query_clip == 0 && (placement <= -hts_pos_t(query_len) || placement >= ref_len)) {
+            int ref_begin = std::max<hts_pos_t>(0, placement);
+            aln = ungapped_aln_t(left_overhang, left_overhang, ref_begin, ref_begin, 0, 0);
+        }
+        if (aln.score > best_aln.score || (max_query_clip > 0 && aln.score == best_aln.score && aln.query_end-aln.query_begin > best_aln.query_end-best_aln.query_begin)) {
+            best_aln = aln;
+        }
+        if (best_aln.score == query_len*match_score && (max_query_clip == 0 || (match_score >= 0 && mismatch_score <= match_score && best_aln.query_end-best_aln.query_begin == query_len))) break;
     }
     return best_aln;
 }
