@@ -218,6 +218,7 @@ void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 		for (int j = i+1; j < sorted.size(); j++) {
 			if (to_delete[j]) continue;
 			if (sorted[j]->start > sorted[i]->end) break;
+			if (sorted[i]->cigar_indel_lengths != sorted[j]->cigar_indel_lengths) continue;
 			if (sorted[j]->end <= sorted[i]->end) {
 				// j is contained within i
 				std::string highq_seq = sorted[j]->highq_sequence();
@@ -285,9 +286,11 @@ void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 	target->lowq_prefix = c1->lowq_prefix;
 	target->lowq_suffix = c2->lowq_suffix;
 	target->is_hsr = c1->is_hsr && c2->is_hsr; 
+	target->cigar_indel_lengths = c1->cigar_indel_lengths;
 }
 
 bool merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consensus_t* target, int min_overlap) {
+	if (c1->cigar_indel_lengths != c2->cigar_indel_lengths) return false;
 	hts_pos_t lower = std::max(c1->other_bp_lower_boundary, c2->other_bp_lower_boundary);
 	hts_pos_t upper = std::min(c1->other_bp_upper_boundary, c2->other_bp_upper_boundary);
 	if (lower >= upper) return false;

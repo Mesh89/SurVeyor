@@ -12,6 +12,7 @@
 #include <string>
 #include <sstream>
 #include <memory>
+#include <set>
 #include <unordered_map>
 #include "htslib/vcf.h"
 
@@ -49,6 +50,7 @@ struct consensus_t {
     hts_pos_t start, breakpoint, end;
     hts_pos_t orig_start, orig_end;
     std::string sequence, qual;
+    std::set<int> cigar_indel_lengths; // Accepted construction reads: insertions positive, deletions negative.
     int fwd_reads, rev_reads;
     uint8_t max_mapq;
     hts_pos_t other_bp_lower_boundary = LOWER_BOUNDARY_NON_CALCULATED, other_bp_upper_boundary = UPPER_BOUNDARY_NON_CALCULATED;
@@ -76,6 +78,8 @@ struct consensus_t {
         int max_mapq_int;
         ss >> start >> end >> breakpoint >> dir >> sequence >> qual >> fwd_reads >> rev_reads
            >> max_mapq_int >> other_bp_lower_boundary >> other_bp_upper_boundary >> lowq_prefix >> lowq_suffix >> is_hsr;
+        int indel_length;
+        while (ss >> indel_length) cigar_indel_lengths.insert(indel_length);
         orig_start = start;
         orig_end = end;
         left_clipped = dir == 'L';
@@ -88,6 +92,7 @@ struct consensus_t {
         ss << start << " " << end << " " << breakpoint << (left_clipped ? " L " : " R ") << sequence << " " << qual << " ";
         ss << fwd_reads << " " << rev_reads << " " << (int)max_mapq << " " << other_bp_lower_boundary << " " << other_bp_upper_boundary << " " << lowq_prefix << " " << lowq_suffix << " ";
         ss << is_hsr;
+        for (int indel_length : cigar_indel_lengths) ss << " " << indel_length;
         return ss.str();
     }
 

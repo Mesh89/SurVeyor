@@ -1,8 +1,10 @@
 #include <cstdint>
 #include <iostream>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -222,9 +224,16 @@ int compute_read_score(bam1_t* r, int match_score, int mismatch_score, int gap_o
 }
 
 // Use kmers to select reads that are likely to be part of the same haplotype
-std::vector<int> select_reads_by_kmer(std::vector<std::string>& seqs, std::vector<hts_pos_t>& read_start_offsets) {
+std::vector<int> select_reads_by_kmer(std::vector<std::string>& seqs, const std::vector<uint8_t*>& quals, std::vector<hts_pos_t>& read_start_offsets, size_t selection_rank = 0) {
 
     const int K = sizeof(uint32_t)*8/2; // 16-mers
+    struct kmer_support_t {
+        uint32_t kmer;
+        int count = 0;
+        std::array<int, K> qual_sums{};
+
+        kmer_support_t(uint32_t kmer) : kmer(kmer) {}
+    };
 
     uint64_t nucl_bm[256] = { 0 };
 	nucl_bm['A'] = nucl_bm['a'] = 0;
@@ -239,7 +248,7 @@ std::vector<int> select_reads_by_kmer(std::vector<std::string>& seqs, std::vecto
             consensus_len = read_start_offsets[i] + seqs[i].length();
         }
     }
-    std::vector<std::vector<std::pair<uint32_t, int>>> kmer_counts_by_pos(consensus_len);
+    std::vector<std::vector<kmer_support_t>> kmer_counts_by_pos(consensus_len);
 
     for (int i = 0; i < seqs.size(); i++) {
         std::string& seq = seqs[i];
@@ -250,43 +259,56 @@ std::vector<int> select_reads_by_kmer(std::vector<std::string>& seqs, std::vecto
             kmer = ((kmer << 2) | nucl_bm[seq[j]]);
 
             if (j >= K-1) {
-                std::vector<std::pair<uint32_t, int>>& kmer_counts = kmer_counts_by_pos[read_start_offsets[i]+j];
-                bool found = false;
-                for (int i = 0; i < kmer_counts.size(); i++) {
-                    if (kmer_counts[i].first == kmer) {
-                        kmer_counts[i].second++;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    kmer_counts.push_back({kmer, 1});
+                std::vector<kmer_support_t>& kmer_counts = kmer_counts_by_pos[read_start_offsets[i]+j];
+                size_t group = 0;
+                while (group < kmer_counts.size() && kmer_counts[group].kmer != kmer) group++;
+                if (group == kmer_counts.size()) kmer_counts.push_back(kmer_support_t(kmer));
+                kmer_counts[group].count++;
+                // Sum each base within its own group; do not subtract opposing support.
+                for (int base = 0; base < K; base++) {
+                    int qual = quals[i][j-K+1+base];
+                    kmer_counts[group].qual_sums[base] += qual == 255 ? 0 : qual;
                 }
             }
         }
     }
 
-    // select pos that maximizes the product of the frequencies of the 1st and 2nd most frequent kmers
-    // select most frequent kmer at that pos as mandatory kmer
+    // Prefer two supported groups, then confident bases in both groups, then the existing frequency ranking.
+    // select the requested kmer rank at that pos as mandatory kmer
     int chosen_pos = 0;
     uint32_t chosen_kmer = 0;
     uint32_t chosen_freq1 = 0, chosen_freq2 = 0;
+    bool chosen_supported = false, chosen_confident = false;
     for (int i = 0; i < kmer_counts_by_pos.size(); i++) {
         // find 1st and 2nd most frequent kmers
-        std::sort(kmer_counts_by_pos[i].begin(), kmer_counts_by_pos[i].end(), [](const std::pair<uint32_t, int>& p1, const std::pair<uint32_t, int>& p2) {
-            return p1.second > p2.second;
+        std::sort(kmer_counts_by_pos[i].begin(), kmer_counts_by_pos[i].end(), [](const kmer_support_t& p1, const kmer_support_t& p2) {
+            return p1.count > p2.count;
         });
 
         if (kmer_counts_by_pos[i].empty()) continue;
-        int kmer1_freq = kmer_counts_by_pos[i][0].second;
-        int kmer2_freq = kmer_counts_by_pos[i].size() <= 1 ? 1 : kmer_counts_by_pos[i][1].second;
-        if (kmer1_freq*kmer2_freq > chosen_freq1*chosen_freq2 || 
-            kmer1_freq*kmer2_freq == chosen_freq1*chosen_freq2 && kmer2_freq > chosen_freq2) {
+        const auto& kmers = kmer_counts_by_pos[i];
+        int kmer1_freq = kmers[0].count;
+        int kmer2_freq = kmers.size() <= 1 ? 1 : kmers[1].count;
+        bool supported = kmers.size() > 1 && kmer1_freq >= 3 && kmer2_freq >= 3;
+        bool confident = kmers.size() > 1 &&
+            std::all_of(kmers[0].qual_sums.begin(), kmers[0].qual_sums.end(), [](int qual) { return qual >= 40; }) &&
+            std::all_of(kmers[1].qual_sums.begin(), kmers[1].qual_sums.end(), [](int qual) { return qual >= 40; });
+        if (std::make_tuple(supported, confident, kmer1_freq*kmer2_freq, kmer2_freq) >
+            std::make_tuple(chosen_supported, chosen_confident, chosen_freq1*chosen_freq2, chosen_freq2)) {
             chosen_pos = i;
             chosen_freq1 = kmer1_freq;
             chosen_freq2 = kmer2_freq;
-            chosen_kmer = kmer_counts_by_pos[i][0].first;
+            chosen_kmer = kmers[0].kmer;
+            chosen_supported = supported;
+            chosen_confident = confident;
         }
+    }
+
+    if (selection_rank > 0) {
+        if (chosen_freq1 < 3) return {};
+        const auto& kmers = kmer_counts_by_pos[chosen_pos];
+        if (selection_rank >= kmers.size() || kmers[selection_rank].count < 3) return {};
+        chosen_kmer = kmers[selection_rank].kmer;
     }
 
     std::vector<int> selected_idxs;
@@ -356,7 +378,7 @@ std::vector<bool> find_accepted_reads(std::string& consensus_seq, std::deque<bam
 
 std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer_selection, std::vector<bool>& accepted, int& lowq_prefix, int& lowq_suffix, 
     std::string& consensus_qual, std::unordered_map<bam1_t*, std::vector<uint8_t>>& recalibrated_quals, 
-    const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds = nullptr) {
+    const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds = nullptr, size_t selection_rank = 0) {
 
     std::vector<std::string> seqs;
     std::vector<uint8_t*> quals;
@@ -370,7 +392,13 @@ std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer
     std::deque<bam1_t*> selected_clipped;
     std::vector<int> selected_idxs;
     if (use_kmer_selection) { // let's try partitioning the sequences according to kmer
-        selected_idxs = select_reads_by_kmer(seqs, read_start_offsets);
+        selected_idxs = select_reads_by_kmer(seqs, quals, read_start_offsets, selection_rank);
+        if (selection_rank > 0 && selected_idxs.size() < 3) {
+            accepted.assign(clipped.size(), false);
+            consensus_qual.clear();
+            lowq_prefix = lowq_suffix = 0;
+            return "";
+        }
         if (selected_idxs.size() >= 3) {
             std::vector<std::string> selected_seqs;
             std::vector<uint8_t*> selected_quals;
@@ -409,6 +437,10 @@ std::string build_full_consensus_seq(std::deque<bam1_t*>& clipped, bool use_kmer
         }
     }
 
+    if (use_kmer_selection && selection_rank == 0 && n_accepted < 3) {
+        // Retry only the runner-up at the same chosen position before the caller falls back to all reads.
+        return build_full_consensus_seq(clipped, true, accepted, lowq_prefix, lowq_suffix, consensus_qual, recalibrated_quals, hp_mismatch_rate_thresholds, 1);
+    }
     return consensus_seq;
 }
 
@@ -431,6 +463,19 @@ void dedup_cluster(std::deque<bam1_t*>& cluster) {
         }
     }
     cluster.swap(unique_cluster);
+}
+
+std::set<int> construction_read_indel_lengths(const std::deque<bam1_t*>& accepted_reads) {
+    std::set<int> indel_lengths;
+    for (const bam1_t* r : accepted_reads) {
+        const uint32_t* cigar = bam_get_cigar(r);
+        for (uint32_t i = 0; i < r->core.n_cigar; i++) {
+            int op = bam_cigar_op(cigar[i]), len = bam_cigar_oplen(cigar[i]);
+            if (op == BAM_CINS) indel_lengths.insert(len);
+            else if (op == BAM_CDEL) indel_lengths.insert(-len);
+        }
+    }
+    return indel_lengths;
 }
 
 std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deque<bam1_t*> clipped, std::deque<bool>& used, hp_tail_quality_table_t& quality_cache, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
@@ -577,6 +622,7 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
             consensus->other_bp_lower_boundary = other_bp_lower_boundary;
             consensus->other_bp_upper_boundary = other_bp_upper_boundary;
             consensus->is_hsr = is_hsr;
+            consensus->cigar_indel_lengths = construction_read_indel_lengths(accepted_reads);
             consensuses.push_back(consensus);
         }
         clipped.swap(rejected_reads);
