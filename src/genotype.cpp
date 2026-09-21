@@ -507,6 +507,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "IMAUX", &(sv->sample_info.alt_consensus1_metrics.inferred_missing_aux), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS", &(sv->sample_info.alt_consensus1_metrics.ref_score), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS", &(sv->sample_info.alt_consensus1_metrics.aux_ref_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EAG", &(sv->sample_info.alt_consensus1_metrics.expected_alt_gain), 1);
         int ass[] = {sv->sample_info.alt_consensus1_metrics.split_sizes[0], sv->sample_info.alt_consensus1_metrics.split_sizes[1]};
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS", ass, 2);
         int assc[] = {sv->sample_info.alt_consensus1_metrics.split_scores[0], sv->sample_info.alt_consensus1_metrics.split_scores[1]};
@@ -519,6 +520,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "IMAUX", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EAG", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSC", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSCIA", NULL, 0);
@@ -529,6 +531,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "IMAUX2", &(sv->sample_info.alt_consensus2_metrics.inferred_missing_aux), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS2", &(sv->sample_info.alt_consensus2_metrics.ref_score), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS2", &(sv->sample_info.alt_consensus2_metrics.aux_ref_score), 1);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EAG2", &(sv->sample_info.alt_consensus2_metrics.expected_alt_gain), 1);
         int ass2[] = {sv->sample_info.alt_consensus2_metrics.split_sizes[0], sv->sample_info.alt_consensus2_metrics.split_sizes[1]};
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS2", ass2, 2);
         int assc2[] = {sv->sample_info.alt_consensus2_metrics.split_scores[0], sv->sample_info.alt_consensus2_metrics.split_scores[1]};
@@ -541,6 +544,7 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "IMAUX2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ARS2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AUXRS2", NULL, 0);
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "EAG2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASS2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSC2", NULL, 0);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "ASSC2IA", NULL, 0);

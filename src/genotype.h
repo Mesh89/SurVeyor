@@ -211,6 +211,30 @@ inline std::pair<int, int> shared_flanking_clipping(const StripedSmithWaterman::
     return {clips[0], clips[1]};
 }
 
+inline int expected_alt_gain(const StripedSmithWaterman::Alignment& alt_alignment, const alignment_targets_t& targets, StripedSmithWaterman::Aligner& aligner) {
+    if (targets.alt_seq == NULL || alt_alignment.sw_score <= 0 || alt_alignment.ref_begin < 0 || alt_alignment.ref_end < alt_alignment.ref_begin || alt_alignment.ref_end >= targets.alt_len) return bcf_int32_missing;
+    bool has_main_edit = false;
+    for (const allele_edit_t& edit : targets.edits) {
+        if (!edit.main_edit) continue;
+        has_main_edit = true;
+        if (edit.alt_begin < 0 || edit.alt_end < edit.alt_begin || !alignment_crosses_breakpoint(alt_alignment, edit.alt_begin) || !alignment_crosses_breakpoint(alt_alignment, edit.alt_end)) return bcf_int32_missing;
+    }
+    if (!has_main_edit) return bcf_int32_missing;
+
+    // Use the covered ALT template, including target bases opposite gaps in the consensus alignment.
+    std::string alt_template(targets.alt_seq+alt_alignment.ref_begin, alt_alignment.ref_end-alt_alignment.ref_begin+1);
+    StripedSmithWaterman::Filter with_pos_and_cigar(true, true, 0, 32767);
+    int best_aux_score = bcf_int32_missing;
+    for (int i = 0; i < targets.aux_ref_seqs.size() && i < targets.aux_ref_lens.size(); i++) {
+        if (targets.aux_ref_seqs[i] == NULL || targets.aux_ref_lens[i] <= 0) continue;
+        StripedSmithWaterman::Alignment alignment;
+        alignment.Clear();
+        if (!aligner.Align(alt_template.c_str(), targets.aux_ref_seqs[i], targets.aux_ref_lens[i], with_pos_and_cigar, &alignment, 0)) return bcf_int32_missing;
+        best_aux_score = std::max(best_aux_score, consensus_alignment_score(alignment));
+    }
+    return best_aux_score == bcf_int32_missing ? bcf_int32_missing : int(alt_template.length())-best_aux_score;
+}
+
 inline consensus_alignment_metrics_t score_consensus_alignment(const std::string& consensus_seq, const alignment_targets_t& targets, StripedSmithWaterman::Aligner& aligner) {
     consensus_alignment_metrics_t metrics;
     metrics.length = consensus_seq.length();
@@ -325,6 +349,7 @@ inline consensus_alignment_metrics_t score_consensus_alignment(const std::string
         metrics.independent_ref_scores[1] = alignment.sw_score;
     }
 
+    metrics.expected_alt_gain = expected_alt_gain(alt_alignment, targets, aligner);
     return metrics;
 }
 

@@ -578,6 +578,14 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* auxrs2_tag = "##FORMAT=<ID=AUXRS2,Number=1,Type=Integer,Description=\"Score of the alignment between the alternative allele consensus for the second breakpoint and the reference with auxiliary variants applied, excluding the main indel being genotyped.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, auxrs2_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "EAG");
+	const char* eag_tag = "##FORMAT=<ID=EAG,Number=1,Type=Integer,Description=\"Expected ALT Gain for the first breakpoint: length of the exact ALT-template interval covered by the consensus ALT alignment minus its best AUX-only REF alignment score, using the same aligner settings and consensus-score definition as AAS/AUXRS. Requires the ALT alignment to span both boundaries of the complete main edit. Missing when unavailable; measured zero is retained.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, eag_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "EAG2");
+	const char* eag2_tag = "##FORMAT=<ID=EAG2,Number=1,Type=Integer,Description=\"Expected ALT Gain for the second breakpoint, calculated as for EAG using the consensus corresponding to AAS2/AUXRS2. Missing when unavailable; measured zero is retained.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, eag2_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "CED");
 	const char* ced_tag = "##FORMAT=<ID=CED,Number=2,Type=Integer,Description=\"Covered edit distance for the alternative allele consensus alignments at breakpoints 1 and 2. An edit is counted only when both ALT and REF alignments completely traverse it.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ced_tag, &len));
