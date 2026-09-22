@@ -2,7 +2,10 @@
 #include <iostream>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <deque>
+#include <memory>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -671,50 +674,66 @@ void drop_invalid_other_bp_intervals(std::vector<consensus_t*>& consensuses) {
     consensuses.erase(std::remove(consensuses.begin(), consensuses.end(), nullptr), consensuses.end());
 }
 
-void build_consensuses(int id, std::string contig_name, std::vector<std::string> bam_fnames, std::string clip_fname, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
+struct clip_read_t {
+    bam1_t* read;
+    // Adjacent windows share read-only BAM records and only ever set this flag.
+    std::atomic<bool> used_for_consensus{false};
+
+    explicit clip_read_t(bam1_t* read) : read(read) {}
+    ~clip_read_t() { bam_destroy1(read); }
+};
+
+struct consensus_window_t {
+    int contig_id;
+    std::string contig_name;
+    hts_pos_t end;
+    std::vector<std::shared_ptr<clip_read_t>> reads;
+    size_t initial_cluster_size = 0, retired_reads = 0;
+    bool last_window = false;
+    std::vector<std::unique_ptr<consensus_t>> consensuses;
+
+    consensus_window_t(int contig_id, std::string contig_name, hts_pos_t end) : contig_id(contig_id), contig_name(contig_name), end(end) {}
+};
+
+std::shared_ptr<consensus_window_t> build_consensuses(int id, std::shared_ptr<consensus_window_t> window, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
     hp_tail_quality_table_t quality_cache;
-    
-    std::ofstream clip_fout(clip_fname);
     std::deque<bam1_t*> cluster;
     std::deque<bool> used_for_consensus;
 
-    sync_hts_reader_t sync_reader(bam_fnames, contig_name, stats.read_len);
-    std::vector<consensus_t*> lc_consensuses, rc_consensuses;
-
-    bam1_t* read = nullptr;
-    while (sync_reader.next_read(read)) {
-
-        if (is_left_clipped(read, config.min_clip_len) && is_right_clipped(read, config.min_clip_len)) {
-            bam_destroy1(read);
-            continue;
-        }
-        if (!is_clipped(read, config.min_clip_len) && !is_hidden_split_read(read, config)) {
-            bam_destroy1(read);
-            continue;
-        }
-
-        if (cluster.size() >= 3 && !reads_belong_to_same_cluster(cluster.front(), read)) { // candidate cluster complete
-            std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, quality_cache, hp_mismatch_rate_thresholds);
-            route_consensuses(consensuses, lc_consensuses, rc_consensuses);
-        }
-        while (!cluster.empty() && !reads_belong_to_same_cluster(cluster.front(), read)) {
-            if (!used_for_consensus.front()) process_unused_read(cluster.front(), contig_name);
-            bam_destroy1(cluster.front());
-            cluster.pop_front();
-            used_for_consensus.pop_front();
+    for (size_t i = 0; i < window->reads.size(); i++) {
+        bam1_t* read = window->reads[i]->read;
+        // The initial cluster is the exact active window left by the preceding task.
+        if (i >= window->initial_cluster_size) {
+            if (cluster.size() >= 3 && !reads_belong_to_same_cluster(cluster.front(), read)) { // candidate cluster complete
+                std::vector<consensus_t*> consensuses = build_full_consensus(window->contig_name, cluster, used_for_consensus, quality_cache, hp_mismatch_rate_thresholds);
+                for (consensus_t* consensus : consensuses) window->consensuses.emplace_back(consensus);
+            }
+            while (!cluster.empty() && !reads_belong_to_same_cluster(cluster.front(), read)) {
+                if (used_for_consensus.front()) window->reads[window->retired_reads]->used_for_consensus = true;
+                window->retired_reads++;
+                cluster.pop_front();
+                used_for_consensus.pop_front();
+            }
         }
         cluster.push_back(read);
         used_for_consensus.push_back(false);
     }
 
-    if (cluster.size() >= 3) {
-        std::vector<consensus_t*> consensuses = build_full_consensus(contig_name, cluster, used_for_consensus, quality_cache, hp_mismatch_rate_thresholds);
-        route_consensuses(consensuses, lc_consensuses, rc_consensuses);
+    // Other tasks stop after evicting their last owned cluster; the surviving cluster
+    // belongs to the next window and must not be flushed at this artificial boundary.
+    if (window->last_window && cluster.size() >= 3) {
+        std::vector<consensus_t*> consensuses = build_full_consensus(window->contig_name, cluster, used_for_consensus, quality_cache, hp_mismatch_rate_thresholds);
+        for (consensus_t* consensus : consensuses) window->consensuses.emplace_back(consensus);
     }
-    for (int i = 0; i < used_for_consensus.size(); i++) {
-        if (!used_for_consensus[i]) process_unused_read(cluster[i], contig_name);
+    for (size_t i = 0; i < used_for_consensus.size(); i++) {
+        if (used_for_consensus[i]) window->reads[window->retired_reads+i]->used_for_consensus = true;
     }
-    for (bam1_t* r : cluster) bam_destroy1(r);
+    if (window->last_window) window->retired_reads = window->reads.size();
+    return window;
+}
+
+void write_consensuses(std::string contig_name, std::string clip_fname, std::vector<consensus_t*>& lc_consensuses, std::vector<consensus_t*>& rc_consensuses) {
+    std::ofstream clip_fout(clip_fname);
 
     filter_fully_contained(rc_consensuses);
     filter_fully_contained(lc_consensuses);
@@ -769,22 +788,63 @@ int main(int argc, char* argv[]) {
 
     hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
 
-    std::vector<std::future<void> > futures;
-    ctpl::thread_pool thread_pool(config.threads);
+    const hts_pos_t window_size = 1000000;
+    ctpl::thread_pool thread_pool(std::max(1, config.threads));
+    std::deque<std::future<std::shared_ptr<consensus_window_t>>> pending;
+    std::vector<consensus_t*> lc_consensuses, rc_consensuses;
+    auto collect_next = [&]() {
+        std::shared_ptr<consensus_window_t> window = pending.front().get();
+        pending.pop_front();
+        for (auto& consensus : window->consensuses) {
+            if (consensus->left_clipped) lc_consensuses.push_back(consensus.release());
+            else rc_consensuses.push_back(consensus.release());
+        }
+        // All earlier clusters have finished. Retired reads cannot occur in later
+        // windows, so their shared usage flags now include every possible consensus.
+        for (size_t i = 0; i < window->retired_reads; i++) {
+            if (!window->reads[i]->used_for_consensus) process_unused_read(window->reads[i]->read, window->contig_name);
+        }
+        if (window->last_window) {
+            write_consensuses(window->contig_name, workspace + "/consensuses/" + std::to_string(window->contig_id) + ".txt", lc_consensuses, rc_consensuses);
+            lc_consensuses.clear();
+            rc_consensuses.clear();
+        }
+    };
+    auto submit_window = [&](std::shared_ptr<consensus_window_t> window) {
+        if (pending.size() >= 2*size_t(std::max(1, config.threads))) collect_next();
+        pending.push_back(thread_pool.push(build_consensuses, window, &hp_mismatch_rate_thresholds));
+    };
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
         std::string contig_name = contig_map.get_name(contig_id);
-        std::future<void> future;
-
         std::string sr_bam_fname = workspace + "/sr/" + std::to_string(contig_id) + ".bam";
         std::string hsr_bam_fname = workspace + "/hsr/" + std::to_string(contig_id) + ".bam";
-        future = thread_pool.push(build_consensuses, contig_name, std::vector<std::string>{sr_bam_fname, hsr_bam_fname}, 
-            workspace + "/consensuses/" + std::to_string(contig_id) + ".txt", &hp_mismatch_rate_thresholds);
-        futures.push_back(std::move(future));
+        sync_hts_reader_t sync_reader({sr_bam_fname, hsr_bam_fname}, contig_name, stats.read_len);
+        std::shared_ptr<consensus_window_t> window = std::make_shared<consensus_window_t>(contig_id, contig_name, window_size);
+        std::deque<std::shared_ptr<clip_read_t>> active_reads;
+        bam1_t* read = nullptr;
+        while (sync_reader.next_read(read)) {
+            std::shared_ptr<clip_read_t> owned_read = std::make_shared<clip_read_t>(read);
+            if (is_left_clipped(read, config.min_clip_len) && is_right_clipped(read, config.min_clip_len)) continue;
+            if (!is_clipped(read, config.min_clip_len) && !is_hidden_split_read(read, config)) continue;
+
+            window->reads.push_back(owned_read);
+            while (!active_reads.empty() && !reads_belong_to_same_cluster(active_reads.front()->read, read)) active_reads.pop_front();
+            active_reads.push_back(owned_read);
+            hts_pos_t cluster_start = get_unclipped_start(active_reads.front()->read);
+            if (cluster_start >= window->end) {
+                // Include the triggering read so the worker completes its final cluster,
+                // even beyond 1 Mbp. Only the left-most read determines ownership.
+                if (window->reads.size() > active_reads.size()) submit_window(window);
+                window = std::make_shared<consensus_window_t>(contig_id, contig_name, (cluster_start/window_size+1)*window_size);
+                window->reads.assign(active_reads.begin(), active_reads.end());
+                window->initial_cluster_size = active_reads.size();
+            }
+        }
+        window->last_window = true;
+        submit_window(window);
     }
+    while (!pending.empty()) collect_next();
     thread_pool.stop(true);
-    for (size_t i = 0; i < futures.size(); i++) {
-        futures[i].get();
-    }
 
     // Write detected SVs to VCF
     std::unordered_map<std::string, std::vector<std::shared_ptr<sv_t>>> svs_by_chr;
