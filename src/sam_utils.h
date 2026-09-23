@@ -300,6 +300,19 @@ std::string get_sequence(bam1_t* r, bool fastq_seq = false) {
     if (fastq_seq && bam_is_rev(r)) rc(seq);
     return std::string(seq);
 }
+
+bool has_sequencing_3prime_poly_g_clip(bam1_t* read) {
+    if (read->core.n_cigar == 0) return false;
+    int clip_len = bam_is_rev(read) ? get_left_clip_size(read) : get_right_clip_size(read);
+    if (clip_len < 20 || clip_len > read->core.l_qseq) return false;
+    std::string seq = get_sequence(read, true);
+    int gs = 0;
+    for (int i = seq.length()-clip_len; i < seq.length(); i++) {
+        if (seq[i] == 'G') gs++;
+    }
+    return 5*gs >= 4*clip_len;
+}
+
 std::string get_qual_ascii(bam1_t* r, bool fastq_seq = false) {
 	uint8_t* qual = bam_get_qual(r);
 	std::string qual_ascii(r->core.l_qseq, ' ');

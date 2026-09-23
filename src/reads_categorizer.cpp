@@ -222,6 +222,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 			}
 		}
 
+        if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_left_clipped(read, config.min_clip_len) || is_right_clipped(read, config.min_clip_len)) {
 			if (!sr_writer) sr_writer.reset(open_writer(workspace + "/sr/" + std::to_string(contig_id) + ".bam", bam_file.header));
 
