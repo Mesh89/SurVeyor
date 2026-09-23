@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <deque>
 #include <memory>
 #include <string>
@@ -678,9 +679,17 @@ struct clip_read_t {
     bam1_t* read;
     // Adjacent windows share read-only BAM records and only ever set this flag.
     std::atomic<bool> used_for_consensus{false};
+    // The reader holds one use until eviction/EOF, preventing finalization before
+    // all windows containing this read have been submitted. Each window adds one.
+    std::atomic<size_t> remaining_uses{1};
 
     explicit clip_read_t(bam1_t* read) : read(read) {}
     ~clip_read_t() { bam_destroy1(read); }
+
+    void finish_use(const std::string& contig_name) {
+        // The last user sees all consensus-usage flags, regardless of completion order.
+        if (remaining_uses.fetch_sub(1) == 1 && !used_for_consensus) process_unused_read(read, contig_name);
+    }
 };
 
 struct consensus_window_t {
@@ -689,6 +698,7 @@ struct consensus_window_t {
     hts_pos_t end;
     std::vector<std::shared_ptr<clip_read_t>> reads;
     size_t initial_cluster_size = 0, retired_reads = 0;
+    size_t window_id = 0;
     bool last_window = false;
     std::vector<std::unique_ptr<consensus_t>> consensuses;
 
@@ -728,7 +738,9 @@ std::shared_ptr<consensus_window_t> build_consensuses(int id, std::shared_ptr<co
     for (size_t i = 0; i < used_for_consensus.size(); i++) {
         if (used_for_consensus[i]) window->reads[window->retired_reads+i]->used_for_consensus = true;
     }
-    if (window->last_window) window->retired_reads = window->reads.size();
+    for (auto& read : window->reads) read->finish_use(window->contig_name);
+    // Completed windows retain only consensus results, not BAM records or read slots.
+    std::vector<std::shared_ptr<clip_read_t>>().swap(window->reads);
     return window;
 }
 
@@ -788,31 +800,69 @@ int main(int argc, char* argv[]) {
 
     hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
 
-    const hts_pos_t window_size = 1000000;
+    const hts_pos_t window_size = 100000;
+    struct contig_windows_t {
+        std::vector<std::shared_ptr<consensus_window_t>> windows;
+        size_t completed = 0;
+        bool all_submitted = false;
+    };
+    std::vector<contig_windows_t> contig_windows(contig_map.size());
+    std::mutex completed_mutex;
+    std::condition_variable completed_cv;
+    std::deque<std::pair<std::shared_ptr<consensus_window_t>, std::exception_ptr>> completed_windows;
+    size_t pending = 0;
+    // Destroy the pool before its completion queue, including on exceptions.
     ctpl::thread_pool thread_pool(std::max(1, config.threads));
-    std::deque<std::future<std::shared_ptr<consensus_window_t>>> pending;
-    std::vector<consensus_t*> lc_consensuses, rc_consensuses;
     auto collect_next = [&]() {
-        std::shared_ptr<consensus_window_t> window = pending.front().get();
-        pending.pop_front();
-        for (auto& consensus : window->consensuses) {
-            if (consensus->left_clipped) lc_consensuses.push_back(consensus.release());
-            else rc_consensuses.push_back(consensus.release());
+        std::unique_lock<std::mutex> lock(completed_mutex);
+        completed_cv.wait(lock, [&]() { return !completed_windows.empty(); });
+        auto completed = std::move(completed_windows.front());
+        completed_windows.pop_front();
+        lock.unlock();
+        pending--;
+        if (completed.second) std::rethrow_exception(completed.second);
+
+        std::shared_ptr<consensus_window_t> window = completed.first;
+        contig_windows_t& results = contig_windows[window->contig_id];
+        results.windows[window->window_id] = window;
+        results.completed++;
+        if (!results.all_submitted || results.completed != results.windows.size()) return;
+
+        // Every window on this contig has finished. Restore the original order for
+        // consensus postprocessing; unused reads were handled by their last user.
+        std::vector<consensus_t*> lc_consensuses, rc_consensuses;
+        for (auto& result : results.windows) {
+            for (auto& consensus : result->consensuses) {
+                if (consensus->left_clipped) lc_consensuses.push_back(consensus.release());
+                else rc_consensuses.push_back(consensus.release());
+            }
+            result.reset();
         }
-        // All earlier clusters have finished. Retired reads cannot occur in later
-        // windows, so their shared usage flags now include every possible consensus.
-        for (size_t i = 0; i < window->retired_reads; i++) {
-            if (!window->reads[i]->used_for_consensus) process_unused_read(window->reads[i]->read, window->contig_name);
-        }
-        if (window->last_window) {
-            write_consensuses(window->contig_name, workspace + "/consensuses/" + std::to_string(window->contig_id) + ".txt", lc_consensuses, rc_consensuses);
-            lc_consensuses.clear();
-            rc_consensuses.clear();
-        }
+        write_consensuses(window->contig_name, workspace + "/consensuses/" + std::to_string(window->contig_id) + ".txt", lc_consensuses, rc_consensuses);
+        results.windows.clear();
     };
     auto submit_window = [&](std::shared_ptr<consensus_window_t> window) {
-        if (pending.size() >= 2*size_t(std::max(1, config.threads))) collect_next();
-        pending.push_back(thread_pool.push(build_consensuses, window, &hp_mismatch_rate_thresholds));
+        contig_windows_t& results = contig_windows[window->contig_id];
+        window->window_id = results.windows.size();
+        results.windows.push_back(nullptr);
+        if (window->last_window) results.all_submitted = true;
+        // Completed results have separate storage and do not block new work behind
+        // a slow earlier window. Bound only work awaiting completion collection.
+        if (pending >= 2*size_t(std::max(1, config.threads))) collect_next();
+        pending++;
+        thread_pool.push([&, window](int id) {
+            std::exception_ptr error;
+            try {
+                build_consensuses(id, window, &hp_mismatch_rate_thresholds);
+            } catch (...) {
+                error = std::current_exception();
+            }
+            {
+                std::lock_guard<std::mutex> lock(completed_mutex);
+                completed_windows.push_back({window, error});
+            }
+            completed_cv.notify_one();
+        });
     };
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
         std::string contig_name = contig_map.get_name(contig_id);
@@ -828,22 +878,32 @@ int main(int argc, char* argv[]) {
             if (!is_clipped(read, config.min_clip_len) && !is_hidden_split_read(read, config)) continue;
 
             window->reads.push_back(owned_read);
-            while (!active_reads.empty() && !reads_belong_to_same_cluster(active_reads.front()->read, read)) active_reads.pop_front();
+            owned_read->remaining_uses++;
+            while (!active_reads.empty() && !reads_belong_to_same_cluster(active_reads.front()->read, read)) {
+                active_reads.front()->finish_use(contig_name);
+                active_reads.pop_front();
+            }
             active_reads.push_back(owned_read);
             hts_pos_t cluster_start = get_unclipped_start(active_reads.front()->read);
             if (cluster_start >= window->end) {
                 // Include the triggering read so the worker completes its final cluster,
-                // even beyond 1 Mbp. Only the left-most read determines ownership.
-                if (window->reads.size() > active_reads.size()) submit_window(window);
+                // even beyond the window end. Only the left-most read determines ownership.
+                if (window->reads.size() > active_reads.size()) {
+                    submit_window(window);
+                } else {
+                    for (auto& window_read : window->reads) window_read->finish_use(contig_name);
+                }
                 window = std::make_shared<consensus_window_t>(contig_id, contig_name, (cluster_start/window_size+1)*window_size);
                 window->reads.assign(active_reads.begin(), active_reads.end());
+                for (auto& active_read : active_reads) active_read->remaining_uses++;
                 window->initial_cluster_size = active_reads.size();
             }
         }
         window->last_window = true;
         submit_window(window);
+        for (auto& active_read : active_reads) active_read->finish_use(contig_name);
     }
-    while (!pending.empty()) collect_next();
+    while (pending) collect_next();
     thread_pool.stop(true);
 
     // Write detected SVs to VCF
