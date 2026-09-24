@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -35,8 +36,39 @@ inline int base_to_index(char base) {
     return -1;
 }
 
+struct strand_base_scores_t {
+    double quals[2][4] = {};
+    int coverage[2] = {};
+
+    void add(char base, int qual, bool reverse) {
+        int index = base_to_index(base);
+        if (index < 0) return;
+        coverage[reverse]++;
+        quals[reverse][index] += qual;
+    }
+
+    char best_base(char current_base) const {
+        double scores[4] = {};
+        for (int strand = 0; strand < 2; strand++) {
+            if (coverage[strand] == 0) continue;
+            double denominator = std::sqrt(double(coverage[strand]));
+            for (int base = 0; base < 4; base++) scores[base] += quals[strand][base]/denominator;
+        }
+        int current_index = base_to_index(current_base);
+        double best_score = current_index < 0 ? 0 : scores[current_index];
+        char best = current_base;
+        for (int base = 0; base < 4; base++) {
+            if (scores[base] > best_score) {
+                best_score = scores[base];
+                best = "ACGT"[base];
+            }
+        }
+        return best;
+    }
+};
+
 inline positional_consensus_t build_positional_consensus(const std::vector<std::string>& seqs, const std::vector<const uint8_t*>& quals,
-    const std::vector<hts_pos_t>& read_start_offsets, bool subtract_opposing_qualities = false) {
+    const std::vector<hts_pos_t>& read_start_offsets, bool subtract_opposing_qualities = false, const std::vector<bool>& read_is_reverse = {}) {
 
     positional_consensus_t consensus;
     if (seqs.size() != quals.size() || seqs.size() != read_start_offsets.size()) return consensus;
@@ -52,6 +84,7 @@ inline positional_consensus_t build_positional_consensus(const std::vector<std::
 
     for (int i = 0; i < consensus_len; i++) {
         base_score_t base_scores[4] = {base_score_t('A'), base_score_t('C'), base_score_t('G'), base_score_t('T')};
+        strand_base_scores_t strand_scores;
         for (int j = 0; j < seqs.size(); j++) {
             int qpos = i - read_start_offsets[j];
             if (qpos < 0 || qpos >= seqs[j].length()) continue;
@@ -64,9 +97,12 @@ inline positional_consensus_t build_positional_consensus(const std::vector<std::
             // BAM uses 255 for missing qualities; clip consensuses treat these as zero support.
             if (subtract_opposing_qualities && qual == 255) qual = 0;
             base_scores[base_idx].qual += qual;
+            if (!read_is_reverse.empty()) strand_scores.add(seqs[j][qpos], qual, read_is_reverse[j]);
         }
 
         base_score_t best_base_score = std::max(std::max(base_scores[0], base_scores[1]), std::max(base_scores[2], base_scores[3]));
+        // Keep the original positional base when its weighted score ties for best.
+        if (!read_is_reverse.empty()) best_base_score = base_scores[base_to_index(strand_scores.best_base(best_base_score.base))];
         if (best_base_score.freq > 0) {
             consensus.seq[i] = best_base_score.base;
             int qual = best_base_score.qual;

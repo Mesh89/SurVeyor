@@ -853,7 +853,7 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     std::vector<std::string> consensus_seqs2 = assemble_reads(temp3, seqs_w_pp, temp4, config, stats);
     consensus_seqs.insert(consensus_seqs.end(), consensus_seqs2.begin(), consensus_seqs2.end());
 
-    positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets);
+    positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets, false, read_is_reverse);
     consensus_seqs.push_back("");
     consensus_seqs.push_back(positional_consensus.seq);
 
@@ -864,7 +864,7 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
             return passes_consensus_mismatch_filter(seqs[i], read_is_reverse[i], consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config);
         };
         // Use ARC's placement scoring and acceptance policy before accumulating base-quality votes.
-        correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals, accept_read, 0);
+        correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals, accept_read, 0, read_is_reverse);
     }
 
     return consensus_seqs;

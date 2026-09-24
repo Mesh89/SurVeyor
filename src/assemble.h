@@ -11,6 +11,7 @@
 #include <htslib/sam.h>
 
 #include "sw_utils.h"
+#include "consensus.h"
 #include "types.h"
 #include "dc_remapper.h"
 
@@ -30,7 +31,7 @@ struct seq_w_pp_t {
 	}
 };
 
-void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4) {
+void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}) {
 
 	std::vector<ungapped_aln_t> ungapped_alns;
 	for (std::string& read : reads) {
@@ -38,6 +39,7 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 	}
 	std::vector<int> As(contig.length()), Cs(contig.length()), Gs(contig.length()), Ts(contig.length());
 	std::vector<int> A_quals(contig.length()), C_quals(contig.length()), G_quals(contig.length()), T_quals(contig.length());
+	std::vector<strand_base_scores_t> strand_scores(read_is_reverse.empty() ? 0 : contig.length());
 	for (int i = 0; i < reads.size(); i++) {
 		ungapped_aln_t& ungapped_aln = ungapped_alns[i];
 		if (ungapped_aln.query_end <= ungapped_aln.query_begin) continue;
@@ -58,6 +60,7 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 					C_quals.resize(ref_pos+1);
 					G_quals.resize(ref_pos+1);
 					T_quals.resize(ref_pos+1);
+					if (!read_is_reverse.empty()) strand_scores.resize(ref_pos+1);
 					for (int k = old_size; k < As.size(); k++) {
 						As[k] = Cs[k] = Gs[k] = Ts[k] = A_quals[k] = C_quals[k] = G_quals[k] = T_quals[k] = 0;
 					}
@@ -65,6 +68,7 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 
 				char c = reads[i][j];
 				int qual = quals.empty() ? 0 : quals[i][j];
+				if (!read_is_reverse.empty()) strand_scores[ref_pos].add(c, qual, read_is_reverse[i]);
 				if (c == 'A') { As[ref_pos]++; A_quals[ref_pos] += qual; }
 				else if (c == 'C') { Cs[ref_pos]++; C_quals[ref_pos] += qual; }
 				else if (c == 'G') { Gs[ref_pos]++; G_quals[ref_pos] += qual; }
@@ -76,6 +80,10 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 	contig.resize(As.size());
 
 	for (int i = 0; i < contig.length(); i++) {
+		if (!read_is_reverse.empty()) {
+			contig[i] = strand_scores[i].best_base(contig[i]);
+			continue;
+		}
 		if (As[i] + Cs[i] + Gs[i] + Ts[i] == 0) continue;
 
 		auto best_base_score = std::max({
