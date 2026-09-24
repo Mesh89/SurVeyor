@@ -46,7 +46,7 @@ const std::vector<std::string>& default_feature_names() {
         "RIGHT_FLANKING_T_RATIO_500", "MAX_RIGHT_FLANKING_BASE_RATIO_500", "INS_PREFIX_A_RATIO", "INS_PREFIX_C_RATIO", "INS_PREFIX_G_RATIO", "INS_PREFIX_T_RATIO",
         "MAX_INS_PREFIX_BASE_COUNT_RATIO", "INS_SUFFIX_A_RATIO", "INS_SUFFIX_C_RATIO", "INS_SUFFIX_G_RATIO", "INS_SUFFIX_T_RATIO", "MAX_INS_SUFFIX_BASE_COUNT_RATIO",
         "INS_SEQ_COV_PREFIX_LEN", "INS_SEQ_COV_SUFFIX_LEN", "EXP_ALT_READS_FREQ1", "EXP_ALT_READS_FREQ2", "REF1_HP_LEN", "REF2_HP_LEN", "ALT1_HP_LEN", "ALT2_HP_LEN", "ASS1_LEFT_RATIO", "ASS1_RIGHT_RATIO",
-        "ASS2_LEFT_RATIO", "ASS2_RIGHT_RATIO", "AAS_ARS_DIFF_TO_LEN", "AAS_AUXRS_DIFF_TO_LEN", "AAS_IMAUX_TO_LEN", "AL_MINUS_AAS_IMAUX", "ASSC1_IA_RATIO", "ASSC2_IA_RATIO", "ASSC1_IA_DIFF", "ASSC2_IA_DIFF", "AL1", "AL2", "AL", "XASS1_LEFT_RATIO",
+        "ASS2_LEFT_RATIO", "ASS2_RIGHT_RATIO", "AAS_ARS_DIFF_TO_LEN", "AAS_AUXRS_DIFF_TO_LEN", "AAS_AUXRS_DIFF_TO_EAG", "EAG", "EAG2", "AAS_IMAUX_TO_LEN", "AL_MINUS_AAS_IMAUX", "ASSC1_IA_RATIO", "ASSC2_IA_RATIO", "ASSC1_IA_DIFF", "ASSC2_IA_DIFF", "AL1", "AL2", "AL", "XASS1_LEFT_RATIO",
         "XASS1_RIGHT_RATIO", "XASS2_LEFT_RATIO", "XASS2_RIGHT_RATIO", "XAAS_XARS_DIFF_TO_LEN", "XASSC1_IA_RATIO", "XASSC2_IA_RATIO", "XASSC1_IA_DIFF", "XASSC2_IA_DIFF", "XAL1",
         "XAL2", "XAL", "MDLF", "MDSP", "MDSF", "MDRF", "MDSP_OVER_MDLF", "MDSF_OVER_MDRF", "MDLFHQ", "MDSPHQ", "MDSFHQ", "MDRFHQ", "MDSP_OVER_MDLF_HQ", "MDSF_OVER_MDRF_HQ",
         "MDLC", "MDRC", "MDLCHQ", "MDRCHQ", "TD", "AR1", "AR1_ADJ", "AR1C", "AR1C_ADJ", "AR1C_RATIO", "AR1CmQ", "AR1CMQ", "AR1CHQ", "AR1C_HQ_RATIO", "AR2", "AR2_ADJ", "AR2C",
@@ -390,6 +390,22 @@ void add_consensus_alignment_features(features_t& features, bcf_hdr_t* hdr, bcf1
             n_valid++;
         }
         features["AAS_AUXRS_DIFF_TO_LEN"] = n_valid > 0 ? score_diff/std::max(1.0, n_valid*double(std::abs(get_main_svlen(hdr, record)))) : NAN_VALUE;
+        double expected_gains[] = {get_format_number(hdr, record, "EAG", NAN_VALUE), get_format_number(hdr, record, "EAG2", NAN_VALUE)};
+        features["EAG"] = expected_gains[0]; features["EAG2"] = expected_gains[1];
+        double observed_gain = 0, expected_gain = 0;
+        // Pair scores and EAG from the same breakpoint/targets. Missing EAG also encodes incomplete main-edit coverage.
+        // Require every present consensus to be usable; sum gains before dividing, without clamping the ratio.
+        for (int i = 0; i < 2; i++) {
+            double length = i == 0 ? al1 : al2;
+            if (!std::isfinite(alt_scores[i]) && !std::isfinite(aux_ref_scores[i]) && !std::isfinite(expected_gains[i]) && !std::isfinite(length)) continue;
+            if (!std::isfinite(alt_scores[i]) || !std::isfinite(aux_ref_scores[i]) || !std::isfinite(expected_gains[i]) || expected_gains[i] <= 0) {
+                observed_gain = NAN_VALUE;
+                break;
+            }
+            observed_gain += alt_scores[i]-aux_ref_scores[i];
+            expected_gain += expected_gains[i];
+        }
+        features["AAS_AUXRS_DIFF_TO_EAG"] = expected_gain > 0 ? observed_gain/expected_gain : NAN_VALUE;
         double imaux[] = {get_format_number(hdr, record, "IMAUX", NAN_VALUE), get_format_number(hdr, record, "IMAUX2", NAN_VALUE)};
         double lengths[] = {al1, al2};
         double corrected_score = 0, total_length = 0;
