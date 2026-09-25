@@ -125,14 +125,13 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     while (sam_itr_next(bam_file.file, iter, read) >= 0) {
         if (!is_primary(read)) continue;
 
-        int64_t mq = get_mq(read);
         if (is_dc_pair(read)) {
-            if (read->core.qual >= config.min_stable_mapq && read->core.qual >= mq && !is_unmapped(read)) { // stable end
-                if (bam_is_rev(read) && !is_right_clipped(read, config.min_clip_len)) {
+            if (is_stable_end(read, config)) {
+                if (bam_is_rev(read)) {
                     if (!ldc_writer) ldc_writer.reset(open_writer(workspace + "/rev-stable/" + std::to_string(contig_id) + ".noremap.bam", bam_file.header));
                     int ok = sam_write1(ldc_writer.get(), bam_file.header, read);
                     if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(ldc_writer->fn));
-                } else if (!bam_is_rev(read) && !is_left_clipped(read, config.min_clip_len)) {
+                } else {
                     if (!rdc_writer) rdc_writer.reset(open_writer(workspace + "/fwd-stable/" + std::to_string(contig_id) + ".noremap.bam", bam_file.header));
                     int ok = sam_write1(rdc_writer.get(), bam_file.header, read);
                     if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(rdc_writer->fn));
@@ -222,7 +221,8 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 			}
 		}
 
-        if (has_sequencing_3prime_poly_g_clip(read)) continue;
+		if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
+		if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_left_clipped(read, config.min_clip_len) || is_right_clipped(read, config.min_clip_len)) {
 			if (!sr_writer) sr_writer.reset(open_writer(workspace + "/sr/" + std::to_string(contig_id) + ".bam", bam_file.header));
 

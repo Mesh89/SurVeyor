@@ -95,6 +95,11 @@ int64_t get_mq(bam1_t* r) {
     return bam_aux2i(mq);
 }
 
+bool is_stable_end(bam1_t* r, const config_t& config) {
+    if (is_unmapped(r) || r->core.qual < config.min_stable_mapq || r->core.qual < get_mq(r)) return false;
+    return bam_is_rev(r) ? !is_right_clipped(r, config.min_clip_len) : !is_left_clipped(r, config.min_clip_len);
+}
+
 char* get_mc(bam1_t* r) {
     static char empty_mc[] = "";
     if (is_unmapped(r) || is_mate_unmapped(r)) {

@@ -125,6 +125,7 @@ del_read_evidence_t collect_cached_del_read_evidence(deletion_t* del, open_samFi
 
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (get_unclipped_end(read) < del_start || del_end < get_unclipped_start(read)) continue;
         if (del_start < get_unclipped_start(read) && get_unclipped_end(read) < del_end) continue;
         if (!is_samechr(read) || is_samestr(read)) continue;
@@ -192,6 +193,7 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
     StripedSmithWaterman::Alignment alt_aln, ref1_aln, ref2_aln;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (get_unclipped_end(read) < del_start || del_end < get_unclipped_start(read)) continue;
         if (del_start < get_unclipped_start(read) && get_unclipped_end(read) < del_end) continue;
 

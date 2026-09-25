@@ -595,6 +595,7 @@ void write_aligned_hp_indels_group_read_evidence(std::vector<sv_t*>& hp_indels, 
     std::vector<std::shared_ptr<bam1_t>> collected_reads;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (!is_proper_pair(read, stats.min_is, stats.max_is)) continue;
         collected_reads.emplace_back(bam_dup1(read), bam_destroy1);
     }
@@ -644,6 +645,7 @@ void write_aligned_hp_indels_group_read_evidence(std::vector<sv_t*>& hp_indels, 
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (!is_dc_pair(read)) continue;
+        if (!is_stable_end(read, config)) continue;
 
         std::string mate_seq;
         int mate_mapq;
@@ -777,6 +779,7 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
     std::vector<std::shared_ptr<bam1_t>> collected_reads;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (!is_proper_pair(read, stats.min_is, stats.max_is)) continue;
 
         collected_reads.emplace_back(bam_dup1(read), bam_destroy1);
@@ -835,6 +838,7 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (!is_dc_pair(read)) continue;
+        if (!is_stable_end(read, config)) continue;
 
         std::string mate_seq;
         int mate_mapq;
