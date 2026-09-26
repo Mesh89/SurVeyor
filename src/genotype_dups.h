@@ -140,6 +140,7 @@ void write_aligned_small_dup_read_evidence(duplication_t* dup, open_samFile_t* b
 
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (get_unclipped_end(read) < targets.dup_start || targets.dup_end < get_unclipped_start(read)) continue;
         if (targets.dup_start < get_unclipped_start(read) && get_unclipped_end(read) < targets.dup_end) continue;
@@ -214,6 +215,7 @@ void write_aligned_large_dup_read_evidence(duplication_t* dup, open_samFile_t* b
 
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (get_unclipped_end(read) < targets.dup_start || targets.dup_end < get_unclipped_start(read)) continue;
         if (targets.dup_start < get_unclipped_start(read) && get_unclipped_end(read) < targets.dup_end) continue;
@@ -328,6 +330,7 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
 
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (get_unclipped_end(read) < dup_start || dup_end < get_unclipped_start(read)) continue;
         if (dup_start < get_unclipped_start(read) && get_unclipped_end(read) < dup_end) continue;
@@ -517,6 +520,7 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
 
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (get_unclipped_end(read) < dup_start || dup_end < get_unclipped_start(read)) continue;
         if (dup_start < get_unclipped_start(read) && get_unclipped_end(read) < dup_end) continue;

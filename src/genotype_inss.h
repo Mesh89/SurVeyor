@@ -133,6 +133,7 @@ void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file,
     int aln_reads = 0;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (targets.ins_start < get_unclipped_start(read) && get_unclipped_end(read) < targets.ins_end) continue;
 
@@ -253,6 +254,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
     int aln_reads = 0;
     while (sam_itr_next(bam_file->file, iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
+        if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (ins_start < get_unclipped_start(read) && get_unclipped_end(read) < ins_end) continue;
 
