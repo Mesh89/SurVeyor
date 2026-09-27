@@ -908,13 +908,15 @@ int main(int argc, char* argv[]) {
 		std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
 
 		// merge with read_svs and hp_svs
-		std::unordered_set<std::string> svs_unique_keys;
+		std::unordered_set<std::string> svs_unique_keys, svs_haplotype_keys;
 		for (std::shared_ptr<sv_t> sv : svs) {
 			svs_unique_keys.insert(sv->unique_key(false));
+			svs_haplotype_keys.insert(hpid_key(*sv));
 		}
 		auto& read_svs = read_svs_by_chr[contig_name];
 		for (std::shared_ptr<sv_t> sv : read_svs) {
-			if (svs_unique_keys.count(sv->unique_key(false)) == 0) {
+			if (sv->source == "READ" && svs_unique_keys.count(sv->unique_key(false)) > 0) continue;
+			if (svs_haplotype_keys.insert(hpid_key(*sv)).second) {
 				svs.push_back(sv);
 			}
 		}
