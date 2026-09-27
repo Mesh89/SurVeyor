@@ -197,7 +197,7 @@ bool is_mate_clipped(bam1_t* r) {
 }
 
 bool is_hidden_split_read(bam1_t* r, config_t config) {
-    if (!is_samechr(r)) return false;
+    if (is_dc_pair(r) && !is_stable_end(r, config)) return false;
 	if (is_left_clipped(r, config.min_clip_len) || is_right_clipped(r, config.min_clip_len)) return false;
 
     indel_summary_t indels = get_indel_summary(r);
