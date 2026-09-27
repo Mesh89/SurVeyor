@@ -109,35 +109,30 @@ inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool i
     const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, const config_t& config, bool round_up_non_hp_threshold = false) {
 
     int aligned_len = aln.query_end - aln.query_begin;
-    const consensus_hp_region_t* selected_hp = nullptr;
-    double selected_threshold = -1;
+    if (aligned_len <= 0) return false;
+    // Accept the ordinary whole-alignment allowance before trying HP-specific rescue.
+    if (round_up_non_hp_threshold) {
+        if (aln.mismatches <= std::ceil(config.max_seq_error * aligned_len)) return true;
+    } else if (aln.mismatches / double(aligned_len) <= config.max_seq_error) return true;
+
     if (hp_mismatch_rate_thresholds != nullptr) {
         for (const consensus_hp_region_t& hp : hp_regions) {
             int tail_3p_len = is_reverse ? hp.beg - aln.ref_begin : aln.ref_end - hp.end;
             if (aln.ref_begin >= hp.beg || aln.ref_end <= hp.end || tail_3p_len < config.min_clip_len) continue;
             char sequenced_hp_base = is_reverse ? complement_hp_base(hp.base) : hp.base;
             double threshold = hp_mismatch_rate_thresholds->get_threshold(hp.length(), sequenced_hp_base);
-            if (selected_hp == nullptr || threshold > selected_threshold || (threshold == selected_threshold && hp.length() > selected_hp->length())) {
-                selected_hp = &hp;
-                selected_threshold = threshold;
-            }
+
+            // Each eligible HP defines its own core and tail boundaries.
+            int five_p_and_hp_beg = is_reverse ? hp.beg : aln.ref_begin;
+            int five_p_and_hp_end = is_reverse ? aln.ref_end : hp.end;
+            int three_p_beg = is_reverse ? aln.ref_begin : hp.end;
+            int three_p_end = is_reverse ? hp.beg : aln.ref_end;
+            double five_p_and_hp_mismatch_rate = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, five_p_and_hp_beg, five_p_and_hp_end);
+            double mismatch_rate_3p = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, three_p_beg, three_p_end);
+            if (five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= threshold) return true;
         }
     }
-    if (selected_hp == nullptr) {
-        if (aligned_len <= 0) return false;
-        // Clip acceptance historically rounds its whole-read mismatch allowance up.
-        if (round_up_non_hp_threshold) return aln.mismatches <= std::ceil(config.max_seq_error * aligned_len);
-        return double(aln.mismatches) / aligned_len <= config.max_seq_error;
-    }
-
-    // Select by the sample allowance before testing mismatches; the same HP fixes both boundaries.
-    int five_p_and_hp_beg = is_reverse ? selected_hp->beg : aln.ref_begin;
-    int five_p_and_hp_end = is_reverse ? aln.ref_end : selected_hp->end;
-    int three_p_beg = is_reverse ? aln.ref_begin : selected_hp->end;
-    int three_p_end = is_reverse ? selected_hp->beg : aln.ref_end;
-    double five_p_and_hp_mismatch_rate = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, five_p_and_hp_beg, five_p_and_hp_end);
-    double mismatch_rate_3p = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, three_p_beg, three_p_end);
-    return five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= selected_threshold;
+    return false;
 }
 
 struct hp_read_observation_t {
