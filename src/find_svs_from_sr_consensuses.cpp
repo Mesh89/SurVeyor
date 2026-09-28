@@ -136,10 +136,11 @@ void find_svs_from_consensuses_pair(int id, std::string contig_name,
 		if (c1_consensus->left_clipped == c2_consensus->left_clipped) {
 			std::shared_ptr<consensus_t> leftmost_consensus = c1_consensus->breakpoint < c2_consensus->breakpoint ? c1_consensus : c2_consensus;
 			std::shared_ptr<consensus_t> rightmost_consensus = c1_consensus->breakpoint < c2_consensus->breakpoint ? c2_consensus : c1_consensus;
-			std::shared_ptr<breakend_t> bnd = detect_bnd(contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), leftmost_consensus, rightmost_consensus, ps.spa, aligner, config.min_clip_len);
-			if (bnd != NULL && bnd->svsize() >= config.min_sv_size) {
-				bnd->source = "2SR";
-				svs_by_pair[pair_idx].push_back(bnd);
+			std::vector<std::shared_ptr<sv_t>> candidates = detect_bnd(contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), leftmost_consensus, rightmost_consensus, ps.spa, aligner, stats, config);
+			for (auto& sv : candidates) {
+				if (sv->svsize() < config.min_sv_size) continue;
+				sv->source = "2SR";
+				svs_by_pair[pair_idx].push_back(sv);
 			}
 		} else {
 			int min_overlap = min_overlap_f(c1_consensus.get(), c2_consensus.get());
@@ -392,7 +393,14 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 			if (spa.overlap > 0) {
 				std::shared_ptr<consensus_t> leftmost_consensus = std::make_shared<consensus_t>(true, c->la_start, c->la_start, c->la_end, c->la_furthermost_seq, std::string(c->la_furthermost_seq.length(), '!'), 0, 1, 0, c->la_max_mapq, 0, 0);
 				std::shared_ptr<consensus_t> rightmost_consensus = std::make_shared<consensus_t>(true, c->ra_start, c->ra_start, c->ra_end, c->ra_furthermost_seq, std::string(c->ra_furthermost_seq.length(), '!'), 0, 1, 0, c->ra_max_mapq, 0, 0);
-				bnd = detect_bnd(contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), leftmost_consensus, rightmost_consensus, spa, aligner, config.min_clip_len);
+				std::vector<std::shared_ptr<sv_t>> candidates = detect_bnd(contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), leftmost_consensus, rightmost_consensus, spa, aligner, stats, config);
+				for (auto& sv : candidates) {
+					if (sv->svtype() == "BND") bnd = std::static_pointer_cast<breakend_t>(sv);
+					else {
+						sv->source = "DP";
+						local_svs.push_back(sv);
+					}
+				}
 			} else {
 				auto left_anchor_aln = std::make_shared<sv_t::anchor_aln_t>(c->la_start, c->la_end, c->la_end-c->la_start, 0);
 				auto right_anchor_aln = std::make_shared<sv_t::anchor_aln_t>(c->ra_start, c->ra_end, c->ra_end-c->ra_start, 0);
@@ -430,7 +438,14 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 			if (spa.overlap) {
 				std::shared_ptr<consensus_t> leftmost_consensus = std::make_shared<consensus_t>(false, c->la_start, c->la_end, c->la_end, c->la_furthermost_seq, std::string(c->la_furthermost_seq.length(), '!'), 1, 0, 0, c->la_max_mapq, 0, 0);
 				std::shared_ptr<consensus_t> rightmost_consensus = std::make_shared<consensus_t>(false, c->ra_start, c->ra_end, c->ra_end, c->ra_furthermost_seq, std::string(c->ra_furthermost_seq.length(), '!'), 1, 0, 0, c->ra_max_mapq, 0, 0);
-				bnd = detect_bnd(contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), leftmost_consensus, rightmost_consensus, spa, aligner, config.min_clip_len);
+				std::vector<std::shared_ptr<sv_t>> candidates = detect_bnd(contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), leftmost_consensus, rightmost_consensus, spa, aligner, stats, config);
+				for (auto& sv : candidates) {
+					if (sv->svtype() == "BND") bnd = std::static_pointer_cast<breakend_t>(sv);
+					else {
+						sv->source = "DP";
+						local_svs.push_back(sv);
+					}
+				}
 			} else {
 				auto left_anchor_aln = std::make_shared<sv_t::anchor_aln_t>(c->la_start, c->la_end, c->la_end-c->la_start, 0);
 				auto right_anchor_aln = std::make_shared<sv_t::anchor_aln_t>(c->ra_start, c->ra_end, c->ra_end-c->ra_start, 0);
