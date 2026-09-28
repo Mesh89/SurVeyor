@@ -205,6 +205,14 @@ void filter_poly_g_tail_consensuses(std::vector<consensus_t*>& consensuses, char
 	}), consensuses.end());
 }
 
+// Check an ungapped placement, rejecting mismatches only when both bases have Phred Q >= 40.
+bool consensus_placement_compatible(const std::string& seq1, const std::string& qual1, size_t start1, const std::string& seq2, const std::string& qual2, size_t length) {
+	for (size_t i = 0; i < length; i++) {
+		if (seq1[start1+i] != seq2[i] && qual1[start1+i] >= 40+33 && qual2[i] >= 40+33) return false;
+	}
+	return true;
+}
+
 // Remove geometrically contained consensuses when an ungapped placement has no confident mismatches.
 void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 	std::vector<consensus_t*> sorted = consensuses;
@@ -224,14 +232,7 @@ void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 				std::string highq_seq = sorted[j]->highq_sequence();
 				std::string highq_qual = sorted[j]->qual.substr(sorted[j]->lowq_prefix, highq_seq.length());
 				for (size_t pos = 0; pos + highq_seq.length() <= sorted[i]->sequence.length(); pos++) {
-					bool compatible = true;
-					for (size_t k = 0; k < highq_seq.length(); k++) {
-						if (sorted[i]->sequence[pos+k] != highq_seq[k] && sorted[i]->qual[pos+k] >= 40+33 && highq_qual[k] >= 40+33) {
-							compatible = false;
-							break;
-						}
-					}
-					if (!compatible) continue;
+					if (!consensus_placement_compatible(sorted[i]->sequence, sorted[i]->qual, pos, highq_seq, highq_qual, highq_seq.length())) continue;
 					// Apply higher-quality bases only after the entire placement passes.
 					for (size_t k = 0; k < highq_seq.length(); k++) {
 						if (highq_qual[k] > sorted[i]->qual[pos+k]) {
@@ -306,18 +307,25 @@ bool merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 	std::string c2_hq_seq = c2->sequence.substr(c2->lowq_prefix);
 	std::string c1_hq_qual = c1->qual.substr(0, c1->qual.length()-c1->lowq_suffix);
 	std::string c2_hq_qual = c2->qual.substr(c2->lowq_prefix);
+	auto compatible_overlap = [min_overlap](const std::string& seq1, const std::string& qual1, const std::string& seq2, const std::string& qual2) {
+		for (int len = std::min(seq1.length(), seq2.length()); len >= min_overlap; len--) {
+			int begin = seq1.length()-len;
+			if (consensus_placement_compatible(seq1, qual1, begin, seq2, qual2, len)) return len;
+		}
+		return 0;
+	};
 	int min_hq_seq_len = std::min(c1_hq_seq.length(), c2_hq_seq.length());
 	if (hq_overlap >= min_hq_seq_len/2 && hq_overlap < min_hq_seq_len) { // first, try to see if the high quality parts are compatible
-		suffix_prefix_aln_t spa_hq = aln_suffix_prefix_perfect(c1_hq_seq, c2_hq_seq, min_overlap);
-		if (spa_hq.overlap) {
-			merge_overlapping_pair_of_clusters(c1, c2, target, c1_hq_seq, c1_hq_qual, c2_hq_seq, c2_hq_qual, spa_hq.overlap);
+		int hq_seq_overlap = compatible_overlap(c1_hq_seq, c1_hq_qual, c2_hq_seq, c2_hq_qual);
+		if (hq_seq_overlap) {
+			merge_overlapping_pair_of_clusters(c1, c2, target, c1_hq_seq, c1_hq_qual, c2_hq_seq, c2_hq_qual, hq_seq_overlap);
 			return true;
 		}
 	}
 	
-	suffix_prefix_aln_t spa = aln_suffix_prefix_perfect(c1->sequence, c2->sequence, min_overlap); // then, try the whole sequences
-	if (spa.overlap) {
-		merge_overlapping_pair_of_clusters(c1, c2, target, c1->sequence, c1->qual, c2->sequence, c2->qual, spa.overlap);
+	int seq_overlap = compatible_overlap(c1->sequence, c1->qual, c2->sequence, c2->qual); // then, try the whole sequences
+	if (seq_overlap) {
+		merge_overlapping_pair_of_clusters(c1, c2, target, c1->sequence, c1->qual, c2->sequence, c2->qual, seq_overlap);
 		return true;
 	}
 	return false;
