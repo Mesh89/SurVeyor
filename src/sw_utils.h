@@ -875,6 +875,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	auto remap_full_junction = [&](hts_pos_t remap_start, hts_pos_t remap_end) {
 		StripedSmithWaterman::Filter filter;
 		aligner.Align(junction_seq.c_str(), contig_seq + remap_start, remap_end-remap_start, filter, &full_aln, 0);
+		if (!remap_windows_overlap && is_clipped(full_aln, config.min_clip_len)) return;
 		junction_query_origins_t full_query_origins;
 		std::vector<std::shared_ptr<sv_t>> window_svs = detect_svs_from_aln(full_aln, contig_name, remap_start, junction_seq,
 			junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true, &full_query_origins);
@@ -1266,6 +1267,7 @@ std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* con
 		StripedSmithWaterman::Filter filter;
 		StripedSmithWaterman::Alignment full_aln;
 		aligner.Align(query.c_str(), contig_seq + remap_start, remap_end-remap_start, filter, &full_aln, 0);
+		if (is_clipped(full_aln, config.min_clip_len)) return;
 		junction_query_origins_t query_origins;
 		std::vector<std::shared_ptr<sv_t>> window_svs = detect_svs_from_aln(full_aln, contig_name, remap_start, query, qual, nullptr, lowq_prefix, lowq_suffix, stats, config, true, &query_origins);
 		for (auto& sv : window_svs) sv = filter_decomposed_aux_snps(sv, normalization_context, query, qual, lowq_prefix, lowq_suffix, query_origins);
