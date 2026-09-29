@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <unordered_set>
 
 #include "../libs/ssw.h"
 #include "../libs/ssw_cpp.h"
@@ -1325,7 +1326,10 @@ std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* con
 		std::string left_part = full_junction_seq.substr(0, best_i);
 		std::string middle_part = full_junction_seq.substr(best_i, best_j-best_i);
 		std::string right_part = full_junction_seq.substr(best_j);
+		std::string left_part_qual = full_junction_qual.substr(0, best_i);
+		std::string right_part_qual = full_junction_qual.substr(best_j);
 		rc(right_part);
+		std::reverse(right_part_qual.begin(), right_part_qual.end());
 
 		std::vector<StripedSmithWaterman::Alignment> left_part_alns = get_best_alns(contig_seq, ref_remap_lh_start, ref_remap_lh_end-ref_remap_lh_start, (char*) left_part.c_str(), aligner);
 		std::vector<StripedSmithWaterman::Alignment> right_part_alns = get_best_alns(contig_seq, ref_remap_rh_start, ref_remap_rh_end-ref_remap_rh_start, (char*) right_part.c_str(), aligner);
@@ -1336,7 +1340,13 @@ std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* con
 		auto right_anchor_aln = std::make_shared<sv_t::anchor_aln_t>(ref_remap_rh_start+right_part_aln.ref_begin, ref_remap_rh_start+right_part_aln.ref_end, right_part.length(), right_part_aln.sw_score);
 
 		hts_pos_t start = ref_remap_lh_start + left_part_aln.ref_end, end = ref_remap_rh_start + right_part_aln.ref_end;
-		full_svs.insert(full_svs.begin(), std::make_shared<breakend_t>(contig_name, start, end, middle_part, left_anchor_aln, right_anchor_aln, false, leftmost_consensus, rightmost_consensus));
+		std::shared_ptr<breakend_t> bnd = std::make_shared<breakend_t>(contig_name, start, end, middle_part, left_anchor_aln, right_anchor_aln, false, leftmost_consensus, rightmost_consensus);
+		detect_svs_from_aln(left_part_aln, contig_name, ref_remap_lh_start, left_part, left_part_qual, bnd, 0, 0, stats, config);
+		detect_svs_from_aln(right_part_aln, contig_name, ref_remap_rh_start, right_part, right_part_qual, bnd, 0, 0, stats, config);
+		std::unordered_set<std::string> aux_snp_keys, aux_indel_keys;
+		bnd->aux_snps.erase(std::remove_if(bnd->aux_snps.begin(), bnd->aux_snps.end(), [&aux_snp_keys](const snp_t& snp) { return !aux_snp_keys.insert(snp.unique_key()).second; }), bnd->aux_snps.end());
+		bnd->aux_indels.erase(std::remove_if(bnd->aux_indels.begin(), bnd->aux_indels.end(), [&aux_indel_keys](const std::shared_ptr<sv_t>& aux) { return !aux_indel_keys.insert(aux->unique_key(false)).second; }), bnd->aux_indels.end());
+		full_svs.insert(full_svs.begin(), bnd);
 		return full_svs;
 	} else {
 
@@ -1376,9 +1386,12 @@ std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* con
 		if (max_score == 0 || best_i <= lowq_junction_prefix || full_junction_seq.length()-best_j <= lowq_junction_suffix) return full_svs;
 
 		std::string left_part = full_junction_seq.substr(0, best_i);
+		std::string left_part_qual = full_junction_qual.substr(0, best_i);
 		rc(left_part);
+		std::reverse(left_part_qual.begin(), left_part_qual.end());
 		std::string middle_part = full_junction_seq.substr(best_i, best_j-best_i);
 		std::string right_part = full_junction_seq.substr(best_j);
+		std::string right_part_qual = full_junction_qual.substr(best_j);
 
 		std::vector<StripedSmithWaterman::Alignment> left_part_alns = get_best_alns(contig_seq, ref_remap_lh_start, ref_remap_lh_end-ref_remap_lh_start, (char*) left_part.c_str(), aligner);
 		std::vector<StripedSmithWaterman::Alignment> right_part_alns = get_best_alns(contig_seq, ref_remap_rh_start, ref_remap_rh_end-ref_remap_rh_start, (char*) right_part.c_str(), aligner);
@@ -1390,7 +1403,13 @@ std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* con
 
 		hts_pos_t start = ref_remap_lh_start + left_part_aln.ref_begin-1, end = ref_remap_rh_start + right_part_aln.ref_begin-1;
 		if (start < 0) start = 0;
-		full_svs.insert(full_svs.begin(), std::make_shared<breakend_t>(contig_name, start, end, middle_part, left_anchor_aln, right_anchor_aln, true, leftmost_consensus, rightmost_consensus));
+		std::shared_ptr<breakend_t> bnd = std::make_shared<breakend_t>(contig_name, start, end, middle_part, left_anchor_aln, right_anchor_aln, true, leftmost_consensus, rightmost_consensus);
+		detect_svs_from_aln(left_part_aln, contig_name, ref_remap_lh_start, left_part, left_part_qual, bnd, 0, 0, stats, config);
+		detect_svs_from_aln(right_part_aln, contig_name, ref_remap_rh_start, right_part, right_part_qual, bnd, 0, 0, stats, config);
+		std::unordered_set<std::string> aux_snp_keys, aux_indel_keys;
+		bnd->aux_snps.erase(std::remove_if(bnd->aux_snps.begin(), bnd->aux_snps.end(), [&aux_snp_keys](const snp_t& snp) { return !aux_snp_keys.insert(snp.unique_key()).second; }), bnd->aux_snps.end());
+		bnd->aux_indels.erase(std::remove_if(bnd->aux_indels.begin(), bnd->aux_indels.end(), [&aux_indel_keys](const std::shared_ptr<sv_t>& aux) { return !aux_indel_keys.insert(aux->unique_key(false)).second; }), bnd->aux_indels.end());
+		full_svs.insert(full_svs.begin(), bnd);
 		return full_svs;
 	}
 }

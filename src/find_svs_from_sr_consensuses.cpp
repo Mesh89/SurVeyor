@@ -48,6 +48,29 @@ std::vector<std::mutex> mutex_per_chr;
 
 std::mutex mtx;
 
+void transfer_external_bnd_aux(const std::shared_ptr<inversion_t>& inv, const std::shared_ptr<breakend_t>& bnd_rf, const std::shared_ptr<breakend_t>& bnd_lf) {
+	std::unordered_set<std::string> snp_keys, indel_keys;
+	std::vector<snp_t> deduplicated_snps;
+	std::vector<std::shared_ptr<sv_t>> deduplicated_indels;
+	for (const snp_t& snp : inv->aux_snps) if (snp_keys.insert(snp.unique_key()).second) deduplicated_snps.push_back(snp);
+	for (const std::shared_ptr<sv_t>& indel : inv->aux_indels) if (indel_keys.insert(indel->unique_key(false)).second) deduplicated_indels.push_back(indel);
+	for (const std::shared_ptr<breakend_t>& bnd : {bnd_rf, bnd_lf}) {
+		for (const snp_t& snp : bnd->aux_snps) {
+			// The reported interval and the source interval can differ when the breakends are offset; AUX must be external to both.
+			bool outside_reported_interval = snp.pos <= inv->start || snp.pos > inv->end;
+			bool outside_inverted_interval = snp.pos < inv->inv_start || snp.pos > inv->inv_end;
+			if (outside_reported_interval && outside_inverted_interval && snp_keys.insert(snp.unique_key()).second) deduplicated_snps.push_back(snp);
+		}
+		for (const std::shared_ptr<sv_t>& indel : bnd->aux_indels) {
+			bool outside_reported_interval = indel->end <= inv->start || indel->start > inv->end;
+			bool outside_inverted_interval = indel->end <= inv->inv_start || indel->start > inv->inv_end;
+			if (outside_reported_interval && outside_inverted_interval && indel_keys.insert(indel->unique_key(false)).second) deduplicated_indels.push_back(indel);
+		}
+	}
+	inv->aux_snps.swap(deduplicated_snps);
+	inv->aux_indels.swap(deduplicated_indels);
+}
+
 
 struct pair_w_score_t {
     int c1_idx, c2_idx;
@@ -528,6 +551,7 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 		inv->inv_end = inv_end;
 		inv->source = bnd_rf->source + "-" + bnd_lf->source;
 		inv->imprecise = imprecise;
+		transfer_external_bnd_aux(inv, bnd_rf, bnd_lf);
 		if (inv->svsize() >= config.min_sv_size) {
 			local_svs.push_back(inv);
 		}
