@@ -56,7 +56,7 @@ struct consensus_t {
     uint8_t max_mapq;
     hts_pos_t other_bp_lower_boundary = LOWER_BOUNDARY_NON_CALCULATED, other_bp_upper_boundary = UPPER_BOUNDARY_NON_CALCULATED;
     int clip_len, lowq_prefix, lowq_suffix;
-    int left_ext_reads = 0, right_ext_reads = 0, hq_left_ext_reads = 0, hq_right_ext_reads = 0;
+    int left_ext_reads = 0, right_ext_reads = 0;
     bool is_hsr = false;
 	bool extended_to_left = false, extended_to_right = false;
 
@@ -312,7 +312,6 @@ struct sv_t {
         std::unordered_map<std::string, int> oar_bp2_reads_by_vid;
 
         int alt_ref_equal_reads = 0, alt_ref_equal_reads_highmq = 0;
-        int alt_lext_reads = 0, hq_alt_lext_reads = 0, alt_rext_reads = 0, hq_alt_rext_reads = 0;
         consensus_alignment_metrics_t alt_consensus1_metrics, alt_consensus2_metrics;
         consensus_alignment_metrics_t ext_alt_consensus1_metrics, ext_alt_consensus2_metrics;
         int ins_seq_prefix_cov = 0, ins_seq_suffix_cov = 0;

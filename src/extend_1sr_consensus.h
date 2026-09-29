@@ -724,7 +724,6 @@ void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalT
 		second_last_appended_len = last_appended_len;
 		last_appended_len = accepted_len;
 		consensus->right_ext_reads++;
-		if (read_mapqs[e.next] >= high_confidence_mapq) consensus->hq_right_ext_reads++;
 		if (accepted_len < appended_len) break;
 		e = best_edges[e.next];
 	}
@@ -815,7 +814,6 @@ void extend_consensus_to_left(std::shared_ptr<consensus_t> consensus, IntervalTr
 		second_last_prepended_len = last_prepended_len;
 		last_prepended_len = accepted_len;
 		consensus->left_ext_reads++;
-		if (read_mapqs[e.next] >= high_confidence_mapq) consensus->hq_left_ext_reads++;
 		if (accepted_len < prepended_len) break;
 		e = best_edges[e.next];
 	}

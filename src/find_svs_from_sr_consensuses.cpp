@@ -527,8 +527,6 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 			rc_consensus->max_mapq = std::max(bnd_rf_left_consensus->max_mapq, bnd_rf_right_consensus->max_mapq);
 			rc_consensus->left_ext_reads = bnd_rf_left_consensus->left_ext_reads;
 			rc_consensus->right_ext_reads = bnd_rf_right_consensus->left_ext_reads;
-			rc_consensus->hq_left_ext_reads = bnd_rf_left_consensus->hq_left_ext_reads;
-			rc_consensus->hq_right_ext_reads = bnd_rf_right_consensus->hq_left_ext_reads;
 		}
 		if (bnd_lf_left_consensus != NULL && bnd_lf_right_consensus != NULL) {
 			lc_consensus = std::make_shared<consensus_t>(true, 0, 0, 0, seq, std::string(seq.length(), '!'), bnd_lf_left_consensus->fwd_reads+bnd_lf_right_consensus->fwd_reads, 
@@ -536,8 +534,6 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 			lc_consensus->max_mapq = std::max(bnd_lf_left_consensus->max_mapq, bnd_lf_right_consensus->max_mapq);
 			lc_consensus->left_ext_reads = bnd_lf_left_consensus->right_ext_reads;
 			lc_consensus->right_ext_reads = bnd_lf_right_consensus->right_ext_reads;
-			lc_consensus->hq_left_ext_reads = bnd_lf_left_consensus->hq_right_ext_reads;
-			lc_consensus->hq_right_ext_reads = bnd_lf_right_consensus->hq_right_ext_reads;
 		}
 
 		bool imprecise = bnd_rf->imprecise || bnd_lf->imprecise;

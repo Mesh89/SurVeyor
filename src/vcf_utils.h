@@ -518,14 +518,6 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 			"and the global distribution (insert size of pairs randomly sampled). If the two are significantly different, the likelihood of the SV being real is increased. \">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, kspval_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "AXR");
-	const char* axr_tag = "##FORMAT=<ID=AXR,Number=2,Type=Integer,Description=\"Number of reads used to extend the alternative allele consensus to the left and the right, respectively.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, axr_tag, &len));
-
-	bcf_hdr_remove(hdr, BCF_HL_FMT, "AXRHQ");
-	const char* axrhq_tag = "##FORMAT=<ID=AXRHQ,Number=2,Type=Integer,Description=\"Number of high-quality reads used to extend the alternative allele consensus to the left and the right, respectively.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, axrhq_tag, &len));
-
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "AL");
 	const char* al_tag = "##FORMAT=<ID=AL,Number=1,Type=Integer,Description=\"Length of the alternative allele consensus before trimming.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, al_tag, &len));

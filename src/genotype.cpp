@@ -496,11 +496,6 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_float(out_hdr, sv->vcf_entry, "KSPVAL", NULL, 0);
     }
 
-    int ext_reads[] = {sv->sample_info.alt_lext_reads, sv->sample_info.alt_rext_reads};
-    bcf_update_format_int32(out_hdr, sv->vcf_entry, "AXR", ext_reads, 2);
-    int hq_ext_reads[] = {sv->sample_info.hq_alt_lext_reads, sv->sample_info.hq_alt_rext_reads};
-    bcf_update_format_int32(out_hdr, sv->vcf_entry, "AXRHQ", hq_ext_reads, 2);
-
     if (sv->sample_info.alt_consensus1_metrics.length > 0) {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AL", &(sv->sample_info.alt_consensus1_metrics.length), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AAS", &(sv->sample_info.alt_consensus1_metrics.alt_score), 1);

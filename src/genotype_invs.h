@@ -160,10 +160,6 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION), sv_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, sv_end, std::min<hts_pos_t>(contig_len, sv_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        inv->sample_info.alt_lext_reads = alt_consensus->left_ext_reads;
-        inv->sample_info.alt_rext_reads = alt_consensus->right_ext_reads;
-        inv->sample_info.hq_alt_lext_reads = alt_consensus->hq_left_ext_reads;
-        inv->sample_info.hq_alt_rext_reads = alt_consensus->hq_right_ext_reads;
         alt_consensus_seq = alt_consensus->sequence;
 
         consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_consensus_seq);
@@ -491,10 +487,6 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         std::shared_ptr<consensus_t> alt_bp1_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp1_consensus_seq, std::string(alt_bp1_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_bp1_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION), sv_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_bp1_consensus, candidate_reads_for_extension_itree, sv_start, std::min<hts_pos_t>(contig_len, sv_start+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        inv->sample_info.alt_lext_reads = alt_bp1_consensus->left_ext_reads;
-        inv->sample_info.alt_rext_reads = alt_bp1_consensus->right_ext_reads;
-        inv->sample_info.hq_alt_lext_reads = alt_bp1_consensus->hq_left_ext_reads;
-        inv->sample_info.hq_alt_rext_reads = alt_bp1_consensus->hq_right_ext_reads;
         alt_bp1_consensus_seq = alt_bp1_consensus->sequence;
 
         consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_bp1_consensus_seq, true);
@@ -523,10 +515,6 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         std::shared_ptr<consensus_t> alt_bp2_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp2_consensus_seq, std::string(alt_bp2_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
         extend_consensus_to_left(alt_bp2_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_end-GENOTYPE_CONSENSUS_EXTENSION), sv_end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
         extend_consensus_to_right(alt_bp2_consensus, candidate_reads_for_extension_itree, sv_end, std::min<hts_pos_t>(contig_len, sv_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        inv->sample_info.alt_lext_reads += alt_bp2_consensus->left_ext_reads;
-        inv->sample_info.alt_rext_reads += alt_bp2_consensus->right_ext_reads;
-        inv->sample_info.hq_alt_lext_reads += alt_bp2_consensus->hq_left_ext_reads;
-        inv->sample_info.hq_alt_rext_reads += alt_bp2_consensus->hq_right_ext_reads;
         alt_bp2_consensus_seq = alt_bp2_consensus->sequence;
 
         consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_bp2_consensus_seq, false);
