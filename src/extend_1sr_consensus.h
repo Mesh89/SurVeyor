@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../libs/IntervalTree.h"
+#include "../libs/exact_cache.h"
 #include "htslib/sam.h"
 #include "utils.h"
 #include "sw_utils.h"
@@ -225,10 +226,42 @@ bool break_cycle_at_vertex(std::vector<int>& out_edges, std::vector<std::vector<
 	return true;
 }
 
+struct extension_graph_cache_value_t {
+	std::vector<int> out_edges;
+	std::vector<std::vector<edge_t> > l_adj, l_adj_rev;
+};
+
+std::string extension_graph_cache_key(const std::vector<std::string>& read_seqs, const std::vector<hts_pos_t>& read_starts,
+		const std::vector<int>& starting_idxs, int min_overlap, bool strict) {
+	surveyor_cache::key_builder_t key_builder;
+	key_builder.add(min_overlap);
+	key_builder.add(strict);
+	uint64_t read_starts_size = read_starts.size();
+	key_builder.add(read_starts_size);
+	for (hts_pos_t read_start : read_starts) key_builder.add(read_start);
+	uint64_t starting_idxs_size = starting_idxs.size();
+	key_builder.add(starting_idxs_size);
+	for (int starting_idx : starting_idxs) key_builder.add(starting_idx);
+	uint64_t reads_size = read_seqs.size();
+	key_builder.add(reads_size);
+	for (const std::string& read_seq : read_seqs) key_builder.add_string(read_seq);
+	return key_builder.take();
+}
+
 void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>& read_starts,
 		std::vector<int> starting_idxs, std::vector<int>& out_edges,
 		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev, int min_overlap,
 		bool strict) {
+
+	std::string cache_key = extension_graph_cache_key(read_seqs, read_starts, starting_idxs, min_overlap, strict);
+	static thread_local surveyor_cache::exact_cache_t<extension_graph_cache_value_t> cache("SURVEYOR_EXTENSION_GRAPH_CACHE_LIMIT", 16);
+	const extension_graph_cache_value_t* cached = cache.find(cache_key);
+	if (cached) {
+		out_edges = cached->out_edges;
+		l_adj = cached->l_adj;
+		l_adj_rev = cached->l_adj_rev;
+		return;
+	}
 
 	l_adj = std::vector<std::vector<edge_t> >(read_seqs.size());
 	l_adj_rev = std::vector<std::vector<edge_t> >(read_seqs.size());
@@ -327,12 +360,23 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			last_accepted_j = j;
 		}
 	}
+	cache.store(std::move(cache_key), extension_graph_cache_value_t{out_edges, l_adj, l_adj_rev});
 }
 
 void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>& read_starts,
 		std::vector<int> starting_idxs, std::vector<int>& out_edges,
 		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev, int min_overlap, 
 		bool strict) {
+
+	std::string cache_key = extension_graph_cache_key(read_seqs, read_starts, starting_idxs, min_overlap, strict);
+	static thread_local surveyor_cache::exact_cache_t<extension_graph_cache_value_t> cache("SURVEYOR_EXTENSION_GRAPH_CACHE_LIMIT", 16);
+	const extension_graph_cache_value_t* cached = cache.find(cache_key);
+	if (cached) {
+		out_edges = cached->out_edges;
+		l_adj = cached->l_adj;
+		l_adj_rev = cached->l_adj_rev;
+		return;
+	}
 
 	l_adj = std::vector<std::vector<edge_t> >(read_seqs.size());
 	l_adj_rev = std::vector<std::vector<edge_t> >(read_seqs.size());
@@ -428,6 +472,7 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			last_accepted_j = j;
 		}
 	}
+	cache.store(std::move(cache_key), extension_graph_cache_value_t{out_edges, l_adj, l_adj_rev});
 }
 
 void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, std::vector<std::string>& read_seqs, std::vector<std::string>& read_quals,

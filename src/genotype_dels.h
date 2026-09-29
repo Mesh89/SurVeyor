@@ -445,6 +445,7 @@ inline void genotype_dels(int id, std::string contig_name, char* contig_seq, int
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
     bam_pool_t* bam_pool, std::string workdir, std::vector<double>* global_crossing_isize_dist, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
+    surveyor_cache::start_block();
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 
     int contig_id = contig_map.get_id(contig_name);

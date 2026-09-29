@@ -1139,6 +1139,7 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
 inline void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<sv_t*> hp_indels,
     stats_t& stats, config_t& config, contig_map_t& contig_map, bam_pool_t* bam_pool, std::vector<double>* global_crossing_isize_dist, evidence_mode_t evidence_mode) {
 
+    surveyor_cache::start_block();
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
     int contig_id = contig_map.get_id(contig_name);
     auto chromosome_data = acquire_chromosome_data(contig_id);

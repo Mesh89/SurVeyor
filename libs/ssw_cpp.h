@@ -195,6 +195,7 @@ class Aligner {
   int8_t* score_matrix_;
   int     score_matrix_size_;
   int8_t* translation_matrix_;
+  int     translation_matrix_size_;
 
   uint8_t match_score_;           // default: 2
   uint8_t mismatch_penalty_;      // default: 2

@@ -7,6 +7,7 @@
 
 #include "../libs/ssw.h"
 #include "../libs/ssw_cpp.h"
+#include "../libs/exact_cache.h"
 #include "simd_macros.h"
 #include "sam_utils.h"
 #include "types.h"
@@ -514,6 +515,21 @@ ungapped_aln_t fixed_ungapped_aln(const char* query, int query_len, const char* 
 ungapped_aln_t best_ungapped_aln(const char* query, int query_len, const char* ref, int ref_len,
                                  int max_ref_overflow = 0, int match_score = 1, int mismatch_score = -4, int max_query_clip = 0) {
     if (query_len <= 0 || ref_len <= 0) return ungapped_aln_t(0, 0, 0, 0, 0, 0);
+
+    surveyor_cache::key_builder_t key_builder;
+    key_builder.add(query_len);
+    key_builder.add_bytes(query, query_len);
+    key_builder.add(ref_len);
+    key_builder.add_bytes(ref, ref_len);
+    key_builder.add(max_ref_overflow);
+    key_builder.add(match_score);
+    key_builder.add(mismatch_score);
+    key_builder.add(max_query_clip);
+    std::string cache_key = key_builder.take();
+    static thread_local surveyor_cache::exact_cache_t<ungapped_aln_t> cache("SURVEYOR_UNGAPPED_CACHE_LIMIT", 16384);
+    const ungapped_aln_t* cached_aln = cache.find(cache_key);
+    if (cached_aln) return *cached_aln;
+
     max_ref_overflow = std::max(0, max_ref_overflow);
     max_query_clip = std::max(0, max_query_clip);
 
@@ -538,6 +554,7 @@ ungapped_aln_t best_ungapped_aln(const char* query, int query_len, const char* r
         }
         if (best_aln.score == query_len*match_score && (max_query_clip == 0 || (match_score >= 0 && mismatch_score <= match_score && best_aln.query_end-best_aln.query_begin == query_len))) break;
     }
+    cache.store(std::move(cache_key), best_aln);
     return best_aln;
 }
 

@@ -6,6 +6,7 @@
 
 #include "ssw_cpp.h"
 #include "ssw.h"
+#include "exact_cache.h"
 
 #include <sstream>
 
@@ -235,6 +236,7 @@ Aligner::Aligner(void)
     : score_matrix_(NULL)
     , score_matrix_size_(5)
     , translation_matrix_(NULL)
+    , translation_matrix_size_(0)
     , match_score_(2)
     , mismatch_penalty_(2)
     , gap_opening_penalty_(3)
@@ -255,6 +257,7 @@ Aligner::Aligner(
     : score_matrix_(NULL)
     , score_matrix_size_(5)
     , translation_matrix_(NULL)
+    , translation_matrix_size_(0)
     , match_score_(match_score)
     , mismatch_penalty_(mismatch_penalty)
     , gap_opening_penalty_(gap_opening_penalty)
@@ -273,6 +276,7 @@ Aligner::Aligner(const int8_t* score_matrix,
     : score_matrix_(NULL)
     , score_matrix_size_(score_matrix_size)
     , translation_matrix_(NULL)
+    , translation_matrix_size_(translation_matrix_size)
     , match_score_(2)
     , mismatch_penalty_(2)
     , gap_opening_penalty_(3)
@@ -374,6 +378,30 @@ bool Aligner::Align(const char* query, const char* ref, const int& ref_len,
 
   int query_len = strlen(query);
   if (query_len == 0) return false;
+
+  surveyor_cache::key_builder_t key_builder;
+  key_builder.add_bytes(query, query_len);
+  key_builder.add(ref_len);
+  key_builder.add_bytes(ref, ref_len > 0 ? ref_len : 0);
+  key_builder.add(filter.report_begin_position);
+  key_builder.add(filter.report_cigar);
+  key_builder.add(filter.score_filter);
+  key_builder.add(filter.distance_filter);
+  key_builder.add(maskLen);
+  key_builder.add(gap_opening_penalty_);
+  key_builder.add(gap_extending_penalty_);
+  key_builder.add(score_matrix_size_);
+  key_builder.add_bytes(reinterpret_cast<const char*>(score_matrix_), score_matrix_size_ * score_matrix_size_);
+  key_builder.add(translation_matrix_size_);
+  key_builder.add_bytes(reinterpret_cast<const char*>(translation_matrix_), translation_matrix_size_);
+  std::string cache_key = key_builder.take();
+  static thread_local surveyor_cache::exact_cache_t<Alignment> cache("SURVEYOR_SSW_CACHE_LIMIT", 4096);
+  const Alignment* cached_alignment = cache.find(cache_key);
+  if (cached_alignment) {
+    *alignment = *cached_alignment;
+    return true;
+  }
+
   int8_t* translated_query = new int8_t[query_len];
   TranslateBase(query, query_len, translated_query);
 
@@ -405,6 +433,8 @@ bool Aligner::Align(const char* query, const char* ref, const int& ref_len,
   align_destroy(s_al);
   init_destroy(profile);
 
+  cache.store(std::move(cache_key), *alignment);
+
   return true;
 }
 
@@ -415,6 +445,7 @@ void Aligner::Clear(void) {
 
 void Aligner::SetAllDefault(void) {
   score_matrix_size_     = 5;
+  translation_matrix_size_ = 0;
   match_score_           = 2;
   mismatch_penalty_      = 2;
   gap_opening_penalty_   = 3;
@@ -458,6 +489,8 @@ bool Aligner::ReBuild(
     const int&    translation_matrix_size) {
 
   ClearMatrices();
+  score_matrix_size_ = score_matrix_size;
+  translation_matrix_size_ = translation_matrix_size;
   score_matrix_ = new int8_t[score_matrix_size_ * score_matrix_size_];
   memcpy(score_matrix_, score_matrix, sizeof(int8_t) * score_matrix_size_ * score_matrix_size_);
   translation_matrix_ = new int8_t[translation_matrix_size];
@@ -470,6 +503,7 @@ void Aligner::BuildDefaultMatrix(bool Nasmatch) {
   ClearMatrices();
   score_matrix_ = new int8_t[score_matrix_size_ * score_matrix_size_];
   BuildSwScoreMatrix(match_score_, mismatch_penalty_, score_matrix_, Nasmatch);
+  translation_matrix_size_ = SizeOfArray(kBaseTranslation);
   translation_matrix_ = new int8_t[SizeOfArray(kBaseTranslation)];
   memcpy(translation_matrix_, kBaseTranslation, sizeof(int8_t) * SizeOfArray(kBaseTranslation));
 }
@@ -480,5 +514,6 @@ void Aligner::ClearMatrices(void) {
 
   delete [] translation_matrix_;
   translation_matrix_ = NULL;
+  translation_matrix_size_ = 0;
 }
 } // namespace StripedSmithWaterman

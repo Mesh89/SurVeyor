@@ -10,6 +10,7 @@
 #include <mutex>
 #include <htslib/sam.h>
 
+#include "../libs/exact_cache.h"
 #include "sw_utils.h"
 #include "consensus.h"
 #include "types.h"
@@ -29,6 +30,11 @@ struct seq_w_pp_t {
 		clip_pair.can_start_path = can_start_path;
 		clip_pair.can_end_path = can_end_path;
 	}
+};
+
+struct build_graph_cache_value_t {
+	std::vector<int> out_edges_added;
+	std::vector<std::vector<edge_t> > l_adj_added, l_adj_rev_added;
 };
 
 void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}) {
@@ -99,6 +105,34 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 		int max_mismatches, int min_overlap) {
 
 	int n = read_seqs.size();
+	surveyor_cache::key_builder_t key_builder;
+	key_builder.add(max_mismatches);
+	key_builder.add(min_overlap);
+	uint64_t order_size = order.size();
+	key_builder.add(order_size);
+	for (int value : order) key_builder.add(value);
+	uint64_t reads_size = read_seqs.size();
+	key_builder.add(reads_size);
+	for (const std::string& read_seq : read_seqs) key_builder.add_string(read_seq);
+	std::string cache_key = key_builder.take();
+	static thread_local surveyor_cache::exact_cache_t<build_graph_cache_value_t> cache("SURVEYOR_BUILD_GRAPH_CACHE_LIMIT", 256);
+	const build_graph_cache_value_t* cached = cache.find(cache_key);
+	if (cached) {
+		for (int i = 0; i < n; i++) {
+			out_edges[i] += cached->out_edges_added[i];
+			l_adj[i].insert(l_adj[i].end(), cached->l_adj_added[i].begin(), cached->l_adj_added[i].end());
+			l_adj_rev[i].insert(l_adj_rev[i].end(), cached->l_adj_rev_added[i].begin(), cached->l_adj_rev_added[i].end());
+		}
+		return;
+	}
+
+	build_graph_cache_value_t additions;
+	additions.out_edges_added = out_edges;
+	std::vector<size_t> l_adj_sizes(n), l_adj_rev_sizes(n);
+	for (int i = 0; i < n; i++) {
+		l_adj_sizes[i] = l_adj[i].size();
+		l_adj_rev_sizes[i] = l_adj_rev[i].size();
+	}
 
 	for (int i = 0; i < n; i++) {
 		for (int j = i+1; j < n; j++) {
@@ -140,6 +174,15 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 			}
 		}
 	}
+
+	additions.l_adj_added.resize(n);
+	additions.l_adj_rev_added.resize(n);
+	for (int i = 0; i < n; i++) {
+		additions.out_edges_added[i] = out_edges[i] - additions.out_edges_added[i];
+		additions.l_adj_added[i].assign(l_adj[i].begin() + l_adj_sizes[i], l_adj[i].end());
+		additions.l_adj_rev_added[i].assign(l_adj_rev[i].begin() + l_adj_rev_sizes[i], l_adj_rev[i].end());
+	}
+	cache.store(std::move(cache_key), std::move(additions));
 }
 
 std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_read_seqs, std::vector<seq_w_pp_t>& unstable_read_seqs,
