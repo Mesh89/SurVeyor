@@ -565,6 +565,7 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 		hts_itr_t* iter = sam_itr_querys(bam_file->idx, bam_file->header, ss.str().c_str());
 		while (sam_itr_next(bam_file->file, iter, read) >= 0) {
 			if (is_unmapped(read) || !is_primary(read)) continue;
+			if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
 
 			// for same strand pairs that may be due to inversions, add a copy of the unstable end in the the correct orientation
 			// same strand is not always due to inversions (transpositions may also cause this), and we do not know which case we are dealing with
