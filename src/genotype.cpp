@@ -1251,12 +1251,16 @@ int main(int argc, char* argv[]) {
     std::string sample_name = argv[6];
 
     std::string alt_reads_association_dir = workdir + "/reads_to_sv_associations";
+    std::string consensus_cache_dir;
     for (int i = 7; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--reassign-evidence") {
             evidence_mode = evidence_mode_t::REASSIGN;
         } else if (arg == "--cached-evidence") {
             evidence_mode = evidence_mode_t::CACHED;
+        } else if (arg == "--consensus-cache") {
+            if (++i >= argc) throw std::runtime_error("Missing path after --consensus-cache.");
+            consensus_cache_dir = argv[i];
         } else if (arg == "--alt-read-associations") {
             if (++i >= argc) {
                 throw std::runtime_error("Missing path after --alt-read-associations.");
@@ -1267,6 +1271,7 @@ int main(int argc, char* argv[]) {
         }
     }
     bool reassign_evidence = reassigns_evidence(evidence_mode);
+    sv_consensus_cache::cache().initialize(consensus_cache_dir, reassign_evidence);
     load_evidence_maps = true;
     reads_association_dir = alt_reads_association_dir;
 
@@ -1354,6 +1359,16 @@ int main(int argc, char* argv[]) {
     add_fmt_tags(out_vcf_header);
     if (bcf_hdr_write(out_vcf_file, out_vcf_header) != 0) {
 	        throw std::runtime_error("Failed to read the VCF header.");
+    }
+
+    if (sv_consensus_cache::cache().active()) {
+        for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
+            std::string contig_name = contig_map.get_name(contig_id);
+            std::vector<sv_t*> svs;
+            for (const auto& sv : dels_by_chr[contig_name]) svs.push_back(sv.get());
+            for (const auto& sv : inss_by_chr[contig_name]) svs.push_back(sv.get());
+            sv_consensus_cache::cache().prepare(contig_name, contig_id, svs);
+        }
     }
 
     // genotype chrs in descending order of svs
@@ -1479,8 +1494,9 @@ int main(int argc, char* argv[]) {
     bcf_hdr_destroy(out_vcf_header);
     bcf_hdr_destroy(in_vcf_header);
     bcf_close(in_vcf_file);
-    bcf_close(out_vcf_file);
+    if (bcf_close(out_vcf_file) != 0) throw std::runtime_error("Failed to close " + out_vcf_fname);
     delete bam_pool;
 
     tbx_index_build(out_vcf_fname.c_str(), 0, &tbx_conf_vcf);
+    sv_consensus_cache::cache().write();
 }

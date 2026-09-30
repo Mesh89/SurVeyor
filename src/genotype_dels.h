@@ -10,6 +10,7 @@
 #include "../libs/ssw_cpp.h"
 
 #include "genotype.h"
+#include "var_consensus_cache.h"
 
 
 struct del_read_alignment_targets_t {
@@ -325,14 +326,15 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     if (read_evidence.too_deep) evidence_map->clear_other_read_support_for_too_deep(del->sample_info);
 
 
+    sv_consensus_cache::session_t consensus_cache(del, {{alt_seq, alt_better_reads, sv_consensus_cache::BOTH_ANCHORS}, {ref_bp1_seq, ref_bp1_better_seqs}, {ref_bp2_seq, ref_bp2_better_seqs}});
     std::string alt_consensus_seq, ref_bp1_consensus_seq, ref_bp2_consensus_seq;
     std::string alt_untrimmed_consensus_seq;
     double alt_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds, &alt_untrimmed_consensus_seq);
-    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_seqs, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, hp_mismatch_rate_thresholds);
-    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_seqs, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds);
+    auto alt_is_consistent_read = consensus_cache.build(0, alt_avg_score, alt_stddev_score, alt_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds, &alt_untrimmed_consensus_seq); });
+    auto ref_bp1_is_consistent_read = consensus_cache.build(1, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_seqs, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, hp_mismatch_rate_thresholds); });
+    auto ref_bp2_is_consistent_read = consensus_cache.build(2, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_seqs, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds); });
 
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions);
     del->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
@@ -407,29 +409,32 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
         return metrics;
     };
 
-    if (!alt_untrimmed_consensus_seq.empty()) {
-        del->sample_info.alt_consensus1_metrics = score_del_consensus(alt_untrimmed_consensus_seq);
-    }
+    if (!consensus_cache.hit(0)) {
+        if (!alt_untrimmed_consensus_seq.empty()) {
+            del->sample_info.alt_consensus1_metrics = score_del_consensus(alt_untrimmed_consensus_seq);
+        }
 
-    if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
-        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
-        extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, del_start-GENOTYPE_CONSENSUS_EXTENSION), del_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, del_end, std::min<hts_pos_t>(contig_len, del_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        
-        alt_consensus_seq = alt_consensus->sequence;
-        
-        consensus_alignment_metrics_t extended_metrics = score_del_consensus(alt_consensus_seq);
-        del->sample_info.ext_alt_consensus1_metrics = extended_metrics;
+        if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
+            std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
+            extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, del_start-GENOTYPE_CONSENSUS_EXTENSION), del_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, del_end, std::min<hts_pos_t>(contig_len, del_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            
+            alt_consensus_seq = alt_consensus->sequence;
+            
+            consensus_alignment_metrics_t extended_metrics = score_del_consensus(alt_consensus_seq);
+            del->sample_info.ext_alt_consensus1_metrics = extended_metrics;
 
-        int lf_aln_rlen = extended_metrics.split_ref_lengths[0];
-        int rf_aln_rlen = extended_metrics.split_ref_lengths[1];
-        del->left_anchor_aln->start = del_start-lf_aln_rlen;
-        del->left_anchor_aln->end = del_start;
-        del->left_anchor_aln->seq_len = lf_aln_rlen;
-        del->right_anchor_aln->start = del_end;
-        del->right_anchor_aln->end = del_end+rf_aln_rlen;
-        del->right_anchor_aln->seq_len = rf_aln_rlen;
+            int lf_aln_rlen = extended_metrics.split_ref_lengths[0];
+            int rf_aln_rlen = extended_metrics.split_ref_lengths[1];
+            del->left_anchor_aln->start = del_start-lf_aln_rlen;
+            del->left_anchor_aln->end = del_start;
+            del->left_anchor_aln->seq_len = lf_aln_rlen;
+            del->right_anchor_aln->start = del_end;
+            del->right_anchor_aln->end = del_end+rf_aln_rlen;
+            del->right_anchor_aln->seq_len = rf_aln_rlen;
+        }
     }
+    consensus_cache.finish(del);
 
     set_bp_consensus_info(del->sample_info.alt_bp1.reads_info, alt_better_reads, alt_is_consistent_read, alt_is_exact_read, alt_avg_score, alt_stddev_score);
     set_bp_consensus_info(del->sample_info.ref_bp1.reads_info, ref_bp1_better_seqs, ref_bp1_is_consistent_read, ref_bp1_is_exact_read, ref_bp1_avg_score, ref_bp1_stddev_score);

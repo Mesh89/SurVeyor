@@ -3,6 +3,7 @@ project(SurVeyor)
 
 set(CMAKE_CXX_STANDARD 11)
 if (NATIVE)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
     message("Building with -march=native")
 endif()

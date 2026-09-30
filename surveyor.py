@@ -452,6 +452,7 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
 
 
 def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model, n_iters, generate_training_data):
+    consensus_cache_options = ""
     insertions_to_duplications_cmd = SURVEYOR_PATH + "/bin/insertions_to_duplications %s/intermediate_results/calls-raw.vcf.gz %s/intermediate_results/calls-for-genotyping.vcf.gz %s %s" % (workdir, workdir, reference_fname, workdir)
     run_cmd(insertions_to_duplications_cmd)
 
@@ -459,8 +460,11 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
     generate_read_evidence_cmd = SURVEYOR_PATH + "/bin/generate_read_evidence %s/intermediate_results/calls-for-genotyping.vcf.gz %s %s %s" % (workdir, bam_fname, reference_fname, workdir)
     run_cmd(generate_read_evidence_cmd)
 
+    if cmd_args.two_pass:
+        consensus_cache_options = " --consensus-cache " + shlex.quote(workdir + "/consensus_cache")
+        mkdir_clean(workdir + "/consensus_cache")
     genotype_cmd = SURVEYOR_PATH + "/bin/genotype %s/intermediate_results/calls-for-genotyping.vcf.gz %s/intermediate_results/calls-with-fmt.vcf.gz %s %s %s %s" % (workdir, workdir, bam_fname, reference_fname, workdir, sample_name)
-    run_cmd(genotype_cmd)
+    run_cmd(genotype_cmd + consensus_cache_options)
 
     if generate_training_data:
         separate_ins_to_dup(workdir + "/intermediate_results/calls-with-fmt.vcf.gz", workdir + "/training-data.INS_TO_DUP.vcf.gz", workdir + "/training-data.vcf.gz")
@@ -485,7 +489,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
             prev_iter_gt_file = workdir + "/intermediate_results/calls-with-gt.iter%d.vcf.gz" % (i-1)
             next_iter_fmt_file = workdir + "/intermediate_results/calls-with-fmt.iter%d.vcf.gz" % i
             genotype_cmd = SURVEYOR_PATH + "/bin/genotype %s %s %s %s %s %s --reassign-evidence" % (prev_iter_gt_file, next_iter_fmt_file, bam_fname, reference_fname, workdir, sample_name)
-            run_cmd(genotype_cmd)
+            run_cmd(genotype_cmd + consensus_cache_options)
 
             next_iter_gt_file = workdir + "/intermediate_results/calls-with-gt.iter%d.vcf.gz" % i
             Classifier.run_classifier(next_iter_fmt_file, next_iter_gt_file, workdir + "/stats.txt", ml_model, threads=cmd_args.threads)
