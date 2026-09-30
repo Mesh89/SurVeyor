@@ -1047,8 +1047,6 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
 std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
     std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read,
     const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, std::string* untrimmed_consensus_seq = nullptr);
-std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
-    const std::vector<bool>& is_eligible_read, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read);
 
 void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<bp_support_read_t>& reads,
     std::vector<bool>& is_consistent_read, std::vector<bool>& is_exact_read,

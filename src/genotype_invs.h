@@ -5,6 +5,7 @@
 #include "stat_tests.h"
 
 #include "genotype.h"
+#include "var_consensus_cache.h"
 
 void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 ext_mate_map_t& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
@@ -115,8 +116,9 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     double alt_avg_score, ref_avg_score;
     double alt_stddev_score, ref_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_is_exact_read;
-    auto alt_is_consistent_read = gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, nullptr, &alt_untrimmed_consensus_seq);
-    auto ref_is_consistent_read = gen_consensus_and_classify_seqs(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read, nullptr);
+    sv_consensus_cache::session_t consensus_cache(inv, {{alt_seq, alt_better_seqs, sv_consensus_cache::BOTH_ANCHORS, alt_better_seqs_isrc}, {ref_seq, ref_better_seqs, sv_consensus_cache::NO_ANCHORS, ref_better_seqs_isrc}});
+    auto alt_is_consistent_read = consensus_cache.build(0, alt_avg_score, alt_stddev_score, alt_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, nullptr, &alt_untrimmed_consensus_seq); });
+    auto ref_is_consistent_read = consensus_cache.build(1, ref_avg_score, ref_stddev_score, ref_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read, nullptr); });
     auto score_inv_consensus = [&](const std::string& consensus_seq) {
         alignment_targets_t targets;
         hts_pos_t target_start = std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION);
@@ -150,37 +152,40 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         return metrics;
     };
 
-    if (!alt_untrimmed_consensus_seq.empty()) {
-        inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_untrimmed_consensus_seq);
+    if (!consensus_cache.hit(0)) {
+        if (!alt_untrimmed_consensus_seq.empty()) {
+            inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_untrimmed_consensus_seq);
+        }
+
+        if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
+
+            // all we care about is the consensus sequence
+            std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
+            extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION), sv_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, sv_end, std::min<hts_pos_t>(contig_len, sv_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            alt_consensus_seq = alt_consensus->sequence;
+
+            consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_consensus_seq);
+            inv->sample_info.ext_alt_consensus1_metrics.length = extended_metrics.length;
+            inv->sample_info.ext_alt_consensus1_metrics.alt_score = extended_metrics.alt_score;
+            inv->sample_info.ext_alt_consensus1_metrics.ref_score = extended_metrics.ref_score;
+            inv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
+            inv->sample_info.ext_alt_consensus1_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
+            inv->sample_info.ext_alt_consensus1_metrics.main_edit_covered = extended_metrics.main_edit_covered;
+
+            hts_pos_t target_start = std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION);
+            int target_lf_len = sv_start-target_start;
+            int lf_aln_rlen = std::max(0, target_lf_len-extended_metrics.alt_ref_begin);
+            int rf_aln_rlen = std::max(0, extended_metrics.alt_ref_end-target_lf_len);
+            inv->left_anchor_aln->start = sv_start-lf_aln_rlen;
+            inv->left_anchor_aln->end = sv_start;
+            inv->left_anchor_aln->seq_len = lf_aln_rlen;
+            inv->right_anchor_aln->start = sv_end;
+            inv->right_anchor_aln->end = sv_end+rf_aln_rlen;
+            inv->right_anchor_aln->seq_len = rf_aln_rlen;
+        }
     }
-
-    if (alt_consensus_seq.length() >= 2*config.min_clip_len) {
-
-        // all we care about is the consensus sequence
-        std::shared_ptr<consensus_t> alt_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_consensus_seq, std::string(alt_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
-        extend_consensus_to_left(alt_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION), sv_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        extend_consensus_to_right(alt_consensus, candidate_reads_for_extension_itree, sv_end, std::min<hts_pos_t>(contig_len, sv_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        alt_consensus_seq = alt_consensus->sequence;
-
-        consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_consensus_seq);
-        inv->sample_info.ext_alt_consensus1_metrics.length = extended_metrics.length;
-        inv->sample_info.ext_alt_consensus1_metrics.alt_score = extended_metrics.alt_score;
-        inv->sample_info.ext_alt_consensus1_metrics.ref_score = extended_metrics.ref_score;
-        inv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
-        inv->sample_info.ext_alt_consensus1_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
-        inv->sample_info.ext_alt_consensus1_metrics.main_edit_covered = extended_metrics.main_edit_covered;
-
-        hts_pos_t target_start = std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION);
-        int target_lf_len = sv_start-target_start;
-        int lf_aln_rlen = std::max(0, target_lf_len-extended_metrics.alt_ref_begin);
-        int rf_aln_rlen = std::max(0, extended_metrics.alt_ref_end-target_lf_len);
-        inv->left_anchor_aln->start = sv_start-lf_aln_rlen;
-        inv->left_anchor_aln->end = sv_start;
-        inv->left_anchor_aln->seq_len = lf_aln_rlen;
-        inv->right_anchor_aln->start = sv_end;
-        inv->right_anchor_aln->end = sv_end+rf_aln_rlen;
-        inv->right_anchor_aln->seq_len = rf_aln_rlen;
-    }
+    consensus_cache.finish(inv);
 
     set_bp_consensus_info(inv->sample_info.alt_bp1.reads_info, alt_better_seqs, alt_is_consistent_read, alt_is_exact_read, alt_avg_score, alt_stddev_score);
     set_bp_consensus_info(inv->sample_info.ref_bp1.reads_info, ref_better_seqs, ref_is_consistent_read, ref_is_exact_read, ref_avg_score, ref_stddev_score);
@@ -386,27 +391,28 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     bam_destroy1(read);
     hts_itr_destroy(iter);
 
+    char* ref_bp1_seq = new char[ref_bp1_len+1];
+    strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
+    ref_bp1_seq[ref_bp1_len] = 0;
+    char* ref_bp2_seq = new char[ref_bp2_len+1];
+    strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
+    ref_bp2_seq[ref_bp2_len] = 0;
+    sv_consensus_cache::session_t consensus_cache(inv, {{alt_bp1_seq, alt_bp1_better_reads, sv_consensus_cache::LEFT_ANCHOR, alt_bp1_better_reads_isrc}, {alt_bp2_seq, alt_bp2_better_reads, sv_consensus_cache::RIGHT_ANCHOR, alt_bp2_better_reads_isrc}, {ref_bp1_seq, ref_bp1_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp1_better_reads_isrc}, {ref_bp2_seq, ref_bp2_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp2_better_reads_isrc}});
     std::string alt_bp1_consensus_seq, alt_bp2_consensus_seq, ref_bp1_consensus_seq, ref_bp2_consensus_seq;
     std::string alt_bp1_untrimmed_consensus_seq, alt_bp2_untrimmed_consensus_seq;
     double alt_bp1_avg_score, alt_bp2_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_bp1_stddev_score, alt_bp2_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_bp1_is_exact_read, alt_bp2_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_bp1_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read, nullptr, &alt_bp1_untrimmed_consensus_seq);
-    auto alt_bp2_is_consistent_read = gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read, nullptr, &alt_bp2_untrimmed_consensus_seq);
+    auto alt_bp1_is_consistent_read = consensus_cache.build(0, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(alt_bp1_seq, alt_bp1_better_reads, alt_bp1_better_reads_isrc, alt_bp1_consensus_seq, alt_bp1_avg_score, alt_bp1_stddev_score, alt_bp1_is_exact_read, nullptr, &alt_bp1_untrimmed_consensus_seq); });
+    auto alt_bp2_is_consistent_read = consensus_cache.build(1, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(alt_bp2_seq, alt_bp2_better_reads, alt_bp2_better_reads_isrc, alt_bp2_consensus_seq, alt_bp2_avg_score, alt_bp2_stddev_score, alt_bp2_is_exact_read, nullptr, &alt_bp2_untrimmed_consensus_seq); });
 
-    char* ref_bp1_seq = new char[ref_bp1_len+1];
-    strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
-    ref_bp1_seq[ref_bp1_len] = 0;
-    auto ref_bp1_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, ref_bp1_better_reads_isrc, ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, nullptr);
+    auto ref_bp1_is_consistent_read = consensus_cache.build(2, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, ref_bp1_better_reads_isrc, ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, nullptr); });
 
-    char* ref_bp2_seq = new char[ref_bp2_len+1];
-    strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
-    ref_bp2_seq[ref_bp2_len] = 0;
     inv->ref1_hp_len = longest_homopolymer_len(ref_bp1_seq, ref_bp1_len);
     inv->ref2_hp_len = longest_homopolymer_len(ref_bp2_seq, ref_bp2_len);
     inv->alt1_hp_len = longest_homopolymer_len(alt_bp1_seq, alt_bp1_len);
     inv->alt2_hp_len = longest_homopolymer_len(alt_bp2_seq, alt_bp2_len);
-    auto ref_bp2_is_consistent_read = gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, nullptr);
+    auto ref_bp2_is_consistent_read = consensus_cache.build(3, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, nullptr); });
 
     auto score_inv_consensus = [&](const std::string& consensus_seq, bool bp1) {
         hts_pos_t breakpoint = bp1 ? sv_start : sv_end;
@@ -476,63 +482,68 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         return metrics;
     };
 
-    inv->sample_info.ext_alt_consensus1_metrics.length = alt_bp1_consensus_seq.length();
-    if (!alt_bp1_untrimmed_consensus_seq.empty()) {
-        inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_bp1_untrimmed_consensus_seq, true);
+    if (!consensus_cache.hit(0)) {
+        inv->sample_info.ext_alt_consensus1_metrics.length = alt_bp1_consensus_seq.length();
+        if (!alt_bp1_untrimmed_consensus_seq.empty()) {
+            inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_bp1_untrimmed_consensus_seq, true);
+        }
+
+        if (alt_bp1_consensus_seq.length() >= 2*config.min_clip_len) {
+
+            // all we care about is the consensus sequence
+            std::shared_ptr<consensus_t> alt_bp1_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp1_consensus_seq, std::string(alt_bp1_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
+            extend_consensus_to_left(alt_bp1_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION), sv_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            extend_consensus_to_right(alt_bp1_consensus, candidate_reads_for_extension_itree, sv_start, std::min<hts_pos_t>(contig_len, sv_start+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            alt_bp1_consensus_seq = alt_bp1_consensus->sequence;
+
+            consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_bp1_consensus_seq, true);
+            inv->sample_info.ext_alt_consensus1_metrics.length = extended_metrics.length;
+            inv->sample_info.ext_alt_consensus1_metrics.alt_score = extended_metrics.alt_score;
+            inv->sample_info.ext_alt_consensus1_metrics.ref_score = extended_metrics.ref_score;
+            inv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
+            inv->sample_info.ext_alt_consensus1_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
+            inv->sample_info.ext_alt_consensus1_metrics.main_edit_covered = extended_metrics.main_edit_covered;
+
+            hts_pos_t target_start = std::max(hts_pos_t(0), sv_start-hts_pos_t(alt_bp1_consensus_seq.length()));
+            int lf_aln_rlen = std::max(0, int(sv_start-target_start)-extended_metrics.alt_ref_begin);
+            inv->left_anchor_aln->start = sv_start-lf_aln_rlen;
+            inv->left_anchor_aln->end = sv_start;
+            inv->left_anchor_aln->seq_len = lf_aln_rlen;
+        }
     }
 
-    if (alt_bp1_consensus_seq.length() >= 2*config.min_clip_len) {
+    if (!consensus_cache.hit(1)) {
+        inv->sample_info.ext_alt_consensus2_metrics.length = alt_bp2_consensus_seq.length();
+        if (!alt_bp2_untrimmed_consensus_seq.empty()) {
+            inv->sample_info.alt_consensus2_metrics = score_inv_consensus(alt_bp2_untrimmed_consensus_seq, false);
+        }
 
-        // all we care about is the consensus sequence
-        std::shared_ptr<consensus_t> alt_bp1_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp1_consensus_seq, std::string(alt_bp1_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
-        extend_consensus_to_left(alt_bp1_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_start-GENOTYPE_CONSENSUS_EXTENSION), sv_start, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        extend_consensus_to_right(alt_bp1_consensus, candidate_reads_for_extension_itree, sv_start, std::min<hts_pos_t>(contig_len, sv_start+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        alt_bp1_consensus_seq = alt_bp1_consensus->sequence;
+        if (alt_bp2_consensus_seq.length() >= 2*config.min_clip_len) {
 
-        consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_bp1_consensus_seq, true);
-        inv->sample_info.ext_alt_consensus1_metrics.length = extended_metrics.length;
-        inv->sample_info.ext_alt_consensus1_metrics.alt_score = extended_metrics.alt_score;
-        inv->sample_info.ext_alt_consensus1_metrics.ref_score = extended_metrics.ref_score;
-        inv->sample_info.ext_alt_consensus1_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
-        inv->sample_info.ext_alt_consensus1_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
-        inv->sample_info.ext_alt_consensus1_metrics.main_edit_covered = extended_metrics.main_edit_covered;
+            // all we care about is the consensus sequence
+            std::shared_ptr<consensus_t> alt_bp2_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp2_consensus_seq, std::string(alt_bp2_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
+            extend_consensus_to_left(alt_bp2_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_end-GENOTYPE_CONSENSUS_EXTENSION), sv_end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            extend_consensus_to_right(alt_bp2_consensus, candidate_reads_for_extension_itree, sv_end, std::min<hts_pos_t>(contig_len, sv_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
+            alt_bp2_consensus_seq = alt_bp2_consensus->sequence;
 
-        hts_pos_t target_start = std::max(hts_pos_t(0), sv_start-hts_pos_t(alt_bp1_consensus_seq.length()));
-        int lf_aln_rlen = std::max(0, int(sv_start-target_start)-extended_metrics.alt_ref_begin);
-        inv->left_anchor_aln->start = sv_start-lf_aln_rlen;
-        inv->left_anchor_aln->end = sv_start;
-        inv->left_anchor_aln->seq_len = lf_aln_rlen;
+            consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_bp2_consensus_seq, false);
+            inv->sample_info.ext_alt_consensus2_metrics.length = extended_metrics.length;
+            inv->sample_info.ext_alt_consensus2_metrics.alt_score = extended_metrics.alt_score;
+            inv->sample_info.ext_alt_consensus2_metrics.ref_score = extended_metrics.ref_score;
+            inv->sample_info.ext_alt_consensus2_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
+            inv->sample_info.ext_alt_consensus2_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
+            inv->sample_info.ext_alt_consensus2_metrics.main_edit_covered = extended_metrics.main_edit_covered;
+
+            hts_pos_t target_start = std::max(hts_pos_t(0), sv_end-hts_pos_t(alt_bp2_consensus_seq.length()));
+            hts_pos_t target_end = std::min(sv_end+hts_pos_t(alt_bp2_consensus_seq.length()), contig_len);
+            int target_len = target_end-target_start;
+            int rf_aln_rlen = std::max(0, int(target_end-sv_end)-(target_len-extended_metrics.alt_ref_end));
+            inv->right_anchor_aln->start = sv_end;
+            inv->right_anchor_aln->end = sv_end+rf_aln_rlen;
+            inv->right_anchor_aln->seq_len = rf_aln_rlen;
+        }
     }
-
-    inv->sample_info.ext_alt_consensus2_metrics.length = alt_bp2_consensus_seq.length();
-    if (!alt_bp2_untrimmed_consensus_seq.empty()) {
-        inv->sample_info.alt_consensus2_metrics = score_inv_consensus(alt_bp2_untrimmed_consensus_seq, false);
-    }
-
-    if (alt_bp2_consensus_seq.length() >= 2*config.min_clip_len) {
-
-        // all we care about is the consensus sequence
-        std::shared_ptr<consensus_t> alt_bp2_consensus = std::make_shared<consensus_t>(false, 0, 0, 0, alt_bp2_consensus_seq, std::string(alt_bp2_consensus_seq.length(), '!'), 0, 0, 0, 0, 0, 0);
-        extend_consensus_to_left(alt_bp2_consensus, candidate_reads_for_extension_itree, std::max<hts_pos_t>(0, sv_end-GENOTYPE_CONSENSUS_EXTENSION), sv_end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        extend_consensus_to_right(alt_bp2_consensus, candidate_reads_for_extension_itree, sv_end, std::min<hts_pos_t>(contig_len, sv_end+GENOTYPE_CONSENSUS_EXTENSION), contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq_chr, GENOTYPE_CONSENSUS_EXTENSION);
-        alt_bp2_consensus_seq = alt_bp2_consensus->sequence;
-
-        consensus_alignment_metrics_t extended_metrics = score_inv_consensus(alt_bp2_consensus_seq, false);
-        inv->sample_info.ext_alt_consensus2_metrics.length = extended_metrics.length;
-        inv->sample_info.ext_alt_consensus2_metrics.alt_score = extended_metrics.alt_score;
-        inv->sample_info.ext_alt_consensus2_metrics.ref_score = extended_metrics.ref_score;
-        inv->sample_info.ext_alt_consensus2_metrics.covered_edit_distance = extended_metrics.covered_edit_distance;
-        inv->sample_info.ext_alt_consensus2_metrics.local_alt_ref_edit_distance = extended_metrics.local_alt_ref_edit_distance;
-        inv->sample_info.ext_alt_consensus2_metrics.main_edit_covered = extended_metrics.main_edit_covered;
-
-        hts_pos_t target_start = std::max(hts_pos_t(0), sv_end-hts_pos_t(alt_bp2_consensus_seq.length()));
-        hts_pos_t target_end = std::min(sv_end+hts_pos_t(alt_bp2_consensus_seq.length()), contig_len);
-        int target_len = target_end-target_start;
-        int rf_aln_rlen = std::max(0, int(target_end-sv_end)-(target_len-extended_metrics.alt_ref_end));
-        inv->right_anchor_aln->start = sv_end;
-        inv->right_anchor_aln->end = sv_end+rf_aln_rlen;
-        inv->right_anchor_aln->seq_len = rf_aln_rlen;
-    }
+    consensus_cache.finish(inv);
 
     delete[] alt_bp1_seq;
     delete[] alt_bp2_seq;

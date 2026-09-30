@@ -153,6 +153,7 @@ struct build_input_t {
     const char* allele;
     const std::vector<std::shared_ptr<bam1_t>>& reads;
     int anchors; // Alt builds declare their anchors; reference builds own none.
+    std::vector<bool> revcomp_read;
 };
 
 class session_t {
@@ -169,10 +170,13 @@ public:
             build_t build;
             build.anchors = input.anchors;
             build.reads_hash = hash_bytes(nullptr, 0);
-            for (const auto& read : input.reads) {
+            for (size_t i = 0; i < input.reads.size(); i++) {
+                const auto& read = input.reads[i];
                 std::string name = std::string(bam_get_qname(read.get())) + (is_first_read(read.get()) ? "/1" : "/2");
                 // Include the terminator to separate names unambiguously.
                 build.reads_hash = hash_bytes(name.c_str(), name.size()+1, build.reads_hash);
+                uint8_t reverse = !input.revcomp_read.empty() && input.revcomp_read[i];
+                build.reads_hash = hash_bytes(&reverse, sizeof(reverse), build.reads_hash);
             }
             build.allele_hash = hash_bytes(input.allele, strlen(input.allele));
             pending.builds.push_back(build);

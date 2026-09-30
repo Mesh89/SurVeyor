@@ -1051,47 +1051,6 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     return is_consistent_read;
 }
 
-std::vector<bool> classify_seqs_with_ref_seq(std::string ref_seq, std::vector<std::shared_ptr<bam1_t>>& reads,
-    const std::vector<bool>& is_eligible_read, double& avg_score, double& stddev_score, std::vector<bool>& is_exact_read) {
-
-    if (reads.size() != is_eligible_read.size()) {
-        throw std::runtime_error("Read eligibility vector size mismatch.");
-    }
-
-    if (reads.empty()) {
-        avg_score = 0;
-        stddev_score = 0;
-        is_exact_read.assign(reads.size(), false);
-        return {};
-    }
-
-    std::vector<bool> is_consistent_read(reads.size(), false);
-    is_exact_read.assign(reads.size(), false);
-
-    std::vector<double> aln_scores;
-    for (int i = 0; i < reads.size(); i++) {
-        if (!is_eligible_read[i]) continue;
-        std::shared_ptr<bam1_t> read = reads[i];
-        std::string seq = get_sequence(read.get(), true);
-        if (!bam_is_mrev(read)) rc(seq);
-
-        ungapped_aln_t ungapped_aln = best_ungapped_aln(seq.c_str(), seq.length(), ref_seq.c_str(), ref_seq.length(), config.min_clip_len - 1);
-        if (ungapped_aln.query_end - ungapped_aln.query_begin <= 0) continue;
-
-        double mismatch_rate = double(ungapped_aln.mismatches)/(ungapped_aln.query_end-ungapped_aln.query_begin);
-        if (mismatch_rate <= config.max_seq_error) {
-            is_consistent_read[i] = true;
-            is_exact_read[i] = mismatch_rate == 0;
-            aln_scores.push_back(double(ungapped_aln.score)/seq.length());
-        }
-    }
-
-    avg_score = mean(aln_scores);
-    stddev_score = stddev(aln_scores);
-
-    return is_consistent_read;
-}
-
 std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_id) {
     mutex_per_chr[contig_id].lock();
     if (active_threads_per_chr[contig_id] == 0) {
@@ -1367,6 +1326,8 @@ int main(int argc, char* argv[]) {
             std::vector<sv_t*> svs;
             for (const auto& sv : dels_by_chr[contig_name]) svs.push_back(sv.get());
             for (const auto& sv : inss_by_chr[contig_name]) svs.push_back(sv.get());
+            for (const auto& sv : dups_by_chr[contig_name]) svs.push_back(sv.get());
+            for (const auto& sv : invs_by_chr[contig_name]) svs.push_back(sv.get());
             sv_consensus_cache::cache().prepare(contig_name, contig_id, svs);
         }
     }
