@@ -12,6 +12,11 @@ static s_align* ssw_avx2_scalar(const s_profile* p, const int8_t* ref, int nr,
     uint8_t *dir=NULL;
     s_align* a=(s_align*)calloc(1,sizeof(*a));
     if(!a) return NULL;
+    if(flag & SSW_REPORT_PREFIX_SCORES) {
+        a->prefix_scores=(uint16_t*)calloc(nq,sizeof(uint16_t));
+        if(!a->prefix_scores) {free(a);errno=ENOMEM;return NULL;}
+    }
+    flag &= ~SSW_REPORT_PREFIX_SCORES;
     a->ref_begin1=a->read_begin1=-1;
     h=(int*)calloc(stride,sizeof(int));
     e=(int*)calloc(stride,sizeof(int));
@@ -39,6 +44,7 @@ static s_align* ssw_avx2_scalar(const s_profile* p, const int8_t* ref, int nr,
             e[j]=eo>ee?eo:ee; f=fo>fe?fo:fe;
             int v=diagonal+p->mat[ref[i]*p->n+p->read[j-1]];
             if(v>0) d=1; else v=0;
+            if(a->prefix_scores && v>a->prefix_scores[j-1]) a->prefix_scores[j-1]=v;
             if(mstate) {mstate[j]=ml=v;fstate[j]=f;el=e[j];}
             if(e[j]>v) {v=e[j];d=2;}
             if(f>v) {v=f;d=3;}
@@ -85,7 +91,7 @@ static s_align* ssw_avx2_scalar(const s_profile* p, const int8_t* ref, int nr,
 done:
     free(h);free(e);free(columns);free(dir);free(mstate);free(fstate);return a;
 error:
-    free(h);free(e);free(columns);free(dir);free(mstate);free(fstate);free(a);return NULL;
+    free(h);free(e);free(columns);free(dir);free(mstate);free(fstate);free(a->prefix_scores);free(a);return NULL;
 }
 
 static int ssw_avx2_valid_cigar(const s_profile* p,const int8_t* ref,const s_align* a,int go,int ge) {

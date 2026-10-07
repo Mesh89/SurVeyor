@@ -224,7 +224,7 @@ static alignment_end* sw_sse2_byte (const int8_t* ref,
 												   alignment beginning point. If this score
 												   is set to 0, it will not be used */
 	 						 uint8_t bias,  /* Shift 0 point to a positive value. */
-							 int32_t maskLen) {
+							 int32_t maskLen, uint16_t* prefix_scores) {
 
     // Put the largest number of the 16 numbers in vm into m.
     #define max16(m, vm) (vm) = _mm_max_epu8((vm), _mm_srli_si128((vm), 8)); \
@@ -244,7 +244,8 @@ static alignment_end* sw_sse2_byte (const int8_t* ref,
 	/* Define 16 byte 0 vector. */
 	__m128i vZero = _mm_set1_epi32(0);
 
-	__m128i* scratch = (__m128i*) calloc(4 * (size_t)segLen, sizeof(__m128i));
+	__m128i* scratch = (__m128i*) calloc((4 + (prefix_scores != NULL)) * (size_t)segLen, sizeof(__m128i));
+	__m128i* pvPrefix = prefix_scores ? scratch + 4 * segLen : NULL;
 	__m128i* pvHStore = scratch;
 	__m128i* pvHLoad = scratch + segLen;
 	__m128i* pvE = scratch + 2 * segLen;
@@ -290,6 +291,7 @@ static alignment_end* sw_sse2_byte (const int8_t* ref,
 		for (j = 0; LIKELY(j < segLen); ++j) {
 			vH = _mm_adds_epu8(vH, _mm_load_si128(vP + j));
 			vH = _mm_subs_epu8(vH, vBias); /* vH will be always > 0 */
+			if (pvPrefix) pvPrefix[j] = _mm_max_epu8(pvPrefix[j], vH); // Exclude terminal gaps.
 
 			/* Get max from vH, vE and vF. */
 			e = _mm_load_si128(pvE + j);
@@ -372,6 +374,7 @@ end:
 		}
 	}
 
+	if (prefix_scores) for (i = 0; i < readLen; ++i) prefix_scores[i] = ((uint8_t*)pvPrefix)[(i % segLen)*16 + i / segLen];
 	free(scratch);
 
 	/* Find the most possible 2nd best alignment. */
@@ -437,7 +440,7 @@ static alignment_end* sw_sse2_word (const int8_t* ref,
 							 const uint8_t weight_gapE, /* will be used as - */
 							 const __m128i* vProfile,
 							 uint16_t terminate,
-							 int32_t maskLen) {
+							 int32_t maskLen, uint16_t* prefix_scores) {
 
 #define max8(m, vm) (vm) = _mm_max_epi16((vm), _mm_srli_si128((vm), 8)); \
 					(vm) = _mm_max_epi16((vm), _mm_srli_si128((vm), 4)); \
@@ -455,7 +458,8 @@ static alignment_end* sw_sse2_word (const int8_t* ref,
 	/* Define 16 byte 0 vector. */
 	__m128i vZero = _mm_set1_epi32(0);
 
-	__m128i* scratch = (__m128i*) calloc(4 * (size_t)segLen, sizeof(__m128i));
+	__m128i* scratch = (__m128i*) calloc((4 + (prefix_scores != NULL)) * (size_t)segLen, sizeof(__m128i));
+	__m128i* pvPrefix = prefix_scores ? scratch + 4 * segLen : NULL;
 	__m128i* pvHStore = scratch;
 	__m128i* pvHLoad = scratch + segLen;
 	__m128i* pvE = scratch + 2 * segLen;
@@ -499,6 +503,7 @@ static alignment_end* sw_sse2_word (const int8_t* ref,
 		/* inner loop to process the query sequence */
 		for (j = 0; LIKELY(j < segLen); j ++) {
 			vH = _mm_adds_epi16(vH, _mm_load_si128(vP + j));
+			if (pvPrefix) pvPrefix[j] = _mm_max_epi16(pvPrefix[j], vH); // Exclude terminal gaps.
 
 			/* Get max from vH, vE and vF. */
 			e = _mm_load_si128(pvE + j);
@@ -572,6 +577,7 @@ end:
 		}
 	}
 
+	if (prefix_scores) for (i = 0; i < readLen; ++i) prefix_scores[i] = ((uint16_t*)pvPrefix)[(i % segLen)*8 + i / segLen];
 	free(scratch);
 
 	/* Find the most possible 2nd best alignment. */
@@ -821,6 +827,11 @@ static s_align* ssw_scalar(const s_profile* p, const int8_t* ref, int nr,
     uint8_t *dir=NULL;
     s_align* a=(s_align*)calloc(1,sizeof(*a));
     if(!a) return NULL;
+    if(flag & SSW_REPORT_PREFIX_SCORES) {
+        a->prefix_scores=(uint16_t*)calloc(nq,sizeof(uint16_t));
+        if(!a->prefix_scores) {free(a);errno=ENOMEM;return NULL;}
+    }
+    flag &= ~SSW_REPORT_PREFIX_SCORES;
     a->ref_begin1=a->read_begin1=-1;
     h=(int*)calloc(stride,sizeof(int));
     e=(int*)calloc(stride,sizeof(int));
@@ -848,6 +859,7 @@ static s_align* ssw_scalar(const s_profile* p, const int8_t* ref, int nr,
             e[j]=eo>ee?eo:ee; f=fo>fe?fo:fe;
             int v=diagonal+p->mat[ref[i]*p->n+p->read[j-1]];
             if(v>0) d=1; else v=0;
+            if(a->prefix_scores && v>a->prefix_scores[j-1]) a->prefix_scores[j-1]=v;
             if(mstate) {mstate[j]=ml=v;fstate[j]=f;el=e[j];}
             if(e[j]>v) {v=e[j];d=2;}
             if(f>v) {v=f;d=3;}
@@ -894,7 +906,7 @@ static s_align* ssw_scalar(const s_profile* p, const int8_t* ref, int nr,
 done:
     free(h);free(e);free(columns);free(dir);free(mstate);free(fstate);return a;
 error:
-    free(h);free(e);free(columns);free(dir);free(mstate);free(fstate);free(a);return NULL;
+    free(h);free(e);free(columns);free(dir);free(mstate);free(fstate);free(a->prefix_scores);free(a);return NULL;
 }
 
 static int ssw_valid_cigar(const s_profile* p,const int8_t* ref,const s_align* a,int go,int ge) {
@@ -965,6 +977,11 @@ s_align* ssw_align (const s_profile* prof,
 	int8_t* read_reverse = 0;
 	cigar* path;
 	s_align* r = (s_align*)calloc(1, sizeof(s_align));
+	if (!r) return NULL;
+	if (flag & SSW_REPORT_PREFIX_SCORES) {
+		r->prefix_scores = (uint16_t*)calloc(readLen, sizeof(uint16_t));
+		if (!r->prefix_scores) { free(r); errno=ENOMEM; return NULL; }
+	}
 	r->ref_begin1 = -1;
 	r->read_begin1 = -1;
 	r->cigar = 0;
@@ -976,24 +993,24 @@ s_align* ssw_align (const s_profile* prof,
 
 	// Find the alignment scores and ending positions
 	if (prof->profile_byte) {
-		bests = sw_sse2_byte(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_byte, -1, prof->bias, maskLen);
+		bests = sw_sse2_byte(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_byte, -1, prof->bias, maskLen, r->prefix_scores);
 		if (bests[0].score == 255) {
 			free(bests);
 			__m128i* temporary = prof->profile_word ? NULL : qP_word(prof->read,prof->mat,readLen,prof->n);
-			bests = sw_sse2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, temporary ? temporary : prof->profile_word, -1, maskLen);
+			bests = sw_sse2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, temporary ? temporary : prof->profile_word, -1, maskLen, r->prefix_scores);
 			free(temporary);
 			word = 1;
 		}
 	}else if (prof->profile_word) {
-		bests = sw_sse2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_word, -1, maskLen);
+		bests = sw_sse2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_word, -1, maskLen, r->prefix_scores);
 		word = 1;
 	}else {
 		fprintf(stderr, "Please call the function ssw_init before ssw_align.\n");
-		free(r);
+		align_destroy(r);
 		return NULL;
 	}
 	if (word && bests[0].score == 32767) {
-		free(bests);free(r);
+		free(bests);align_destroy(r);
 		return ssw_scalar(prof,ref,refLen,weight_gapO,weight_gapE,flag,filters,filterd,maskLen);
 	}
 	if (bests[0].score <= 0) {
@@ -1012,16 +1029,16 @@ s_align* ssw_align (const s_profile* prof,
 		r->ref_end2 = -1;
 	}
 	free(bests);
-	if (flag == 0 || (flag == 2 && r->score1 < filters)) goto end;
+	if ((flag & ~SSW_REPORT_PREFIX_SCORES) == 0 || ((flag & ~SSW_REPORT_PREFIX_SCORES) == 2 && r->score1 < filters)) goto end;
 
 	// Find the beginning position of the best alignment.
 	read_reverse = seq_reverse(prof->read, r->read_end1);
 	if (word == 0) {
 		vP = qP_byte(read_reverse, prof->mat, r->read_end1 + 1, prof->n, prof->bias);
-		bests_reverse = sw_sse2_byte(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, prof->bias, maskLen);
+		bests_reverse = sw_sse2_byte(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, prof->bias, maskLen, NULL);
 	} else {
 		vP = qP_word(read_reverse, prof->mat, r->read_end1 + 1, prof->n);
-		bests_reverse = sw_sse2_word(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, maskLen);
+		bests_reverse = sw_sse2_word(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, maskLen, NULL);
 	}
 	free(vP);
 	free(read_reverse);
@@ -1063,7 +1080,7 @@ end:
 		s_align* exact = ssw_scalar(prof,ref,full_ref_len,weight_gapO,weight_gapE,flag,filters,filterd,maskLen);
 		/* Preserve the original secondary-score padding/masking convention. */
 		if (exact && exact->score1 == r->score1) {exact->score2=r->score2;exact->ref_end2=r->ref_end2;}
-		free(r->cigar);free(r);return exact;
+		align_destroy(r);return exact;
 	}
 	return r;
 }
@@ -1071,6 +1088,7 @@ end:
 void align_destroy (s_align* a) {
 	if (!a) return;
 	free(a->cigar);
+	free(a->prefix_scores);
 	free(a);
 }
 

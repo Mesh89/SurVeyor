@@ -61,6 +61,8 @@ void ConvertAlignment(const s_align& s_al,
                       StripedSmithWatermanAVX2::Alignment* al) {
   al->sw_score           = s_al.score1;
   al->sw_score_next_best = s_al.score2;
+  if (s_al.prefix_scores) al->prefix_scores.assign(s_al.prefix_scores, s_al.prefix_scores + query_len);
+  else al->prefix_scores.clear();
   al->ref_begin          = s_al.ref_begin1;
   al->ref_end            = s_al.ref_end1;
   al->query_begin        = s_al.read_begin1;
@@ -217,6 +219,7 @@ int CalculateNumberMismatch(
 void SetFlag(const StripedSmithWatermanAVX2::Filter& filter, uint8_t* flag) {
   if (filter.report_begin_position) *flag |= 0x08;
   if (filter.report_cigar) *flag |= 0x0f;
+  if (filter.report_prefix_scores) *flag |= SSW_REPORT_PREFIX_SCORES;
 }
 
 // http://www.cplusplus.com/faq/sequences/arrays/sizeof-array/#cpp
@@ -387,6 +390,7 @@ bool Aligner::Align(const char* query, const char* ref, const int& ref_len,
   key_builder.add_bytes(ref, ref_len > 0 ? ref_len : 0);
   key_builder.add(filter.report_begin_position);
   key_builder.add(filter.report_cigar);
+  key_builder.add(filter.report_prefix_scores);
   key_builder.add(filter.score_filter);
   key_builder.add(filter.distance_filter);
   key_builder.add(maskLen);

@@ -14,6 +14,8 @@ namespace StripedSmithWaterman {
 struct Alignment {
   uint16_t sw_score;           // The best alignment score
   uint16_t sw_score_next_best; // The next best alignment score
+  // Query-length scores ending at each base, with no terminal gap; empty unless requested.
+  std::vector<uint16_t> prefix_scores;
   int32_t  ref_begin;          // Reference begin position of the best alignment
   int32_t  ref_end;            // Reference end position of the best alignment
   int32_t  query_begin;        // Query begin position of the best alignment
@@ -27,6 +29,7 @@ struct Alignment {
   void Clear() {
     sw_score           = 0;
     sw_score_next_best = 0;
+    prefix_scores.clear();
     ref_begin          = 0;
     ref_end            = 0;
     query_begin        = 0;
@@ -48,6 +51,7 @@ struct Filter {
                                  //   If it is not set, ref_begin and query_begin are -1.
   bool report_cigar;             // Give cigar_string and cigar.
                                  //   report_begin_position is automatically TRUE.
+  bool report_prefix_scores = false; // Give Alignment::prefix_scores.
 
   // When *report_cigar* is true and alignment passes these two filters,
   //   cigar_string and cigar will be given.

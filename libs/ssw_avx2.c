@@ -210,7 +210,7 @@ static alignment_end* sw_avx2_byte (const int8_t* ref,
 												   alignment beginning point. If this score
 												   is set to 0, it will not be used */
 	 						 uint8_t bias,  /* Shift 0 point to a positive value. */
-							 int32_t maskLen) {
+							 int32_t maskLen, uint16_t* prefix_scores) {
 
     // Put the largest number of the 32 numbers in vm into m.
     #define max16(m, vm) ((m) = ssw_avx2_hmax_byte(vm))
@@ -226,7 +226,8 @@ static alignment_end* sw_avx2_byte (const int8_t* ref,
 	/* Define 32 byte 0 vector. */
 	__m256i vZero = _mm256_set1_epi32(0);
 
-	__m256i* scratch = (__m256i*) ssw_avx2_alloc(5*(size_t)segLen, 1);
+	__m256i* scratch = (__m256i*) ssw_avx2_alloc((5+(prefix_scores != NULL))*(size_t)segLen, 1);
+	__m256i* pvPrefix = prefix_scores ? scratch + 5*segLen : NULL;
 	__m256i* pvHStore = scratch;
 	__m256i* pvHLoad = scratch + segLen;
 	__m256i* pvE = scratch + 2*segLen;
@@ -276,6 +277,7 @@ static alignment_end* sw_avx2_byte (const int8_t* ref,
 		for (j = 0; LIKELY(j < segLen); ++j) {
 			vH = _mm256_adds_epu8(vH, _mm256_load_si256(vP + j));
 			vH = _mm256_subs_epu8(vH, vBias); /* vH will be always > 0 */
+			if (pvPrefix) pvPrefix[j] = _mm256_max_epu8(pvPrefix[j], vH); // Exclude terminal gaps.
 
 			/* Get max from vH, vE and vF. */
 			e = _mm256_load_si256(pvE + j);
@@ -360,6 +362,7 @@ end:
 		}
 	}
 
+	if (prefix_scores) for (i = 0; i < readLen; ++i) prefix_scores[i] = ((uint8_t*)pvPrefix)[(i % segLen)*32 + i / segLen];
 	free(scratch);
 
 	/* Find the most possible 2nd best alignment. */
@@ -425,7 +428,7 @@ static alignment_end* sw_avx2_word (const int8_t* ref,
 							 const uint8_t weight_gapE, /* will be used as - */
 							 const __m256i* vProfile,
 							 uint16_t terminate,
-							 int32_t maskLen) {
+							 int32_t maskLen, uint16_t* prefix_scores) {
 
 #define max8(m, vm) ((m) = ssw_avx2_hmax_word(vm))
 
@@ -440,7 +443,8 @@ static alignment_end* sw_avx2_word (const int8_t* ref,
 	/* Define 16 byte 0 vector. */
 	__m256i vZero = _mm256_set1_epi32(0);
 
-	__m256i* scratch = (__m256i*) ssw_avx2_alloc(5*(size_t)segLen, 1);
+	__m256i* scratch = (__m256i*) ssw_avx2_alloc((5+(prefix_scores != NULL))*(size_t)segLen, 1);
+	__m256i* pvPrefix = prefix_scores ? scratch + 5*segLen : NULL;
 	__m256i* pvHStore = scratch;
 	__m256i* pvHLoad = scratch + segLen;
 	__m256i* pvE = scratch + 2*segLen;
@@ -487,6 +491,7 @@ static alignment_end* sw_avx2_word (const int8_t* ref,
 		/* inner loop to process the query sequence */
 		for (j = 0; LIKELY(j < segLen); j ++) {
 			vH = _mm256_adds_epi16(vH, _mm256_load_si256(vP + j));
+			if (pvPrefix) pvPrefix[j] = _mm256_max_epi16(pvPrefix[j], vH); // Exclude terminal gaps.
 
 			/* Get max from vH, vE and vF. */
 			e = _mm256_load_si256(pvE + j);
@@ -562,6 +567,7 @@ end:
 		}
 	}
 
+	if (prefix_scores) for (i = 0; i < readLen; ++i) prefix_scores[i] = ((uint16_t*)pvPrefix)[(i % segLen)*16 + i / segLen];
 	free(scratch);
 
 	/* Find the most possible 2nd best alignment. */
@@ -858,6 +864,11 @@ s_align* ssw_align (const s_profile* prof,
 	int8_t* read_reverse = 0;
 	cigar* path;
 	s_align* r = (s_align*)calloc(1, sizeof(s_align));
+	if (!r) return NULL;
+	if (flag & SSW_REPORT_PREFIX_SCORES) {
+		r->prefix_scores = (uint16_t*)calloc(readLen, sizeof(uint16_t));
+		if (!r->prefix_scores) { free(r); errno=ENOMEM; return NULL; }
+	}
 	r->ref_begin1 = -1;
 	r->read_begin1 = -1;
 	r->cigar = 0;
@@ -869,24 +880,24 @@ s_align* ssw_align (const s_profile* prof,
 
 	// Find the alignment scores and ending positions
 	if (prof->profile_byte) {
-		bests = sw_avx2_byte(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_byte, -1, prof->bias, maskLen);
+		bests = sw_avx2_byte(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_byte, -1, prof->bias, maskLen, r->prefix_scores);
 		if (bests[0].score == 255) {
 			free(bests);
 			__m256i* temporary = prof->profile_word ? NULL : qP_word(prof->read,prof->mat,readLen,prof->n);
-			bests = sw_avx2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, temporary ? temporary : prof->profile_word, -1, maskLen);
+			bests = sw_avx2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, temporary ? temporary : prof->profile_word, -1, maskLen, r->prefix_scores);
 			free(temporary);
 			word = 1;
 		}
 	}else if (prof->profile_word) {
-		bests = sw_avx2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_word, -1, maskLen);
+		bests = sw_avx2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_word, -1, maskLen, r->prefix_scores);
 		word = 1;
 	}else {
 		fprintf(stderr, "Please call the function ssw_init before ssw_align.\n");
-		free(r);
+		align_destroy(r);
 		return NULL;
 	}
 	if (word && bests[0].score == 32767) {
-		free(bests);free(r);
+		free(bests);align_destroy(r);
 		return ssw_avx2_scalar(prof,ref,refLen,weight_gapO,weight_gapE,flag,filters,filterd,maskLen);
 	}
 	if (bests[0].score <= 0) {
@@ -905,7 +916,7 @@ s_align* ssw_align (const s_profile* prof,
 		r->ref_end2 = -1;
 	}
 	free(bests);
-	if (flag == 0 || (flag == 2 && r->score1 < filters)) goto end;
+	if ((flag & ~SSW_REPORT_PREFIX_SCORES) == 0 || ((flag & ~SSW_REPORT_PREFIX_SCORES) == 2 && r->score1 < filters)) goto end;
 
 	/* If the selected endpoint achieves the absolute upper bound for its
 	 * entire query prefix, positive gap-open cost forces one ungapped path.
@@ -933,10 +944,10 @@ s_align* ssw_align (const s_profile* prof,
 	read_reverse = seq_reverse(prof->read, r->read_end1);
 	if (word == 0) {
 		vP = qP_byte(read_reverse, prof->mat, r->read_end1 + 1, prof->n, prof->bias);
-		bests_reverse = sw_avx2_byte(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, prof->bias, maskLen);
+		bests_reverse = sw_avx2_byte(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, prof->bias, maskLen, NULL);
 	} else {
 		vP = qP_word(read_reverse, prof->mat, r->read_end1 + 1, prof->n);
-		bests_reverse = sw_avx2_word(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, maskLen);
+		bests_reverse = sw_avx2_word(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, maskLen, NULL);
 	}
 	free(vP);
 	free(read_reverse);
@@ -978,7 +989,7 @@ end:
 		s_align* exact=ssw_avx2_scalar(prof,ref,full_ref_len,weight_gapO,weight_gapE,flag,filters,filterd,maskLen);
 		/* Preserve SSW's secondary-score padding/masking convention. */
 		if (exact && exact->score1==r->score1) {exact->score2=r->score2;exact->ref_end2=r->ref_end2;}
-		free(r->cigar);free(r);return exact;
+		align_destroy(r);return exact;
 	}
 	return r;
 }
@@ -986,6 +997,7 @@ end:
 void align_destroy (s_align* a) {
 	if (!a) return;
 	free(a->cigar);
+	free(a->prefix_scores);
 	free(a);
 }
 

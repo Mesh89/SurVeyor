@@ -27,6 +27,7 @@ extern "C" {
 #endif	// __cplusplus
 
 #define MAPSTR "MIDNSHP=X"
+#define SSW_REPORT_PREFIX_SCORES 0x10
 #ifndef BAM_CIGAR_SHIFT
 #define BAM_CIGAR_SHIFT 4u
 #endif
@@ -63,6 +64,9 @@ typedef struct {
 	uint32_t* cigar;
 	int32_t cigarLen;
     uint16_t flag;
+	/* Optional readLen scores ending with each query base paired to a reference
+	 * base (no terminal gap), floored at zero. Freed by align_destroy. */
+	uint16_t* prefix_scores;
 } s_align;
 
 /*!	@function	Create the query profile using the query sequence.
@@ -98,7 +102,8 @@ void init_destroy (s_profile* p);
 	@param	refLen	length of the target sequence
 	@param	weight_gapO	the absolute value of gap open penalty
 	@param	weight_gapE	the absolute value of gap extension penalty
-	@param	flag	bitwise FLAG; (from high to low) bit 5: when setted as 1, function ssw_align will return the best alignment
+		@param	flag	OR with SSW_REPORT_PREFIX_SCORES to also return prefix_scores.
+						bitwise FLAG; (from high to low) bit 5: when setted as 1, function ssw_align will return the best alignment
 					beginning position; bit 6: when setted as 1, if (ref_end1 - ref_begin1 < filterd && read_end1 - read_begin1
 					< filterd), (whatever bit 5 is setted) the function will return the best alignment beginning position and
 					cigar; bit 7: when setted as 1, if the best alignment score >= filters, (whatever bit 5 is setted) the function
