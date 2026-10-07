@@ -2,7 +2,6 @@
 #define CONSENSUS_H
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -28,12 +27,25 @@ inline bool operator < (const base_score_t& bs1, const base_score_t& bs2) {
 }
 
 inline int base_to_index(char base) {
-    base = std::toupper((unsigned char) base);
-    if (base == 'A') return 0;
-    if (base == 'C') return 1;
-    if (base == 'G') return 2;
-    if (base == 'T') return 3;
-    return -1;
+    static constexpr int8_t indices[256] = {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x00
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x10
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x20
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x30
+        -1,  0, -1,  1, -1, -1, -1,  2, -1, -1, -1, -1, -1, -1, -1, -1, // 0x40: A, C, G
+        -1, -1, -1, -1,  3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x50: T
+        -1,  0, -1,  1, -1, -1, -1,  2, -1, -1, -1, -1, -1, -1, -1, -1, // 0x60: a, c, g
+        -1, -1, -1, -1,  3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x70: t
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x80
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0x90
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0xa0
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0xb0
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0xc0
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0xd0
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // 0xe0
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1  // 0xf0
+    };
+    return indices[(unsigned char) base];
 }
 
 struct strand_base_scores_t {
@@ -81,6 +93,49 @@ inline positional_consensus_t build_positional_consensus(const std::vector<std::
     consensus.qual.assign(consensus_len, '!');
     consensus.coverage.assign(consensus_len, 0);
     consensus.max_base_freq.assign(consensus_len, 0);
+
+    if (read_is_reverse.empty()) {
+        struct base_counts_t {
+            int freq[4] = {}, qual[4] = {};
+        };
+        std::vector<base_counts_t> base_counts_by_pos(consensus_len);
+        // Visit only positions covered by each read; retain full sums for voting and subtraction.
+        for (int j = 0; j < seqs.size(); j++) {
+            hts_pos_t begin = std::max<hts_pos_t>(0, read_start_offsets[j]);
+            hts_pos_t end = read_start_offsets[j] + seqs[j].length();
+            for (hts_pos_t i = begin; i < end; i++) {
+                hts_pos_t qpos = i - read_start_offsets[j];
+                int base_idx = base_to_index(seqs[j][qpos]);
+                if (base_idx < 0) continue;
+                consensus.coverage[i]++;
+                base_counts_t& counts = base_counts_by_pos[i];
+                counts.freq[base_idx]++;
+                int qual = quals[j][qpos];
+                if (subtract_opposing_qualities && qual == 255) qual = 0;
+                counts.qual[base_idx] += qual;
+            }
+        }
+
+        for (hts_pos_t i = 0; i < consensus_len; i++) {
+            const base_counts_t& counts = base_counts_by_pos[i];
+            int best = 0;
+            for (int base = 1; base < 4; base++) {
+                if (counts.qual[base] > counts.qual[best] || (counts.qual[base] == counts.qual[best] && counts.freq[base] > counts.freq[best])) best = base;
+            }
+            if (counts.freq[best] > 0) {
+                consensus.seq[i] = "ACGT"[best];
+                int qual = counts.qual[best];
+                if (subtract_opposing_qualities) {
+                    for (int base = 0; base < 4; base++) {
+                        if (base != best) qual -= counts.qual[base];
+                    }
+                }
+                consensus.qual[i] = std::max(0, std::min(qual, 40)) + 33;
+            }
+            consensus.max_base_freq[i] = counts.freq[best];
+        }
+        return consensus;
+    }
 
     for (int i = 0; i < consensus_len; i++) {
         base_score_t base_scores[4] = {base_score_t('A'), base_score_t('C'), base_score_t('G'), base_score_t('T')};

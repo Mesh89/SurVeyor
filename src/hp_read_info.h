@@ -232,10 +232,13 @@ struct hp_alignment_summary_t {
     bool hp_insertion_has_non_hp_bases = false;
 };
 
-hp_alignment_summary_t summarize_hp_alignment(const std::vector<hp_cigar_op_t>& cigar,
+void summarize_hp_alignment_into(hp_alignment_summary_t& summary, const std::vector<hp_cigar_op_t>& cigar,
     hts_pos_t ref_begin, const std::string& read_seq, hts_pair_pos_t ref_hp_range, char hp_base) {
 
-    hp_alignment_summary_t summary;
+    summary.anchors.clear();
+    summary.last_qpos_before_ref_hp = -1;
+    summary.first_qpos_after_ref_hp = -1;
+    summary.hp_insertion_has_non_hp_bases = false;
     summary.qpos_to_rpos.assign(read_seq.length(), -1);
     int qpos = 0;
     hts_pos_t rpos = ref_begin;
@@ -272,6 +275,13 @@ hp_alignment_summary_t summarize_hp_alignment(const std::vector<hp_cigar_op_t>& 
             rpos += cigar_op.len;
         }
     }
+}
+
+hp_alignment_summary_t summarize_hp_alignment(const std::vector<hp_cigar_op_t>& cigar,
+    hts_pos_t ref_begin, const std::string& read_seq, hts_pair_pos_t ref_hp_range, char hp_base) {
+
+    hp_alignment_summary_t summary;
+    summarize_hp_alignment_into(summary, cigar, ref_begin, read_seq, ref_hp_range, hp_base);
     return summary;
 }
 
@@ -529,7 +539,8 @@ hp_read_info_t calculate_hp_read_info(StripedSmithWaterman::Alignment& aln, cons
     }
 
     std::vector<hp_cigar_op_t> normalized_aln_cigar = normalized_cigar(aln);
-    hp_alignment_summary_t alignment_summary = summarize_hp_alignment(normalized_aln_cigar, aln.ref_begin, read_seq, ref_hp_range, hp_base);
+    static thread_local hp_alignment_summary_t alignment_summary;
+    summarize_hp_alignment_into(alignment_summary, normalized_aln_cigar, aln.ref_begin, read_seq, ref_hp_range, hp_base);
 
     bool hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_aln_cigar, aln.ref_begin, ref_hp_range);
     int force_resolution_max_hp_len = hp_deletion_extends_outside_hp ? ref_hp_range.end - ref_hp_range.beg : UNDEFINED_HP_LEN;
@@ -582,7 +593,8 @@ hp_read_info_t calculate_hp_read_info(bam1_t* read, hts_pair_pos_t ref_hp_range,
         force_resolution_max_hp_len = ref_hp_range.end - ref_hp_range.beg;
     }
 
-    hp_alignment_summary_t alignment_summary = summarize_hp_alignment(normalized_read_cigar, read->core.pos, read_seq, ref_hp_range, hp_base);
+    static thread_local hp_alignment_summary_t alignment_summary;
+    summarize_hp_alignment_into(alignment_summary, normalized_read_cigar, read->core.pos, read_seq, ref_hp_range, hp_base);
 
     bool hp_deletion_extends_outside_hp = cigar_has_hp_deletion_extending_outside_hp(normalized_read_cigar, read->core.pos, ref_hp_range);
     if (hp_deletion_extends_outside_hp) {

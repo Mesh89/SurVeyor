@@ -250,7 +250,7 @@ hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_position
             // The compared 3' reads are masked here; require reliable independent 5' support at this position.
             if (consensus.coverage[cpos] < MIN_SUPPORTING_READS || consensus.qual[cpos] - 33 < 40) continue;
             int tail_pos = observation.is_reverse ? observation.left_tail_len - qpos : qpos - ((int) observation.seq.length() - observation.right_tail_len) + 1;
-            auto& counts = tail_error_table[{sequenced_hp_base_idx, hp_len, tail_pos, original_quals[qpos]}];
+            auto& counts = tail_error_table[pack_hp_tail_error_key({sequenced_hp_base_idx, hp_len, tail_pos, original_quals[qpos]})];
             counts.first++;
             counts.second += read_base != consensus_base;
         }
@@ -323,9 +323,13 @@ void write_hp_tail_error_table(const hp_tail_error_table_t& table, const std::st
     fout << "# Empirical mismatches against independent 5' consensus (coverage >= 3, consensus Q >= 40); ambiguous bases and missing qualities excluded.\n";
     fout << "# HP_BASE is in sequencing orientation; HP_LEN is corrected; TAIL_POS starts at 1 next to the HP. Only observed bins are listed.\n";
     fout << "HP_BASE\tHP_LEN\tTAIL_POS\tBASE_QUAL\tOBSERVATIONS\tERRORS\tERROR_PROBABILITY\n" << std::setprecision(17);
-    for (const auto& entry : table) {
-        const auto& key = entry.first;
-        const auto& counts = entry.second;
+    std::vector<uint64_t> keys;
+    keys.reserve(table.size());
+    for (const auto& entry : table) keys.push_back(entry.first);
+    std::sort(keys.begin(), keys.end());
+    for (uint64_t packed_key : keys) {
+        auto key = unpack_hp_tail_error_key(packed_key);
+        const auto& counts = table.at(packed_key);
         fout << "ACGT"[key[0]] << "\t" << key[1] << "\t" << key[2] << "\t" << key[3] << "\t" << counts.first << "\t" << counts.second << "\t" << double(counts.second) / counts.first << "\n";
     }
     fout.close();

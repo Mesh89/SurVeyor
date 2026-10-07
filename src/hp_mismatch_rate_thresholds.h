@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "hp_read_info.h"
@@ -146,7 +148,21 @@ struct hp_read_observation_t {
 };
 
 // Key: sequenced HP base, corrected HP length, 1-based distance from HP into the 3' tail, original Phred quality.
-using hp_tail_error_table_t = std::map<std::array<int, 4>, std::pair<uint64_t, uint64_t>>; // Compared bases, mismatches.
+// Pack in that order so numeric sorting preserves the table's lexicographic output order.
+inline uint64_t pack_hp_tail_error_key(const std::array<int, 4>& key) {
+    const uint64_t position_mask = (uint64_t(1) << 27) - 1;
+    if (uint64_t(key[0]) > 3 || uint64_t(key[1]) > position_mask || uint64_t(key[2]) > position_mask || uint64_t(key[3]) > 255) {
+        throw std::out_of_range("HP tail error key does not fit in 64 bits.");
+    }
+    return (uint64_t(key[0]) << 62) | (uint64_t(key[1]) << 35) | (uint64_t(key[2]) << 8) | uint64_t(key[3]);
+}
+
+inline std::array<int, 4> unpack_hp_tail_error_key(uint64_t key) {
+    const uint64_t position_mask = (uint64_t(1) << 27) - 1;
+    return {int(key >> 62), int((key >> 35) & position_mask), int((key >> 8) & position_mask), int(key & 255)};
+}
+
+using hp_tail_error_table_t = std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>>; // Compared bases, mismatches.
 using hp_tail_quality_table_t = std::map<std::array<int, 4>, int>; // Cached Phred qualities; -1 means no calibration data.
 using hp_tail_error_bin_t = std::pair<std::array<int, 4>, std::pair<uint64_t, uint64_t>>;
 
@@ -158,7 +174,8 @@ struct hp_tail_quality_model_t {
 inline hp_tail_quality_model_t make_hp_tail_quality_model(const hp_tail_error_table_t& error_table) {
     hp_tail_quality_model_t model;
     for (const auto& entry : error_table) {
-        if (entry.second.first > 0) model.bins_by_base_and_pos[{entry.first[0], entry.first[2]}].push_back(entry);
+        auto key = unpack_hp_tail_error_key(entry.first);
+        if (entry.second.first > 0) model.bins_by_base_and_pos[{key[0], key[2]}].push_back({key, entry.second});
     }
     return model;
 }
@@ -183,7 +200,7 @@ inline hp_tail_quality_model_t read_hp_tail_quality_model(const std::string& fna
         double probability;
         if (!(row >> base >> hp_len >> tail_pos >> qual >> observations >> errors >> probability) || row >> extra || base.size() != 1 || base_to_index(base[0]) < 0 || hp_len < 0 || tail_pos < 1 || qual < 0 || qual >= 255 || observations <= 0 || errors < 0 || errors > observations || !std::isfinite(probability) || probability < 0 || probability > 1) throw std::runtime_error("Invalid HP tail calibration row in " + fname + ".");
         // Counts retain full precision and supply the weights when neighboring bins are pooled.
-        if (!table.emplace(std::array<int, 4>{base_to_index(base[0]), hp_len, tail_pos, qual}, std::make_pair(uint64_t(observations), uint64_t(errors))).second) throw std::runtime_error("Duplicate HP tail calibration bin in " + fname + ".");
+        if (!table.emplace(pack_hp_tail_error_key({base_to_index(base[0]), hp_len, tail_pos, qual}), std::make_pair(uint64_t(observations), uint64_t(errors))).second) throw std::runtime_error("Duplicate HP tail calibration bin in " + fname + ".");
     }
     if (!header_read || fin.bad()) throw std::runtime_error("Unable to read HP tail calibration table " + fname + ".");
     return make_hp_tail_quality_model(table);
@@ -364,12 +381,14 @@ inline void collect_hp_5p_blocker_evidence(open_samFile_t* alignment_file, const
 }
 
 // Use the longest query HP to select a calibration row; keep the first run on ties.
-inline std::vector<uint8_t> recalibrate_clip_read_qualities(bam1_t* read, const config_t& config, const hp_tail_quality_model_t& model, hp_tail_quality_table_t& quality_cache) {
+inline std::vector<uint8_t> recalibrate_clip_read_qualities(bam1_t* read, const config_t& config, const hp_tail_quality_model_t& model, hp_tail_quality_table_t& quality_cache, const std::string* decoded_seq = nullptr) {
     const uint8_t* bam_quals = bam_get_qual(read);
     std::vector<uint8_t> quals(bam_quals, bam_quals + read->core.l_qseq);
     std::replace(quals.begin(), quals.end(), uint8_t(255), uint8_t(0));
     if (model.bins_by_base_and_pos.empty() || is_unmapped(read) || !is_primary(read) || read->core.l_qseq <= 0) return quals;
-    std::string seq = get_sequence(read);
+    std::string read_seq;
+    if (!decoded_seq) read_seq = get_sequence(read);
+    const std::string& seq = decoded_seq ? *decoded_seq : read_seq;
     hts_pair_pos_t hp = longest_homopolymer(seq.c_str(), seq.length());
     int hp_len = hp.end - hp.beg;
     if (hp_len < MIN_REF_HP_LEN) return quals;
