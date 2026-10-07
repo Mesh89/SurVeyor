@@ -96,17 +96,28 @@ bool cluster_touches_excessive_coverage(const std::string& contig_name, const st
 struct sync_hts_reader_t {
     std::vector<open_samFile_t*> files;
     std::vector<hts_itr_t*> iters;
+    std::vector<hts_pos_t> last_positions;
+    std::vector<bool> finished;
+    std::vector<uint64_t> read_orders;
     int read_len;
-    
+
+    struct queued_read_t {
+        bam1_t* read;
+        size_t stream;
+        uint64_t order;
+    };
     struct cmp_reads {
-        bool operator()(bam1_t* r1, bam1_t* r2) {
-            return get_unclipped_start(r1) > get_unclipped_start(r2);
+        bool operator()(const queued_read_t& r1, const queued_read_t& r2) {
+            hts_pos_t start1 = get_unclipped_start(r1.read), start2 = get_unclipped_start(r2.read);
+            if (start1 != start2) return start1 > start2;
+            // Equal starts must not change order when the amount of lookahead changes.
+            if (r1.stream != r2.stream) return r1.stream > r2.stream;
+            return r1.order > r2.order;
         }
     };
-    std::priority_queue<bam1_t*, std::vector<bam1_t*>, cmp_reads> read_queue;
+    std::priority_queue<queued_read_t, std::vector<queued_read_t>, cmp_reads> read_queue;
 
     sync_hts_reader_t(std::vector<std::string> fnames, std::string region, int read_len) : read_len(read_len) {
-        std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read(bam_init1(), &bam_destroy1);
         for (std::string fname : fnames) {
             if (!file_exists(fname)) continue;
             open_samFile_t* file = new open_samFile_t(fname);
@@ -114,9 +125,9 @@ struct sync_hts_reader_t {
             hts_itr_t* iter = sam_itr_querys(file->idx, file->header, region.c_str());
             if (!iter) throw std::runtime_error("Unable to query " + region + " in " + fname);
             iters.push_back(iter);
-            if (sam_itr_next(file->file, iter, read.get()) >= 0) {
-                read_queue.push(bam_dup1(read.get()));
-            }
+            last_positions.push_back(-1);
+            finished.push_back(false);
+            read_orders.push_back(0);
         }
         fill_reads();
     }
@@ -126,9 +137,20 @@ struct sync_hts_reader_t {
         for (size_t i = 0; i < files.size(); i++) {
             open_samFile_t* file = files[i];
             hts_itr_t* iter = iters[i];
-            while (sam_itr_next(file->file, iter, read) >= 0) {
-                read_queue.push(bam_dup1(read));
-                if (read->core.pos-read_len > get_unclipped_start(read_queue.top())) break;
+            // Unread BAM positions cannot precede last_positions[i], but their
+            // unclipped starts can be up to read_len bases earlier.
+            while (!finished[i] && (read_queue.empty() || last_positions[i]-read_len <= get_unclipped_start(read_queue.top().read))) {
+                int status = sam_itr_next(file->file, iter, read);
+                if (status < -1) {
+                    bam_destroy1(read);
+                    throw std::runtime_error("Failed to read " + std::string(file->file->fn));
+                }
+                if (status < 0) {
+                    finished[i] = true;
+                    break;
+                }
+                last_positions[i] = read->core.pos;
+                read_queue.push({bam_dup1(read), i, read_orders[i]++});
             }
         }
         bam_destroy1(read);
@@ -136,7 +158,7 @@ struct sync_hts_reader_t {
 
     bool next_read(bam1_t*& next_read) {
         if (read_queue.empty()) return false;
-        next_read = read_queue.top();
+        next_read = read_queue.top().read;
         read_queue.pop();
         fill_reads();
         return true;
@@ -144,7 +166,7 @@ struct sync_hts_reader_t {
 
     ~sync_hts_reader_t() {
         while (!read_queue.empty()) {
-            bam_destroy1(read_queue.top());
+            bam_destroy1(read_queue.top().read);
             read_queue.pop();
         }
         for (hts_itr_t* iter : iters) {
