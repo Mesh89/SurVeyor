@@ -56,6 +56,7 @@ struct consensus_t {
     uint8_t max_mapq;
     hts_pos_t other_bp_lower_boundary = LOWER_BOUNDARY_NON_CALCULATED, other_bp_upper_boundary = UPPER_BOUNDARY_NON_CALCULATED;
     int clip_len, lowq_prefix, lowq_suffix;
+    int seq_bp_idx = -1; // Breakpoint in sequence coordinates; -1 when unavailable.
     int left_ext_reads = 0, right_ext_reads = 0;
     bool is_hsr = false;
 	bool extended_to_left = false, extended_to_right = false;
@@ -78,21 +79,21 @@ struct consensus_t {
         char dir;
         int max_mapq_int;
         ss >> start >> end >> breakpoint >> dir >> sequence >> qual >> fwd_reads >> rev_reads
-           >> max_mapq_int >> other_bp_lower_boundary >> other_bp_upper_boundary >> lowq_prefix >> lowq_suffix >> is_hsr;
+           >> max_mapq_int >> other_bp_lower_boundary >> other_bp_upper_boundary >> lowq_prefix >> lowq_suffix >> is_hsr >> seq_bp_idx;
         int indel_length;
         while (ss >> indel_length) cigar_indel_lengths.insert(indel_length);
         orig_start = start;
         orig_end = end;
         left_clipped = dir == 'L';
         max_mapq = (uint8_t) max_mapq_int;
-        clip_len = left_clipped ? breakpoint - start : end - breakpoint;
+        clip_len = seq_bp_idx < 0 ? 0 : (left_clipped ? seq_bp_idx : (int) sequence.length() - seq_bp_idx);
     }
 
     std::string to_string() {
         std::stringstream ss;
         ss << start << " " << end << " " << breakpoint << (left_clipped ? " L " : " R ") << sequence << " " << qual << " ";
         ss << fwd_reads << " " << rev_reads << " " << (int)max_mapq << " " << other_bp_lower_boundary << " " << other_bp_upper_boundary << " " << lowq_prefix << " " << lowq_suffix << " ";
-        ss << is_hsr;
+        ss << is_hsr << " " << seq_bp_idx;
         for (int indel_length : cigar_indel_lengths) ss << " " << indel_length;
         return ss.str();
     }

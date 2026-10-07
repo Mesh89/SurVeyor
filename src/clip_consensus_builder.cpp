@@ -692,14 +692,35 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
                 }
             }
             
-            int clip_len = left_clipped ? breakpoint-start : end-breakpoint;
-            if (is_hsr) clip_len = 0;
+            int seq_bp_idx = -1, clip_len = 0;
+            if (!is_hsr) {
+                // Use the same sequence placements as the final accepted-read consensus.
+                std::vector<hts_pos_t> read_start_offsets = get_read_start_offsets(accepted_reads, read_cache);
+                std::unordered_map<int, int> seq_bp_counts;
+                for (size_t i = 0; i < accepted_reads.size(); i++) {
+                    bam1_t* r = accepted_reads[i];
+                    if (left_clipped && is_left_clipped(r, config.min_clip_len) && r->core.pos == breakpoint) {
+                        seq_bp_counts[read_start_offsets[i] + get_left_clip_size(r)]++;
+                    } else if (!left_clipped && is_right_clipped(r, config.min_clip_len) && bam_endpos(r) == breakpoint) {
+                        seq_bp_counts[read_start_offsets[i] + r->core.l_qseq - get_right_clip_size(r)]++;
+                    }
+                }
+                int max_count = 0;
+                for (auto& p : seq_bp_counts) {
+                    if (p.second > max_count || (p.second == max_count && (left_clipped ? p.first < seq_bp_idx : p.first > seq_bp_idx))) {
+                        max_count = p.second;
+                        seq_bp_idx = p.first;
+                    }
+                }
+                clip_len = left_clipped ? seq_bp_idx : (int) consensus_seq.length() - seq_bp_idx;
+            }
 
             consensus_t* consensus = new consensus_t(left_clipped, start, breakpoint, end, consensus_seq,
                 consensus_qual, fwd_clipped, rev_clipped, clip_len, max_mapq, lowq_prefix, lowq_suffix);
             consensus->other_bp_lower_boundary = other_bp_lower_boundary;
             consensus->other_bp_upper_boundary = other_bp_upper_boundary;
             consensus->is_hsr = is_hsr;
+            consensus->seq_bp_idx = seq_bp_idx;
             consensus->cigar_indel_lengths = construction_read_indel_lengths(accepted_reads);
             consensuses.push_back(consensus);
         }

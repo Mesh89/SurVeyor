@@ -255,12 +255,19 @@ void filter_fully_contained(std::vector<consensus_t*>& consensuses) {
 
 // c1 is assumed to be to the left of c2, and neither cluster is not fully contained within the other
 void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consensus_t* target, const std::string& c1_seq, const std::string& c1_qual, const std::string& c2_seq, const std::string& c2_qual, int overlap) {
+	// Capture sequence coordinates before writing to a target that may alias either parent.
+	int c1_seq_bp_idx = c1->seq_bp_idx;
+	int c2_seq_bp_idx = c2->seq_bp_idx < 0 ? -1 : c2->seq_bp_idx - ((int) c2->sequence.length() - (int) c2_seq.length()) + (int) c1_seq.length() - overlap;
+	int seq_bp_idx;
 	if (c1->is_hsr && !c2->is_hsr) {
 		target->breakpoint = c2->breakpoint;
+		seq_bp_idx = c2_seq_bp_idx;
 	} else if (!c1->is_hsr && c2->is_hsr) {
 		target->breakpoint = c1->breakpoint;
+		seq_bp_idx = c1_seq_bp_idx;
 	} else {
 		target->breakpoint = c1->left_clipped ? c1->breakpoint : c2->breakpoint;
+		seq_bp_idx = c1->left_clipped ? c1_seq_bp_idx : c2_seq_bp_idx;
 	}
 	target->start = c1->start;
 	target->end = c2->end;
@@ -280,7 +287,8 @@ void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 	target->qual = merged_qual + c2_qual.substr(overlap);
 	target->fwd_reads = c1->fwd_reads + c2->fwd_reads;
 	target->rev_reads = c1->rev_reads + c2->rev_reads;
-	target->clip_len = 0;
+	target->seq_bp_idx = seq_bp_idx;
+	target->clip_len = seq_bp_idx < 0 ? 0 : (target->left_clipped ? seq_bp_idx : (int) target->sequence.length() - seq_bp_idx);
 	target->max_mapq = std::max(c1->max_mapq, c2->max_mapq);
 	target->other_bp_lower_boundary = std::max(c1->other_bp_lower_boundary, c2->other_bp_lower_boundary);
 	target->other_bp_upper_boundary = std::min(c1->other_bp_upper_boundary, c2->other_bp_upper_boundary);
