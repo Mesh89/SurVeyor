@@ -98,18 +98,21 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
         throw std::runtime_error("Failed to read reference " + reference_fname);
     }
 
-    hts_itr_t* iter = sam_itr_querys(bam_file.idx, bam_file.header, contig_name.c_str());
+    std::unique_ptr<hts_itr_t, decltype(&hts_itr_destroy)> iter(sam_itr_querys(bam_file.idx, bam_file.header, contig_name.c_str()), &hts_itr_destroy);
     int bam_contig_id = bam_name2id(bam_file.header, contig_name.c_str());
     if (bam_contig_id < 0) throw std::runtime_error("Contig " + contig_name + " is missing from the alignment header");
     coarse_coverage_builder_t coverage(bam_file.header->target_len[bam_contig_id], config.coverage_window_size);
     std::string coverage_dir = workspace + "/coverage";
     if (::mkdir(coverage_dir.c_str(), 0755) != 0 && errno != EEXIST) throw std::runtime_error("Failed to create " + coverage_dir);
     std::string coverage_fname = coverage_dir + "/" + std::to_string(contig_id) + ".bin";
-    if (iter == NULL) { // no reads
+    if (!iter) { // no reads
         write_coarse_coverage(coverage_fname, coverage.maxima);
     	return;
     }
 
+    // HTSlib retains these filename pointers until sam_idx_save finishes.
+    const std::string sr_index_fname = workspace + "/sr/" + std::to_string(contig_id) + ".bam.bai";
+    const std::string hsr_index_fname = workspace + "/hsr/" + std::to_string(contig_id) + ".bam.bai";
     std::unique_ptr<samFile, decltype(&hts_close)> sr_writer(nullptr, &hts_close);
     std::unique_ptr<samFile, decltype(&hts_close)> hsr_writer(nullptr, &hts_close);
     std::unique_ptr<samFile, decltype(&hts_close)> rdc_writer(nullptr, &hts_close);
@@ -131,8 +134,10 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     uint64_t sum_is = 0;
     uint32_t n_is = 0;
     
-    bam1_t* read = bam_init1();
-    while (sam_itr_next(bam_file.file, iter, read) >= 0) {
+    std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read_ptr(bam_init1(), &bam_destroy1);
+    bam1_t* read = read_ptr.get();
+    int read_status;
+    while ((read_status = sam_itr_next(bam_file.file, iter.get(), read)) >= 0) {
         if (!is_primary(read)) continue;
 
         if (is_dc_pair(read)) {
@@ -236,16 +241,33 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 		if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
 		if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_left_clipped(read, config.min_clip_len) || is_right_clipped(read, config.min_clip_len)) {
-			if (!sr_writer) sr_writer.reset(open_writer(workspace + "/sr/" + std::to_string(contig_id) + ".bam", bam_file.header));
+			if (!sr_writer) {
+				sr_writer.reset(open_writer(workspace + "/sr/" + std::to_string(contig_id) + ".bam", bam_file.header));
+				if (sam_idx_init(sr_writer.get(), bam_file.header, 0, sr_index_fname.c_str()) < 0) throw std::runtime_error("Failed to initialize index for " + std::string(sr_writer->fn));
+			}
 
 			int ok = sam_write1(sr_writer.get(), bam_file.header, read);
 			if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(sr_writer->fn));
 		} else if (is_hidden_split_read(read, config)) {
-            if (!hsr_writer) hsr_writer.reset(open_writer(workspace + "/hsr/" + std::to_string(contig_id) + ".bam", bam_file.header));
+            if (!hsr_writer) {
+                hsr_writer.reset(open_writer(workspace + "/hsr/" + std::to_string(contig_id) + ".bam", bam_file.header));
+                if (sam_idx_init(hsr_writer.get(), bam_file.header, 0, hsr_index_fname.c_str()) < 0) throw std::runtime_error("Failed to initialize index for " + std::string(hsr_writer->fn));
+            }
 
             int ok = sam_write1(hsr_writer.get(), bam_file.header, read);
             if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(hsr_writer->fn));
         } 
+    }
+
+    if (read_status < -1) throw std::runtime_error("Failed to read " + bam_fname + " on " + contig_name);
+
+    for (auto writer : {&sr_writer, &hsr_writer}) {
+        if (!*writer) continue;
+        std::string fname = (*writer)->fn;
+        int index_status = sam_idx_save(writer->get());
+        int close_status = sam_close(writer->release());
+        if (index_status < 0) throw std::runtime_error("Failed to save index for " + fname);
+        if (close_status < 0) throw std::runtime_error("Failed to close " + fname);
     }
 
     lp_mateseqs_fout.close();
@@ -295,9 +317,6 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     for (int i = 0; i <= stats.max_is; i++) {
     	isize_counts[i] += local_isize_counts[i];
     }
-
-    bam_destroy1(read);
-	hts_itr_destroy(iter);
 }
 
 void find_1_perc(std::vector<uint32_t>& v, uint32_t& min, uint32_t& max) {

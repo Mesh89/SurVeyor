@@ -249,7 +249,7 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 
 	std::vector<bam1_t*> l_semi_mapped_pairs, r_semi_mapped_pairs;
 
-	open_samFile_t* clipped_file = new open_samFile_t(clipped_fname.c_str(), true);
+	open_samFile_t* clipped_file = new open_samFile_t(clipped_fname.c_str());
 	std::string contig_name = contig_map.get_name(contig_id);
 	hts_itr_t* iter = sam_itr_querys(clipped_file->idx, clipped_file->header, contig_name.c_str());
 	bam1_t* read = bam_init1();

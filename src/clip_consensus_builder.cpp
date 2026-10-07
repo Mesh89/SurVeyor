@@ -106,18 +106,18 @@ struct sync_hts_reader_t {
     std::priority_queue<bam1_t*, std::vector<bam1_t*>, cmp_reads> read_queue;
 
     sync_hts_reader_t(std::vector<std::string> fnames, std::string region, int read_len) : read_len(read_len) {
-        bam1_t* read = bam_init1();
+        std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read(bam_init1(), &bam_destroy1);
         for (std::string fname : fnames) {
             if (!file_exists(fname)) continue;
-            open_samFile_t* file = new open_samFile_t(fname, true);
-            hts_itr_t* iter = sam_itr_querys(file->idx, file->header, region.c_str());
-            if (sam_itr_next(file->file, iter, read) >= 0) {
-                read_queue.push(bam_dup1(read));
-            }
+            open_samFile_t* file = new open_samFile_t(fname);
             files.push_back(file);
+            hts_itr_t* iter = sam_itr_querys(file->idx, file->header, region.c_str());
+            if (!iter) throw std::runtime_error("Unable to query " + region + " in " + fname);
             iters.push_back(iter);
+            if (sam_itr_next(file->file, iter, read.get()) >= 0) {
+                read_queue.push(bam_dup1(read.get()));
+            }
         }
-        bam_destroy1(read);
         fill_reads();
     }
 
