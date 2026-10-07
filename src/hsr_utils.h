@@ -5,7 +5,7 @@
 #include <unordered_set>
 #include <htslib/sam.h>
 
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "../libs/IntervalTree.h"
 #include "utils.h"
 #include "sw_utils.h"

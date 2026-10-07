@@ -7,9 +7,8 @@
 
 #include "../libs/cxxopts.h"
 #include "../libs/IntervalTree.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "../libs/cptl_stl.h"
-#include "../libs/ssw.h"
 #include "common.h"
 #include "../src/sw_utils.h"
 #include "htslib/vcf.h"

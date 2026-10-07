@@ -5,8 +5,7 @@
 #include "../src/sw_utils.h"
 #include "../src/sam_utils.h"
 #include "../src/vcf_utils.h"
-#include "../libs/ssw.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "htslib/vcf.h"
 
 chr_seqs_map_t chr_seqs;

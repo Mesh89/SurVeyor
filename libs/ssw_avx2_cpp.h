@@ -2,14 +2,14 @@
 // Created by Wan-Ping Lee
 // Last revision by Mengyao Zhao on 2017-05-30
 
-#ifndef COMPLETE_STRIPED_SMITH_WATERMAN_CPP_H_
-#define COMPLETE_STRIPED_SMITH_WATERMAN_CPP_H_
+#ifndef SSW_AVX2_CPP_H_
+#define SSW_AVX2_CPP_H_
 
 #include <stdint.h>
 #include <string>
 #include <vector>
 
-namespace StripedSmithWaterman {
+namespace StripedSmithWatermanAVX2 {
 
 struct Alignment {
   uint16_t sw_score;           // The best alignment score
@@ -226,6 +226,10 @@ inline void Aligner::CleanReferenceSequence(void) {
 
   reference_length_ = 0;
 }
-} // namespace StripedSmithWaterman
+} // namespace StripedSmithWatermanAVX2
 
-#endif // COMPLETE_STRIPED_SMITH_WATERMAN_CPP_H_
+#ifndef SSW_AVX2_NO_CPP_ALIAS
+namespace StripedSmithWaterman = StripedSmithWatermanAVX2;
+#endif
+
+#endif // SSW_AVX2_CPP_H_

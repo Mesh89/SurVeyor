@@ -3,8 +3,7 @@
 
 #include <map>
 #include "var_utils.h"
-#include "../libs/ssw.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 
 namespace haplotype_normalization {
 

@@ -24,7 +24,7 @@
 #include "sam_utils.h"
 #include "extend_1sr_consensus.h"
 #include "../libs/cptl_stl.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "vcf_utils.h"
 #include "stat_tests.h"
 #include "reference_guided_assembly.h"

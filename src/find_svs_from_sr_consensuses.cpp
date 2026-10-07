@@ -17,8 +17,7 @@
 #include <unordered_set>
 
 #include "../libs/cptl_stl.h"
-#include "../libs/ssw_cpp.h"
-#include "../libs/ssw.h"
+#include "../libs/ssw_selected.h"
 #include "../libs/IntervalTree.h"
 #include "htslib/hts.h"
 #include "sam_utils.h"

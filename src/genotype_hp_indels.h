@@ -8,7 +8,7 @@
 #include "sam_utils.h"
 #include "utils.h"
 #include "stat_tests.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 
 #include "genotype.h"
 #include "hp_read_info.h"

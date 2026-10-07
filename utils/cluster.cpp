@@ -18,8 +18,7 @@
 #include "../libs/cptl_stl.h"
 #include "../libs/cxxopts.h"
 #include "common.h"
-#include "../libs/ssw.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 
 std::mutex mtx;
 

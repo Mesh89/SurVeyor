@@ -7,7 +7,7 @@
 #include "utils.h"
 #include "stat_tests.h"
 #include "hp_mismatch_rate_thresholds.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 
 #include "genotype.h"
 #include "var_consensus_cache.h"

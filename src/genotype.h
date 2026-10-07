@@ -17,9 +17,9 @@
 #include <utility>
 #include <vector>
 
-#include "../libs/ssw_cpp.h"
-#include "extend_1sr_consensus.h"
 #include "htslib/sam.h"
+#include "../libs/ssw_selected.h"
+#include "extend_1sr_consensus.h"
 #include "sam_utils.h"
 #include "types.h"
 #include "var_utils.h"

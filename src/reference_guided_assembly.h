@@ -5,7 +5,7 @@
 #include <memory>
 #include <queue>
 
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "htslib/sam.h"
 #include "sw_utils.h"
 #include "utils.h"

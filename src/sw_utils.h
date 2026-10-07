@@ -6,8 +6,7 @@
 #include <memory>
 #include <unordered_set>
 
-#include "../libs/ssw.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "../libs/exact_cache.h"
 #include "simd_macros.h"
 #include "sam_utils.h"

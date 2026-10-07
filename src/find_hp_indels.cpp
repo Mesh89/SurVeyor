@@ -23,7 +23,7 @@
 #include "htslib/vcf.h"
 
 #include "../libs/cptl_stl.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "utils.h"
 #include "sam_utils.h"
 #include "hp_mismatch_rate_thresholds.h"

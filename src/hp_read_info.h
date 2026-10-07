@@ -8,7 +8,7 @@
 
 #include "htslib/sam.h"
 
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "genotype.h"
 #include "sw_utils.h"
 

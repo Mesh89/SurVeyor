@@ -7,8 +7,7 @@
 #include <random>
 #include <htslib/sam.h>
 
-#include "../libs/ssw.h"
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "sam_utils.h"
 #include "dc_remapper.h"
 

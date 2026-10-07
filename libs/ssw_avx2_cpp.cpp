@@ -4,8 +4,8 @@
 
 // Modified to make N mat
 
-#include "ssw_cpp.h"
-#include "ssw.h"
+#include "ssw_avx2_cpp.h"
+#include "ssw_avx2.h"
 #include "exact_cache.h"
 
 #include <sstream>
@@ -58,7 +58,7 @@ void BuildSwScoreMatrix(const uint8_t& match_score,
 
 void ConvertAlignment(const s_align& s_al,
                       const int& query_len,
-                      StripedSmithWaterman::Alignment* al) {
+                      StripedSmithWatermanAVX2::Alignment* al) {
   al->sw_score           = s_al.score1;
   al->sw_score_next_best = s_al.score2;
   al->ref_begin          = s_al.ref_begin1;
@@ -129,7 +129,7 @@ void CleanPreviousMOperator(
 // @Return:
 //     The number of mismatches.
 int CalculateNumberMismatch(
-    StripedSmithWaterman::Alignment* al,
+    StripedSmithWatermanAVX2::Alignment* al,
     int8_t const *ref,
     int8_t const *query,
     const int& query_len) {
@@ -214,7 +214,7 @@ int CalculateNumberMismatch(
   return mismatch_length;
 }
 
-void SetFlag(const StripedSmithWaterman::Filter& filter, uint8_t* flag) {
+void SetFlag(const StripedSmithWatermanAVX2::Filter& filter, uint8_t* flag) {
   if (filter.report_begin_position) *flag |= 0x08;
   if (filter.report_cigar) *flag |= 0x0f;
 }
@@ -230,7 +230,7 @@ inline size_t SizeOfArray( const T(&)[ N ] )
 
 
 
-namespace StripedSmithWaterman {
+namespace StripedSmithWatermanAVX2 {
 
 Aligner::Aligner(void)
     : score_matrix_(NULL)
@@ -519,4 +519,4 @@ void Aligner::ClearMatrices(void) {
   translation_matrix_ = NULL;
   translation_matrix_size_ = 0;
 }
-} // namespace StripedSmithWaterman
+} // namespace StripedSmithWatermanAVX2

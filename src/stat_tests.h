@@ -7,7 +7,7 @@
 #include <htslib/sam.h>
 #include <unordered_map>
 
-#include "../libs/ssw_cpp.h"
+#include "../libs/ssw_selected.h"
 #include "../libs/ks-test.h"
 #include "genotype.h"
 #include "htslib/hts.h"
