@@ -8,6 +8,8 @@
 #include <cmath>
 #include <random>
 #include <memory>
+#include <cerrno>
+#include <sys/stat.h>
 
 #include "htslib/faidx.h"
 
@@ -15,6 +17,7 @@
 #include "htslib/sam.h"
 #include "sam_utils.h"
 #include "utils.h"
+#include "coarse_coverage.h"
 #include "../libs/cptl_stl.h"
 
 const int MIN_RND_POS = 1000;
@@ -96,7 +99,14 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     }
 
     hts_itr_t* iter = sam_itr_querys(bam_file.idx, bam_file.header, contig_name.c_str());
+    int bam_contig_id = bam_name2id(bam_file.header, contig_name.c_str());
+    if (bam_contig_id < 0) throw std::runtime_error("Contig " + contig_name + " is missing from the alignment header");
+    coarse_coverage_builder_t coverage(bam_file.header->target_len[bam_contig_id], config.coverage_window_size);
+    std::string coverage_dir = workspace + "/coverage";
+    if (::mkdir(coverage_dir.c_str(), 0755) != 0 && errno != EEXIST) throw std::runtime_error("Failed to create " + coverage_dir);
+    std::string coverage_fname = coverage_dir + "/" + std::to_string(contig_id) + ".bin";
     if (iter == NULL) { // no reads
+        write_coarse_coverage(coverage_fname, coverage.maxima);
     	return;
     }
 
@@ -191,6 +201,8 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 
         if (is_unmapped(read)) continue;
 
+        coverage.add_alignment(read->core.pos, bam_endpos(read));
+
         while (curr_pos < rnd_positions.size() && read->core.pos > rnd_positions[curr_pos]) curr_pos++;
 
         // sample depth
@@ -239,6 +251,9 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     lp_mateseqs_fout.close();
     ow_mateseqs_fout.close();
     ss_mateseqs_fout.close();
+
+    coverage.finish();
+    write_coarse_coverage(coverage_fname, coverage.maxima);
 
     local_depths.erase(std::remove(local_depths.begin(), local_depths.end(), 0), local_depths.end());
 

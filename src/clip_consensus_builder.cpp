@@ -22,6 +22,7 @@
 #include "assemble.h"
 #include "consensus.h"
 #include "hp_mismatch_rate_thresholds.h"
+#include "coarse_coverage.h"
 #include "../libs/cptl_stl.h"
 
 std::mutex mtx;
@@ -33,6 +34,16 @@ hp_tail_quality_model_t hp_tail_quality_model;
 
 std::unordered_map<std::string, int> detected_svs_count;
 std::unordered_set<std::string> detected_svs_count_is_hq;
+std::unordered_map<std::string, coarse_coverage_track_t> coverage_tracks;
+
+bool cluster_touches_excessive_coverage(const std::string& contig_name, const std::deque<bam1_t*>& clipped) {
+    const auto& tracks = coverage_tracks;
+    auto track = tracks.find(contig_name);
+    if (track == tracks.end() || clipped.empty()) return false;
+    uint64_t threshold = uint64_t(20)*stats.get_max_depth(contig_name);
+    for (bam1_t* read : clipped) if (track->second.exceeds(read->core.pos, bam_endpos(read), threshold)) return true;
+    return false;
+}
 
 struct sync_hts_reader_t {
     std::vector<open_samFile_t*> files;
@@ -487,6 +498,7 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
     if (clipped.size() <= 2 || clipped.size() > 20*stats.get_max_depth(contig_name)) {
         return {};
     }
+    if (cluster_touches_excessive_coverage(contig_name, clipped)) return {};
 
     std::deque<bam1_t*> orig_clipped = clipped;
 
@@ -796,6 +808,10 @@ int main(int argc, char* argv[]) {
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
     contigs.read_fasta_into_map(reference_fname);
+    for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
+        std::string contig_name = contig_map.get_name(contig_id);
+        coverage_tracks.emplace(contig_name, read_coarse_coverage(workspace + "/coverage/" + std::to_string(contig_id) + ".bin", contigs.get_len(contig_name), config.coverage_window_size));
+    }
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
     hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);

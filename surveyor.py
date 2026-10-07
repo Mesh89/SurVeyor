@@ -25,6 +25,7 @@ call_genotype_shared_options_parser.add_argument('--seed', type=int, default=0, 
 call_genotype_shared_options_parser.add_argument('--max-seq-error', type=float, default=0.04, help='Max sequencing error admissible on the platform used.')
 call_genotype_shared_options_parser.add_argument('--min-sv-size', type=valid_min_sv_size, default=50, help='Min SV size.')
 call_genotype_shared_options_parser.add_argument('--min-clip-len', type=int, default=10, help='Min length for a clip to be used.')
+call_genotype_shared_options_parser.add_argument('--coverage-window-size', type=valid_min_sv_size, default=1000, help='Window size in bp for the coarse maximum-coverage track.')
 call_genotype_shared_options_parser.add_argument('--sampling-regions', help='File in BED format containing regions to be used to estimate statistics such as depth.')
 call_genotype_shared_options_parser.add_argument('--min-stable-mapq', type=int, default=20, help='Minimum MAPQ for a stable read.')
 call_genotype_shared_options_parser.add_argument('--high-confidence-mapq', type=int, default=60, help='MAPQ threshold above which a read is considered high-confidence.')
@@ -331,6 +332,7 @@ def reads_categorizer(workdir):
         config_file.write("seed %d\n" % cmd_args.seed)
         config_file.write("min_sv_size %s\n" % cmd_args.min_sv_size)
         config_file.write("min_clip_len %s\n" % cmd_args.min_clip_len)
+        config_file.write("coverage_window_size %s\n" % cmd_args.coverage_window_size)
         config_file.write("max_seq_error %s\n" % cmd_args.max_seq_error)
         if cmd_args.sampling_regions:
             config_file.write("sampling_regions %s\n" % cmd_args.sampling_regions)
@@ -354,6 +356,7 @@ def reads_categorizer(workdir):
     mkdir_clean(workdir + "/workspace/outward-pairs")
     mkdir_clean(workdir + "/workspace/same-strand")
     mkdir_clean(workdir + "/workspace/mateseqs")
+    mkdir_clean(workdir + "/workspace/coverage")
 
     with open("%s/contig_map" % workdir, "w") as contig_map:
         bam_file = pysam.AlignmentFile(cmd_args.bam_file, reference_filename=cmd_args.reference)

@@ -25,6 +25,7 @@ struct config_t {
 
     int threads, seed;
     int min_clip_len, min_stable_mapq, min_diff_hsr;
+    int coverage_window_size = 1000;
     int high_confidence_mapq;
     int min_sv_size, max_trans_size;
     double max_seq_error;
@@ -48,6 +49,7 @@ struct config_t {
         threads = std::stoi(config_params["threads"]);
         seed = std::stoi(config_params["seed"]);
         min_clip_len = std::stoi(config_params["min_clip_len"]);
+        if (config_params.count("coverage_window_size")) coverage_window_size = std::stoi(config_params["coverage_window_size"]);
         min_stable_mapq = std::stoi(config_params["min_stable_mapq"]);
         high_confidence_mapq = std::stoi(config_params["high_confidence_mapq"]);
         min_diff_hsr = std::stoi(config_params["min_diff_hsr"]);
