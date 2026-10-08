@@ -225,6 +225,22 @@ struct chr_seqs_map_t {
 
     void read_lens_into_map(std::string& reference_fname) {
         ordered_contigs.clear();
+        std::ifstream fai(reference_fname + ".fai");
+        if (fai) {
+            std::string line;
+            while (std::getline(fai, line)) {
+                std::istringstream ss(line);
+                std::string seq_name;
+                hts_pos_t seq_len;
+                if (!(ss >> seq_name >> seq_len) || seq_len < 0) {
+                    throw std::runtime_error("Invalid FASTA index " + reference_fname + ".fai");
+                }
+                if (seqs.count(seq_name)) delete seqs[seq_name];
+                seqs[seq_name] = new chr_seq_t(NULL, seq_len);
+                ordered_contigs.push_back(seq_name);
+            }
+            return;
+        }
         FILE* fasta = fopen(reference_fname.c_str(), "r");
         kseq_t* seq = kseq_init(fileno(fasta));
         while (kseq_read(seq) >= 0) {
