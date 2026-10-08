@@ -100,6 +100,7 @@ struct sync_hts_reader_t {
     std::vector<bool> finished;
     std::vector<uint64_t> read_orders;
     int read_len;
+    std::unique_ptr<bam1_t, decltype(&bam_destroy1)> scratch_read{bam_init1(), &bam_destroy1};
 
     struct queued_read_t {
         bam1_t* read;
@@ -133,7 +134,7 @@ struct sync_hts_reader_t {
     }
 
     void fill_reads() {
-        bam1_t* read = bam_init1();
+        bam1_t* read = scratch_read.get();
         for (size_t i = 0; i < files.size(); i++) {
             open_samFile_t* file = files[i];
             hts_itr_t* iter = iters[i];
@@ -142,7 +143,6 @@ struct sync_hts_reader_t {
             while (!finished[i] && (read_queue.empty() || last_positions[i]-read_len <= get_unclipped_start(read_queue.top().read))) {
                 int status = sam_itr_next(file->file, iter, read);
                 if (status < -1) {
-                    bam_destroy1(read);
                     throw std::runtime_error("Failed to read " + std::string(file->file->fn));
                 }
                 if (status < 0) {
@@ -153,7 +153,6 @@ struct sync_hts_reader_t {
                 read_queue.push({bam_dup1(read), i, read_orders[i]++});
             }
         }
-        bam_destroy1(read);
     }
 
     bool next_read(bam1_t*& next_read) {
