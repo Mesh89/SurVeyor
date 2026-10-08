@@ -15,6 +15,7 @@
 
 #include "htslib/hts.h"
 #include "htslib/sam.h"
+#include "htslib/thread_pool.h"
 #include "sam_utils.h"
 #include "utils.h"
 #include "coarse_coverage.h"
@@ -29,6 +30,7 @@ std::string reference_fname;
 config_t config;
 stats_t stats;
 chr_seqs_map_t chr_seqs;
+htsThreadPool hts_pool = {NULL, 0};
 
 std::mutex mtx;
 std::mutex* mtx_contig;
@@ -97,6 +99,9 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     if (hts_set_fai_filename(bam_file.file, fai_path(reference_fname.c_str())) != 0) {
         throw std::runtime_error("Failed to read reference " + reference_fname);
     }
+    if (hts_set_opt(bam_file.file, HTS_OPT_THREAD_POOL, &hts_pool) != 0) {
+        throw std::runtime_error("Failed to set thread pool for " + bam_fname);
+    }
 
     std::unique_ptr<hts_itr_t, decltype(&hts_itr_destroy)> iter(sam_itr_querys(bam_file.idx, bam_file.header, contig_name.c_str()), &hts_itr_destroy);
     int bam_contig_id = bam_name2id(bam_file.header, contig_name.c_str());
@@ -143,11 +148,11 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
         if (is_dc_pair(read)) {
             if (is_stable_end(read, config)) {
                 if (bam_is_rev(read)) {
-                    if (!ldc_writer) ldc_writer.reset(open_writer(workspace + "/rev-stable/" + std::to_string(contig_id) + ".noremap.bam", bam_file.header));
+                    if (!ldc_writer) ldc_writer.reset(open_writer_mt(workspace + "/rev-stable/" + std::to_string(contig_id) + ".noremap.bam", bam_file.header, &hts_pool));
                     int ok = sam_write1(ldc_writer.get(), bam_file.header, read);
                     if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(ldc_writer->fn));
                 } else {
-                    if (!rdc_writer) rdc_writer.reset(open_writer(workspace + "/fwd-stable/" + std::to_string(contig_id) + ".noremap.bam", bam_file.header));
+                    if (!rdc_writer) rdc_writer.reset(open_writer_mt(workspace + "/fwd-stable/" + std::to_string(contig_id) + ".noremap.bam", bam_file.header, &hts_pool));
                     int ok = sam_write1(rdc_writer.get(), bam_file.header, read);
                     if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(rdc_writer->fn));
                 }
@@ -173,7 +178,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
         if (is_samechr(read)) {
         	if (is_long(read, stats.max_is)) {
                 if (read->core.isize > 0) {
-                    if (!lp_writer) lp_writer.reset(open_writer(workspace + "/long-pairs/" + std::to_string(contig_id) + ".bam", bam_file.header));
+                    if (!lp_writer) lp_writer.reset(open_writer_mt(workspace + "/long-pairs/" + std::to_string(contig_id) + ".bam", bam_file.header, &hts_pool));
 
                     int ok = sam_write1(lp_writer.get(), bam_file.header, read);
                     if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(lp_writer->fn));
@@ -183,7 +188,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
                 }
             } else if (is_outward(read)) {
                 if (read->core.isize > 0) {
-                    if (!ow_writer) ow_writer.reset(open_writer(workspace + "/outward-pairs/" + std::to_string(contig_id) + ".bam", bam_file.header));
+                    if (!ow_writer) ow_writer.reset(open_writer_mt(workspace + "/outward-pairs/" + std::to_string(contig_id) + ".bam", bam_file.header, &hts_pool));
 
                     int ok = sam_write1(ow_writer.get(), bam_file.header, read);
                     if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(ow_writer->fn));
@@ -193,7 +198,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
                 }
             } else if (is_samestr(read)) {
                 if (read->core.pos < read->core.mpos) {
-                    if (!ss_writer) ss_writer.reset(open_writer(workspace + "/same-strand/" + std::to_string(contig_id) + ".bam", bam_file.header));
+                    if (!ss_writer) ss_writer.reset(open_writer_mt(workspace + "/same-strand/" + std::to_string(contig_id) + ".bam", bam_file.header, &hts_pool));
 
                     int ok = sam_write1(ss_writer.get(), bam_file.header, read);
                     if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(ss_writer->fn));
@@ -242,7 +247,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 		if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_left_clipped(read, config.min_clip_len) || is_right_clipped(read, config.min_clip_len)) {
 			if (!sr_writer) {
-				sr_writer.reset(open_writer(workspace + "/sr/" + std::to_string(contig_id) + ".bam", bam_file.header));
+				sr_writer.reset(open_writer_mt(workspace + "/sr/" + std::to_string(contig_id) + ".bam", bam_file.header, &hts_pool));
 				if (sam_idx_init(sr_writer.get(), bam_file.header, 0, sr_index_fname.c_str()) < 0) throw std::runtime_error("Failed to initialize index for " + std::string(sr_writer->fn));
 			}
 
@@ -250,7 +255,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 			if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(sr_writer->fn));
 		} else if (is_hidden_split_read(read, config)) {
             if (!hsr_writer) {
-                hsr_writer.reset(open_writer(workspace + "/hsr/" + std::to_string(contig_id) + ".bam", bam_file.header));
+                hsr_writer.reset(open_writer_mt(workspace + "/hsr/" + std::to_string(contig_id) + ".bam", bam_file.header, &hts_pool));
                 if (sam_idx_init(hsr_writer.get(), bam_file.header, 0, hsr_index_fname.c_str()) < 0) throw std::runtime_error("Failed to initialize index for " + std::string(hsr_writer->fn));
             }
 
@@ -441,6 +446,8 @@ int main(int argc, char* argv[]) {
     dist_between_end_and_rnd.resize(stats.max_is+1);
 
     // Categorize reads
+    hts_pool.pool = hts_tpool_init(config.threads);
+    if (hts_pool.pool == NULL) throw std::runtime_error("Failed to initialize HTSlib thread pool");
     ctpl::thread_pool categorize_thread_pool(config.threads);
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
         std::string contig_name = contig_map.get_name(contig_id);
@@ -451,6 +458,8 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < futures.size(); i++) {
         futures[i].get();
     }
+    hts_tpool_destroy(hts_pool.pool);
+    hts_pool.pool = NULL;
 
     if (depths.size() < MIN_RND_POS) {
         throw std::runtime_error(

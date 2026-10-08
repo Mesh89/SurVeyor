@@ -388,6 +388,22 @@ samFile* open_writer(std::string filename, bam_hdr_t* header) {
     return writer;
 }
 
+samFile* open_writer_mt(std::string filename, bam_hdr_t* header, htsThreadPool* pool) {
+    samFile* writer = sam_open(filename.c_str(), "wb");
+    if (writer == NULL) {
+        throw std::runtime_error("Unable to open " + filename);
+    }
+    if (hts_set_opt(writer, HTS_OPT_THREAD_POOL, pool) != 0) {
+        sam_close(writer);
+        throw std::runtime_error("Failed to set thread pool for " + filename);
+    }
+    if (sam_hdr_write(writer, header) != 0) {
+        sam_close(writer);
+        throw std::runtime_error("Could not write file " + filename);
+    }
+    return writer;
+}
+
 void write_and_index_file(std::vector<bam1_t*>& reads, std::string path, bam_hdr_t* header) {
     samFile* file = open_writer(path, header);
     if (file == NULL) {
