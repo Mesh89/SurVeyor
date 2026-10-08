@@ -134,6 +134,9 @@ static void load_extension_mates(const std::string& fname, ext_mate_map_t& mates
 
 void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* consensuses, std::string contig_name, int start_idx, int end_idx, bool extend_in_clip_direction) {
 
+	if (start_idx == end_idx) return;
+	const int MAX_EXTENSION_LEN = 500;
+	hts_pos_t contig_len = chr_seqs.get_len(contig_name);
 	int contig_id = contig_map.get_id(contig_name);
 	mutex_per_chr[contig_id].lock();
 	if (active_threads_per_chr[contig_id] == 0) {
@@ -144,6 +147,14 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 	mutex_per_chr[contig_id].unlock();
 
 	std::vector<std::shared_ptr<consensus_t>> consensuses_to_consider(consensuses->begin()+start_idx, consensuses->begin()+end_idx);
+	std::vector<hts_pair_pos_t> target_ivals;
+	for (const auto& consensus : consensuses_to_consider) {
+		if (consensus->left_clipped != extend_in_clip_direction) {
+			target_ivals.push_back({std::max<hts_pos_t>(0, consensus->right_ext_target_start(stats.max_is, stats.read_len)), std::min(contig_len, consensus->right_ext_target_end(stats.max_is, stats.read_len, MAX_EXTENSION_LEN))});
+		} else {
+			target_ivals.push_back({std::max<hts_pos_t>(0, consensus->left_ext_target_start(stats.max_is, stats.read_len, MAX_EXTENSION_LEN)), std::min(contig_len, consensus->left_ext_target_end(stats.max_is, stats.read_len))});
+		}
+	}
 
 	static thread_local std::unique_ptr<open_samFile_t> bam_file = []() {
 		std::unique_ptr<open_samFile_t> file(new open_samFile_t(complete_bam_fname));
@@ -153,7 +164,9 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 		}
 		return file;
 	}();
-	std::vector<ext_read_t*> candidate_reads_for_extension = get_extension_reads_from_consensuses(consensuses_to_consider, contig_name, chr_seqs.get_len(contig_name), config, stats, bam_file.get());
+	// The loader sorts its intervals; retain the original order for each consensus's extension.
+	std::vector<hts_pair_pos_t> read_target_ivals = target_ivals;
+	std::vector<ext_read_t*> candidate_reads_for_extension = get_extension_reads(contig_name, read_target_ivals, contig_len, config, stats, bam_file.get());
 	if (!candidate_reads_for_extension.empty()) {
 		std::vector<Interval<ext_read_t*>> it_ivals;
 		for (ext_read_t* ext_read : candidate_reads_for_extension) {
@@ -161,13 +174,13 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 			it_ivals.push_back(it_ival);
 		}
 		IntervalTree<ext_read_t*> candidate_reads_for_extension_itree(it_ivals);
-		for (std::shared_ptr<consensus_t> consensus : consensuses_to_consider) {
+		for (size_t i = 0; i < consensuses_to_consider.size(); i++) {
+			std::shared_ptr<consensus_t> consensus = consensuses_to_consider[i];
+			const hts_pair_pos_t& target_ival = target_ivals[i];
 			if (consensus->left_clipped != extend_in_clip_direction) {
-				extend_consensus_to_right(consensus, candidate_reads_for_extension_itree, consensus->right_ext_target_start(stats.max_is, stats.read_len), 
-					consensus->right_ext_target_end(stats.max_is, stats.read_len), chr_seqs.get_len(contig_name), config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id], 500);
+				extend_consensus_to_right(consensus, candidate_reads_for_extension_itree, target_ival.beg, target_ival.end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id], MAX_EXTENSION_LEN);
 			} else {
-				extend_consensus_to_left(consensus, candidate_reads_for_extension_itree, consensus->left_ext_target_start(stats.max_is, stats.read_len), 
-					consensus->left_ext_target_end(stats.max_is, stats.read_len), chr_seqs.get_len(contig_name), config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id], 500);
+				extend_consensus_to_left(consensus, candidate_reads_for_extension_itree, target_ival.beg, target_ival.end, contig_len, config.high_confidence_mapq, stats, mateseqs_w_mapq[contig_id], MAX_EXTENSION_LEN);
 			}
 		}
 		for (ext_read_t* ext_read : candidate_reads_for_extension) delete ext_read;

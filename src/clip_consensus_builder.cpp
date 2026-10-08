@@ -783,16 +783,6 @@ bool reads_belong_to_same_cluster(bam1_t* r1, bam1_t* r2) {
     return overlap(get_unclipped_start(r1), get_unclipped_end(r1), get_unclipped_start(r2), get_unclipped_end(r2)) >= std::min(r1->core.l_qseq, r2->core.l_qseq)/2;
 }
 
-void drop_invalid_other_bp_intervals(std::vector<consensus_t*>& consensuses) {
-    for (consensus_t*& consensus : consensuses) {
-        if (consensus->other_bp_lower_boundary > consensus->other_bp_upper_boundary) {
-            delete consensus;
-            consensus = nullptr;
-        }
-    }
-    consensuses.erase(std::remove(consensuses.begin(), consensuses.end(), nullptr), consensuses.end());
-}
-
 struct clip_read_t {
     bam1_t* read;
     // Adjacent windows share read-only BAM records and only ever set this flag.
@@ -874,9 +864,6 @@ void write_consensuses(std::string contig_name, std::string clip_fname, std::vec
     merge_overlapping_clusters(rc_consensuses, stats.read_len/2);
     merge_overlapping_clusters(lc_consensuses, stats.read_len/2);
 
-    drop_invalid_other_bp_intervals(rc_consensuses);
-    drop_invalid_other_bp_intervals(lc_consensuses);
-
     filter_poly_g_tail_consensuses(rc_consensuses, contigs.get_seq(contig_name), contigs.get_len(contig_name), config);
     filter_poly_g_tail_consensuses(lc_consensuses, contigs.get_seq(contig_name), contigs.get_len(contig_name), config);
 
@@ -916,7 +903,7 @@ int main(int argc, char* argv[]) {
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
-    contigs.read_fasta_into_map(reference_fname);
+    contigs.read_fasta_into_map(reference_fname, true, config.threads);
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
         std::string contig_name = contig_map.get_name(contig_id);
         coverage_tracks.emplace(contig_name, read_coarse_coverage(workspace + "/coverage/" + std::to_string(contig_id) + ".bin", contigs.get_len(contig_name), config.coverage_window_size));

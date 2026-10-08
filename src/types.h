@@ -100,14 +100,15 @@ struct consensus_t {
 
     int reads() { return fwd_reads + rev_reads; }
 
-    hts_pos_t left_ext_target_start(int max_is, int read_len) {
+    hts_pos_t left_ext_target_start(int max_is, int read_len, int max_extension_len = INT32_MAX) {
+        int extension_len = std::min(max_is-read_len, max_extension_len);
     	if (!left_clipped) {
-    		return start - max_is + read_len;
+    		return start - extension_len;
     	} else {
     		if (other_bp_lower_boundary == consensus_t::LOWER_BOUNDARY_NON_CALCULATED) { // could not calculate the remap boundary, fall back to formula
-				return breakpoint - max_is + read_len;
+				return breakpoint - extension_len;
 			} else {
-				return other_bp_lower_boundary - max_is + read_len;
+				return other_bp_lower_boundary - extension_len;
 			}
     	}
     }
@@ -134,15 +135,16 @@ struct consensus_t {
 			return end;
 		}
 	}
-    hts_pos_t right_ext_target_end(int max_is, int read_len) {
+    hts_pos_t right_ext_target_end(int max_is, int read_len, int max_extension_len = INT32_MAX) {
+        int extension_len = std::min(max_is-read_len, max_extension_len);
     	if (!left_clipped) {
 			if (other_bp_upper_boundary == consensus_t::UPPER_BOUNDARY_NON_CALCULATED) {
-				return breakpoint + max_is - read_len;
+				return breakpoint + extension_len;
 			} else {
-				return other_bp_upper_boundary + max_is - read_len;
+				return other_bp_upper_boundary + extension_len;
 			}
 		} else {
-			return end + max_is - read_len;
+			return end + extension_len;
 		}
     }
 

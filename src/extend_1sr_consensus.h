@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <queue>
 #include <stack>
+#include <tuple>
 #include <vector>
 
 #include "../libs/IntervalTree.h"
@@ -554,6 +555,8 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 		std::vector<int>& read_mapqs, std::vector<hts_pos_t>& read_starts, ext_mate_map_t& mateseqs_w_mapq,
 		hts_pos_t target_start, hts_pos_t target_end, hts_pos_t contig_len, int high_confidence_mapq, stats_t& stats, int max_reads = INT32_MAX) {
 
+	if (target_end < target_start) return;
+
 	hts_pos_t fwd_mates_start = std::max(hts_pos_t(1), target_start-stats.max_is+stats.read_len);
 	hts_pos_t fwd_mates_end = std::max(hts_pos_t(1), target_end-stats.min_is);
 
@@ -561,7 +564,10 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 	hts_pos_t rev_mates_end = std::min(target_end+stats.max_is-stats.read_len, contig_len);
 	
 	std::vector<Interval<ext_read_t*> > target_reads = candidate_reads_itree.findOverlapping(
-		std::min(fwd_mates_start, rev_mates_start)-10, std::max(fwd_mates_end, rev_mates_end)+10);
+		std::max<hts_pos_t>(0, std::min(fwd_mates_start, rev_mates_start)-10), std::max(fwd_mates_end, rev_mates_end)+10);
+	std::sort(target_reads.begin(), target_reads.end(), [](const Interval<ext_read_t*>& a, const Interval<ext_read_t*>& b) {
+		return std::tie(a.value->start, a.value->end, a.value->rev, a.value->qname, a.value->mapq) < std::tie(b.value->start, b.value->end, b.value->rev, b.value->qname, b.value->mapq);
+	});
 	for (Interval<ext_read_t*> i_read : target_reads) {
 		ext_read_t* ext_read = i_read.value;
 		if (!ext_read->rev && ext_read->mapq >= high_confidence_mapq &&
@@ -604,14 +610,15 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 	std::sort(target_ivals.begin(), target_ivals.end(), [](hts_pair_pos_t& a, hts_pair_pos_t& b) {return a.beg < b.beg;});
 
 	std::vector<hts_pair_pos_t> merged_target_ivals;
-	merged_target_ivals.push_back(target_ivals[0]);
-	for (int i = 1; i < target_ivals.size(); i++) {
-		if (target_ivals[i].beg-merged_target_ivals.back().end < stats.read_len) {
+	for (int i = 0; i < target_ivals.size(); i++) {
+		if (target_ivals[i].end < target_ivals[i].beg) continue;
+		if (!merged_target_ivals.empty() && target_ivals[i].beg-merged_target_ivals.back().end < stats.read_len) {
 			merged_target_ivals.back().end = std::max(merged_target_ivals.back().end, target_ivals[i].end);
 		} else {
 			merged_target_ivals.push_back(target_ivals[i]);
 		}
 	}
+	if (merged_target_ivals.empty()) return {};
 
 	ext_read_allocator_t ext_read_allocator;
 	
