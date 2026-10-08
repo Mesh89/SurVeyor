@@ -15,8 +15,12 @@
 #include <unistd.h>
 #include <algorithm>
 #include <cstring>
+#include <atomic>
+#include <future>
+#include <memory>
 
 #include <htslib/sam.h>
+#include <htslib/faidx.h>
 #include "htslib/hts.h"
 #include "htslib/kseq.h"
 KSEQ_INIT(int, read)
@@ -205,7 +209,44 @@ struct chr_seqs_map_t {
     std::unordered_map<std::string, chr_seq_t*> seqs;
     std::vector<std::string> ordered_contigs;
 
-    void read_fasta_into_map(std::string& reference_fname, bool uppercase_reference = true) {
+    void read_fasta_into_map(std::string& reference_fname, bool uppercase_reference = true, int threads = 1) {
+        if (std::ifstream(reference_fname + ".fai")) {
+            read_lens_into_map(reference_fname);
+            if (ordered_contigs.empty()) return;
+            std::vector<chr_seq_t*> contigs;
+            for (const std::string& name : ordered_contigs) {
+                chr_seq_t* contig = seqs.at(name);
+                contig->seq = new char[contig->len + 1];
+                contig->seq[contig->len] = '\0';
+                contigs.push_back(contig);
+            }
+            std::atomic<size_t> next_contig{0};
+            auto load_contigs = [&]() {
+                std::unique_ptr<faidx_t, decltype(&fai_destroy)> fai(fai_load3(reference_fname.c_str(), nullptr, nullptr, 0), &fai_destroy);
+                if (!fai) throw std::runtime_error("Unable to load indexed reference " + reference_fname);
+                // Bound each worker's temporary sequence storage, including for large chromosomes.
+                const hts_pos_t chunk_size = 4 << 20;
+                for (size_t i = next_contig.fetch_add(1); i < contigs.size(); i = next_contig.fetch_add(1)) {
+                    chr_seq_t* contig = contigs[i];
+                    for (hts_pos_t begin = 0; begin < contig->len; begin += chunk_size) {
+                        hts_pos_t end = std::min(contig->len, begin+chunk_size), length;
+                        std::unique_ptr<char, decltype(&free)> chunk(faidx_fetch_seq64(fai.get(), ordered_contigs[i].c_str(), begin, end-1, &length), &free);
+                        if (!chunk || length != end-begin) throw std::runtime_error("Unable to read " + ordered_contigs[i] + " from reference " + reference_fname);
+                        if (uppercase_reference) to_uppercase(chunk.get());
+                        std::memcpy(contig->seq+begin, chunk.get(), length);
+                    }
+                }
+            };
+            size_t workers = std::min<size_t>(std::max(1, threads), contigs.size());
+            if (workers == 1) {
+                load_contigs();
+            } else {
+                std::vector<std::future<void>> futures;
+                for (size_t i = 0; i < workers; i++) futures.push_back(std::async(std::launch::async, load_contigs));
+                for (auto& future : futures) future.get();
+            }
+            return;
+        }
         ordered_contigs.clear();
         FILE* fasta = fopen(reference_fname.c_str(), "r");
         kseq_t* seq = kseq_init(fileno(fasta));

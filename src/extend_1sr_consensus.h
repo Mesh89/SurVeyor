@@ -266,6 +266,59 @@ struct extension_graph_cache_value_t {
 	std::vector<std::vector<edge_t> > l_adj, l_adj_rev;
 };
 
+struct extension_kmer_index_t {
+	struct hit_t {
+		int id, read, pos;
+	};
+
+	std::vector<uint64_t> kmers;
+	uint64_t bitmap[1024] = { 0 };
+	std::vector<int> query_ids;
+	std::vector<hit_t> pending;
+	std::vector<size_t> offsets;
+	std::vector<std::pair<int, int>> entries;
+
+	extension_kmer_index_t(const std::vector<std::string>& read_seqs, const uint64_t* nucl_bm, bool reverse) : query_ids(read_seqs.size(), -1) {
+		std::vector<uint64_t> query_kmers(read_seqs.size());
+		kmers.reserve(read_seqs.size());
+		for (int i = 0; i < read_seqs.size(); i++) {
+			const std::string& seq = read_seqs[i];
+			if (seq.length() < 32) continue;
+			uint64_t kmer = 0;
+			int start = reverse ? 0 : seq.length()-32;
+			for (int j = start; j < start+32; j++) kmer = (kmer << 2) | nucl_bm[seq[j]];
+			query_kmers[i] = kmer;
+			kmers.push_back(kmer);
+		}
+		std::sort(kmers.begin(), kmers.end());
+		kmers.erase(std::unique(kmers.begin(), kmers.end()), kmers.end());
+		for (uint64_t kmer : kmers) {
+			uint64_t slot = (kmer * 0x9E3779B97F4A7C15ULL) >> 48;
+			bitmap[slot >> 6] |= uint64_t(1) << (slot & 63);
+		}
+		for (int i = 0; i < read_seqs.size(); i++) {
+			if (read_seqs[i].length() >= 32) query_ids[i] = find_id(query_kmers[i]);
+		}
+	}
+
+	int find_id(uint64_t kmer) const {
+		uint64_t slot = (kmer * 0x9E3779B97F4A7C15ULL) >> 48;
+		if (!(bitmap[slot >> 6] & (uint64_t(1) << (slot & 63)))) return -1;
+		auto it = std::lower_bound(kmers.begin(), kmers.end(), kmer);
+		return it != kmers.end() && *it == kmer ? int(it-kmers.begin()) : -1;
+	}
+
+	void finish() {
+		offsets.assign(kmers.size()+1, 0);
+		for (const hit_t& hit : pending) offsets[hit.id+1]++;
+		for (size_t i = 1; i < offsets.size(); i++) offsets[i] += offsets[i-1];
+		std::vector<size_t> next(offsets.begin(), offsets.end()-1);
+		entries.resize(pending.size());
+		for (const hit_t& hit : pending) entries[next[hit.id]++] = {hit.read, hit.pos};
+		std::vector<hit_t>().swap(pending);
+	}
+};
+
 std::string extension_graph_cache_key(const std::vector<std::string>& read_seqs, const std::vector<hts_pos_t>& read_starts,
 		const std::vector<int>& starting_idxs, int min_overlap, bool strict) {
 	surveyor_cache::key_builder_t key_builder;
@@ -323,24 +376,12 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 	}
 	bool* hp_prefix = new bool[max_read_len];
 
-	std::unordered_map<uint64_t, std::vector<std::pair<int,int>>> kmer_to_idx;
-	std::vector<uint64_t> query_kmers(n);
-	kmer_to_idx.reserve(n);
-	// Every read can become a query during traversal, but only its last kmer is queried.
-	for (int i = 0; i < n; i++) {
-		std::string& seq = read_seqs[i];
-		if (seq.length() < 32) continue;
-		uint64_t kmer = 0;
-		for (int j = seq.length()-32; j < seq.length(); j++) {
-			kmer = ((kmer << 2) | nucl_bm[seq[j]]);
-		}
-		query_kmers[i] = kmer;
-		kmer_to_idx[kmer];
-	}
+	extension_kmer_index_t kmer_index(read_seqs, nucl_bm, false);
 	for (int i = 0; i < n; i++) {
 		if (is_starting_idx[i]) continue;
 
 		uint64_t kmer = 0;
+		size_t read_begin = kmer_index.pending.size();
 
 		// let this string be s2, and the current string we are trying to extend be s1
 		// since we are extending to the right, we are interested in checking whether s1 suffix matches s2 prefix
@@ -352,22 +393,15 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			kmer = ((kmer << 2) | nv);
 
 			if (j + 1 >= min_overlap && !hp_prefix[j]) {
-				auto it = kmer_to_idx.find(kmer);
-				if (it != kmer_to_idx.end()) it->second.emplace_back(i, j);
+				int id = kmer_index.find_id(kmer);
+				if (id >= 0) kmer_index.pending.push_back({id, i, j});
 			}
 		}
+		// Stable grouping must retain read ascending, position descending order.
+		std::reverse(kmer_index.pending.begin()+read_begin, kmer_index.pending.end());
 	}
 	delete[] hp_prefix;
-
-	// sort vectors in kmer_to_idx
-	for (auto& kv : kmer_to_idx) {
-		std::vector<std::pair<int,int>>& idxs = kv.second;
-		// sort by first ascending and second descending
-		std::sort(idxs.begin(), idxs.end(), [](const std::pair<int,int>& a, const std::pair<int,int>& b) {
-			if (a.first != b.first) return a.first < b.first;
-			return a.second > b.second;
-		});
-	}
+	kmer_index.finish();
 
 	std::queue<int> bfs;
 	for (int i : starting_idxs) bfs.push(i);
@@ -381,14 +415,14 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 		std::string& s1 = read_seqs[curr_node];
 		if (s1.length() < 32) continue;
 
-		const auto& idxs = kmer_to_idx.at(query_kmers[curr_node]);
+		int query_id = kmer_index.query_ids[curr_node];
 		int last_accepted_j = -1;
-		for (int i = 0; i < idxs.size(); i++) {
-			int j = idxs[i].first;
+		for (size_t i = kmer_index.offsets[query_id]; i < kmer_index.offsets[query_id+1]; i++) {
+			int j = kmer_index.entries[i].first;
 			if (is_starting_idx[j]) continue;
 			if (j == last_accepted_j) continue;
 
-			int p = idxs[i].second; // position of kmer in read j
+			int p = kmer_index.entries[i].second; // position of kmer in read j
 			std::string& s2 = read_seqs[j];
 
 			if (s1 == s2) continue;
@@ -447,20 +481,7 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 	}
 	bool* hp_prefix = new bool[max_read_len];
 
-	std::unordered_map<uint64_t, std::vector<std::pair<int, int>>> kmer_to_idx;
-	std::vector<uint64_t> query_kmers(n);
-	kmer_to_idx.reserve(n);
-	// Every read can become a query during traversal, but only its first kmer is queried.
-	for (int i = 0; i < n; i++) {
-		std::string& seq = read_seqs[i];
-		if (seq.length() < 32) continue;
-		uint64_t kmer = 0;
-		for (int j = 0; j < 32; j++) {
-			kmer = ((kmer << 2) | nucl_bm[seq[j]]);
-		}
-		query_kmers[i] = kmer;
-		kmer_to_idx[kmer];
-	}
+	extension_kmer_index_t kmer_index(read_seqs, nucl_bm, true);
 	for (int i = 0; i < n; i++) {
 		if (is_starting_idx[i]) continue;
 
@@ -480,13 +501,14 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			kmer = ((kmer << 2) | nv);
 
 			if (j >= 31 && !hp_prefix[j-31]) {
-				auto it = kmer_to_idx.find(kmer);
-				if (it != kmer_to_idx.end()) it->second.emplace_back(i, j);
+				int id = kmer_index.find_id(kmer);
+				if (id >= 0) kmer_index.pending.push_back({id, i, j});
 			}
 		}
 	}
 	delete[] hp_prefix;
-	// Note: vectors are already sorted by first ascending and second ascending due to the way we built them
+	// Scan order already gives read ascending, position ascending order.
+	kmer_index.finish();
 
 	std::queue<int> bfs;
 	for (int i : starting_idxs) bfs.push(i);
@@ -500,14 +522,14 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 		std::string& s1 = read_seqs[curr_node];
 		if (s1.length() < 32) continue;
 
-		const auto& idxs = kmer_to_idx.at(query_kmers[curr_node]);
+		int query_id = kmer_index.query_ids[curr_node];
 		int last_accepted_j = -1;
-		for (int i = 0; i < idxs.size(); i++) {
-			int j = idxs[i].first;
+		for (size_t i = kmer_index.offsets[query_id]; i < kmer_index.offsets[query_id+1]; i++) {
+			int j = kmer_index.entries[i].first;
 			if (is_starting_idx[j]) continue;
 			if (j == last_accepted_j) continue;
 
-			int p = idxs[i].second; // position of kmer in read j
+			int p = kmer_index.entries[i].second; // position of kmer in read j
 			std::string& s2 = read_seqs[j];
 
 			if (s1 == s2) continue;

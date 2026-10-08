@@ -12,6 +12,15 @@ def valid_min_sv_size(arg):
         raise argparse.ArgumentTypeError("Value must be at least 1.")
     return sv_size
 
+def valid_nonnegative_int(arg):
+    try:
+        value = int(arg)
+    except ValueError:
+        raise argparse.ArgumentTypeError("Value must be an integer.")
+    if value < 0:
+        raise argparse.ArgumentTypeError("Value must be non-negative.")
+    return value
+
 parser = argparse.ArgumentParser(description='SurVeyor, an SV caller.')
 parser.add_argument('--version', action='version', version="SurVeyor v%s" % VERSION, help='Print version number.')
 
@@ -19,6 +28,8 @@ subparsers = parser.add_subparsers(dest='command', help='Commands', required=Tru
 
 common_parser = argparse.ArgumentParser(add_help=False)
 common_parser.add_argument('--threads', type=int, default=1, help='Number of threads to be used.')
+common_parser.add_argument('--malloc-mmap-threshold', type=valid_nonnegative_int, default=33554432, metavar='BYTES', help='Set MALLOC_MMAP_THRESHOLD_ for all pipeline subprocesses, overriding the environment. Default: %(default)s (32 MiB).')
+common_parser.add_argument('--malloc-top-pad', type=valid_nonnegative_int, default=67108864, metavar='BYTES', help='Set MALLOC_TOP_PAD_ for all pipeline subprocesses, overriding the environment. Default: %(default)s (64 MiB).')
 
 call_genotype_shared_options_parser = argparse.ArgumentParser(add_help=False)
 call_genotype_shared_options_parser.add_argument('--seed', type=int, default=0, help='Seed for random sampling of genomic positions.')
@@ -75,6 +86,10 @@ generate_training_data_parser.add_argument('--use-reassigned-training-data', act
                                                 'and training-data.reassigned.INS_TO_DUP.vcf.gz in the workdir.')
 
 cmd_args = parser.parse_args()
+
+# Apply the CLI values, including defaults, to all pipeline subprocesses.
+os.environ["MALLOC_MMAP_THRESHOLD_"] = str(cmd_args.malloc_mmap_threshold)
+os.environ["MALLOC_TOP_PAD_"] = str(cmd_args.malloc_top_pad)
 
 def run_cmd(cmd, error_msg=None):
     start_time = timeit.default_timer()
@@ -476,18 +491,16 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
         print("No model provided. Skipping the classification step.")
         return
 
-    Classifier.run_classifier(workdir + "/intermediate_results/calls-with-fmt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/stats.txt", ml_model, threads=cmd_args.threads)
+    initial_gt_file = workdir + ("/intermediate_results/calls-with-gt.iter0.vcf.gz" if cmd_args.two_pass else "/intermediate_results/calls-with-gt.vcf.gz")
+    Classifier.run_classifier(workdir + "/intermediate_results/calls-with-fmt.vcf.gz", initial_gt_file, workdir + "/stats.txt", ml_model, threads=cmd_args.threads)
 
-    reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s %d" % (workdir + "/intermediate_results/calls-raw.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.reconciled.vcf.gz", sample_name, cmd_args.threads)
-    run_cmd(reconcile_vcf_gt_cmd)
+    if not cmd_args.two_pass:
+        reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s %d" % (workdir + "/intermediate_results/calls-raw.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.reconciled.vcf.gz", sample_name, cmd_args.threads)
+        run_cmd(reconcile_vcf_gt_cmd)
 
-    write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s/intermediate_results/calls-with-gt.reconciled.vcf.gz %s/calls-genotyped.smvars %s/calls-genotyped.stvars %s %s" % (workdir, workdir, workdir, reference_fname, workdir)
-    run_cmd(write_aux_snps_cmd)
-
-    if cmd_args.two_pass:
-        cp_cmd = "cp %s/intermediate_results/calls-with-gt.vcf.gz %s/intermediate_results/calls-with-gt.iter0.vcf.gz" % (workdir, workdir)
-        run_cmd(cp_cmd)
-
+        write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s/intermediate_results/calls-with-gt.reconciled.vcf.gz %s/calls-genotyped.smvars %s/calls-genotyped.stvars %s %s" % (workdir, workdir, workdir, reference_fname, workdir)
+        run_cmd(write_aux_snps_cmd)
+    else:
         for i in range(n_iters, n_iters+1):
             prev_iter_gt_file = workdir + "/intermediate_results/calls-with-gt.iter%d.vcf.gz" % (i-1)
             next_iter_fmt_file = workdir + "/intermediate_results/calls-with-fmt.iter%d.vcf.gz" % i
@@ -537,8 +550,9 @@ if cmd_args.command == 'call':
     if not cmd_args.ml_model:
         exit(0)
 
-    deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.smvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.smvars.deduped.vcf.gz")
-    deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.stvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.stvars.deduped.vcf.gz")
+    genotyped_prefix = cmd_args.workdir + ("/calls-genotyped.reassigned" if cmd_args.two_pass else "/calls-genotyped")
+    deduplicate_vcf(genotyped_prefix + ".smvars.vcf.gz", genotyped_prefix + ".smvars.deduped.vcf.gz")
+    deduplicate_vcf(genotyped_prefix + ".stvars.vcf.gz", genotyped_prefix + ".stvars.deduped.vcf.gz")
 
 elif cmd_args.command == 'genotype':
 
@@ -569,8 +583,9 @@ elif cmd_args.command == 'genotype':
     if not cmd_args.ml_model:
         exit(0)
 
-    deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.smvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.smvars.deduped.vcf.gz")
-    deduplicate_vcf(cmd_args.workdir + "/calls-genotyped.stvars.vcf.gz", cmd_args.workdir + "/calls-genotyped.stvars.deduped.vcf.gz")
+    genotyped_prefix = cmd_args.workdir + ("/calls-genotyped.reassigned" if cmd_args.two_pass else "/calls-genotyped")
+    deduplicate_vcf(genotyped_prefix + ".smvars.vcf.gz", genotyped_prefix + ".smvars.deduped.vcf.gz")
+    deduplicate_vcf(genotyped_prefix + ".stvars.vcf.gz", genotyped_prefix + ".stvars.deduped.vcf.gz")
 
 elif cmd_args.command == 'generate-training-data':
 

@@ -44,6 +44,7 @@ config_t config;
 contig_map_t contig_map;
 stats_t stats;
 const bool USE_HP_SPECIFIC_PATH = false;
+const int BAM_READER_CACHE_SIZE = 32 << 20; // Per reader; total cache memory scales with thread count.
 
 std::string bam_fname, reference_fname, workdir;
 bam_pool_t* bam_pool;
@@ -1240,8 +1241,9 @@ int main(int argc, char* argv[]) {
     hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
-    chr_seqs.read_fasta_into_map(reference_fname);
+    chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
     bam_pool = new bam_pool_t(config.threads, bam_fname, reference_fname);
+    for (open_samFile_t* reader : bam_pool->pool) hts_set_cache_size(reader->file, BAM_READER_CACHE_SIZE);
 
     // read crossing isize distribution
     std::ifstream crossing_isizes_dist_fin(workdir + "/crossing_isizes.txt");
@@ -1314,11 +1316,15 @@ int main(int argc, char* argv[]) {
 
     int* imap = NULL;
     htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "wz");
+    if (out_vcf_file == NULL) throw std::runtime_error("Unable to open file " + out_vcf_fname + ".");
+    if (config.threads > 1 && hts_set_threads(out_vcf_file, std::min(config.threads, 32)) != 0) throw std::runtime_error("Failed to enable VCF compression threads for " + out_vcf_fname);
     bcf_hdr_t* out_vcf_header = bcf_subset_header(in_vcf_header, sample_name, imap);
     add_fmt_tags(out_vcf_header);
     if (bcf_hdr_write(out_vcf_file, out_vcf_header) != 0) {
-	        throw std::runtime_error("Failed to read the VCF header.");
+        throw std::runtime_error("Failed to write the VCF header to " + out_vcf_fname);
     }
+    std::string out_vcf_index_fname = out_vcf_fname + ".tbi";
+    if (bcf_idx_init(out_vcf_file, out_vcf_header, 0, out_vcf_index_fname.c_str()) != 0) throw std::runtime_error("Failed to initialize VCF index " + out_vcf_index_fname);
 
     if (sv_consensus_cache::cache().active()) {
         for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
@@ -1354,6 +1360,7 @@ int main(int argc, char* argv[]) {
                 std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool,
                         &global_crossing_isize_dist, evidence_mode);
+                futures.push_back(std::move(future));
                 block_hps.clear();
             }
         }
@@ -1412,7 +1419,6 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    thread_pool.stop(true);
     for (int i = 0; i < futures.size(); i++) {
         futures[i].get();
     }
@@ -1426,7 +1432,10 @@ int main(int argc, char* argv[]) {
     //     }
     // }
 
-    // print contigs in vcf order
+    // Update records in parallel, retaining VCF order for the writer.
+    const size_t UPDATE_BLOCK_SIZE = 256;
+    std::vector<sv_t*> output_svs;
+    bool translation_ready = false;
     int n_seqs;
     const char** seqnames = bcf_hdr_seqnames(in_vcf_header, &n_seqs);
     for (int i = 0; i < n_seqs; i++) {
@@ -1441,14 +1450,36 @@ int main(int argc, char* argv[]) {
                 return std::tie(sv1->start, sv1->end, sv1->id) < std::tie(sv2->start, sv2->end, sv2->id);
             });
 
-			for (auto& sv : contig_svs) {
-				bcf_update_info_int32(out_vcf_header, vcf_record, "AC", NULL, 0);
-				bcf_update_info_int32(out_vcf_header, vcf_record, "AN", NULL, 0);
-                if (!reassign_evidence || genotype_when_reassigning_evidence(sv.get())) update_record(in_vcf_header, out_vcf_header, sv.get(), chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), imap[0]);
-				if (bcf_write(out_vcf_file, out_vcf_header, sv->vcf_entry) != 0) throw std::runtime_error("Failed to write VCF record to " + out_vcf_fname);
-			}
+        if (contig_svs.empty()) continue;
+        if (!translation_ready) {
+            // bcf_translate lazily writes its mapping into the shared input header.
+            std::unique_ptr<bcf1_t, decltype(&bcf_destroy)> record(bcf_dup(contig_svs.front()->vcf_entry), &bcf_destroy);
+            if (!record || bcf_translate(out_vcf_header, in_vcf_header, record.get()) != 0) throw std::runtime_error("Failed to initialize VCF header translation.");
+            translation_ready = true;
+        }
+        char* chr_seq = chr_seqs.get_seq(contig_name);
+        hts_pos_t chr_len = chr_seqs.get_len(contig_name);
+        int sample_idx = imap[0];
+        for (const auto& sv : contig_svs) output_svs.push_back(sv.get());
+        for (size_t begin = 0; begin < contig_svs.size(); begin += UPDATE_BLOCK_SIZE) {
+            std::vector<sv_t*> block_svs;
+            size_t end = std::min(begin + UPDATE_BLOCK_SIZE, contig_svs.size());
+            for (size_t j = begin; j < end; j++) block_svs.push_back(contig_svs[j].get());
+            std::future<void> future = thread_pool.push([block_svs, in_vcf_header, out_vcf_header, chr_seq, chr_len, sample_idx, reassign_evidence](int) {
+                for (sv_t* sv : block_svs) {
+                    if (!reassign_evidence || genotype_when_reassigning_evidence(sv)) update_record(in_vcf_header, out_vcf_header, sv, chr_seq, chr_len, sample_idx);
+                }
+            });
+            futures.push_back(std::move(future));
+        }
 	}
     free(seqnames);
+    thread_pool.stop(true);
+    for (std::future<void>& future : futures) future.get();
+    for (sv_t* sv : output_svs) {
+        if (bcf_write(out_vcf_file, out_vcf_header, sv->vcf_entry) != 0) throw std::runtime_error("Failed to write VCF record to " + out_vcf_fname);
+    }
+    if (bcf_idx_save(out_vcf_file) != 0) throw std::runtime_error("Failed to save VCF index " + out_vcf_index_fname);
     delete[] imap;
 
     bcf_destroy(vcf_record);
@@ -1458,6 +1489,5 @@ int main(int argc, char* argv[]) {
     if (bcf_close(out_vcf_file) != 0) throw std::runtime_error("Failed to close " + out_vcf_fname);
     delete bam_pool;
 
-    tbx_index_build(out_vcf_fname.c_str(), 0, &tbx_conf_vcf);
     sv_consensus_cache::cache().write();
 }

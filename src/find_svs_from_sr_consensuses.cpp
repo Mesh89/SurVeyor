@@ -81,17 +81,64 @@ struct pair_w_score_t {
 		c1_idx(c1_idx), c1_lc(c1_lc), c2_idx(c2_idx), c2_lc(c2_lc), spa(spa), dp_cluster(dp_cluster) {}
 };
 
+static void load_extension_mates(const std::string& fname, ext_mate_map_t& mates, int read_len) {
+	std::ifstream fin(fname, std::ios::binary | std::ios::ate);
+	if (!fin) return;
+	std::streamoff file_size = fin.tellg();
+	fin.seekg(0);
+	if (file_size > 0) {
+		size_t estimated_records = size_t(file_size)/(2*size_t(std::max(1, read_len))+32)+1;
+		if (estimated_records > mates.bucket_count()*mates.max_load_factor()) mates.reserve(estimated_records);
+	}
+
+	auto is_space = [](char c) { return c == ' ' || (c >= '\t' && c <= '\r'); };
+	std::string line;
+	bool use_formatted_input = false;
+	while (std::getline(fin, line)) {
+		size_t begin[4], end[4], pos = 0;
+		int fields = 0;
+		while (fields < 4) {
+			while (pos < line.size() && is_space(line[pos])) pos++;
+			if (pos == line.size()) break;
+			begin[fields] = pos;
+			while (pos < line.size() && !is_space(line[pos])) pos++;
+			end[fields++] = pos;
+		}
+		if (fields == 0) continue;
+		while (pos < line.size() && is_space(line[pos])) pos++;
+		if (fields != 4 || pos != line.size()) { use_formatted_input = true; break; }
+
+		int mapq = 0;
+		pos = begin[3];
+		while (pos < end[3] && line[pos] >= '0' && line[pos] <= '9' && mapq <= 255) {
+			mapq = 10*mapq + line[pos++]-'0';
+		}
+		if (pos != end[3] || mapq > 255) { use_formatted_input = true; break; }
+
+		ext_mate_t& mate = mates[std::string(line.data()+begin[0], end[0]-begin[0])];
+		mate.seq.assign(line.data()+begin[1], end[1]-begin[1]);
+		mate.qual.assign(line.data()+begin[2], end[2]-begin[2]);
+		mate.mapq = mapq;
+	}
+	if (!use_formatted_input) return;
+
+	// Preserve formatted-input behavior for records outside the producer's usual format.
+	fin.clear();
+	fin.seekg(0);
+	std::string qname, read_seq, qual;
+	int mapq;
+	while (fin >> qname >> read_seq >> qual >> mapq) {
+		mates[qname] = {read_seq, qual, mapq};
+	}
+}
+
 void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* consensuses, std::string contig_name, int start_idx, int end_idx, bool extend_in_clip_direction) {
 
 	int contig_id = contig_map.get_id(contig_name);
 	mutex_per_chr[contig_id].lock();
 	if (active_threads_per_chr[contig_id] == 0) {
 		std::string fname = workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt";
-		std::ifstream fin(fname);
-		std::string qname, read_seq, qual; int mapq;
-		while (fin >> qname >> read_seq >> qual >> mapq) {
-			mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
-		}
+		load_extension_mates(fname, mateseqs_w_mapq[contig_id], stats.read_len);
 	}
 	active_threads_per_chr[contig_id]++;
 	mutex_per_chr[contig_id].unlock();
@@ -760,16 +807,12 @@ int main(int argc, char* argv[]) {
 	std::cout << "Clustering same-strand clusters." << std::endl;
 
 	ctpl::thread_pool cluster_ss_dps_thread_pool(config.threads);
+	std::vector<std::future<void> > cluster_ss_dps_futures;
 	for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
 		std::string contig_name = contig_map.get_name(contig_id);
 		std::future<void> future = cluster_ss_dps_thread_pool.push(cluster_ss_dps, contig_id, contig_name);
-		futures.push_back(std::move(future));
+		cluster_ss_dps_futures.push_back(std::move(future));
 	}
-	cluster_ss_dps_thread_pool.stop(true);
-	for (size_t i = 0; i < futures.size(); i++) {
-		futures[i].get();
-	}
-	futures.clear();
 
 	std::cout << "Extending consensuses." << std::endl;
 	auto start_time = std::chrono::high_resolution_clock::now();
@@ -804,7 +847,14 @@ int main(int argc, char* argv[]) {
 	std::cout << "Finding indels." << std::endl;
 	start_time = std::chrono::high_resolution_clock::now();
 
-	chr_seqs.read_fasta_into_map(reference_fname);
+	chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
+
+	// Same-strand clusters are first needed by the paired-indel phase.
+	cluster_ss_dps_thread_pool.stop(true);
+	for (size_t i = 0; i < cluster_ss_dps_futures.size(); i++) {
+		cluster_ss_dps_futures[i].get();
+	}
+	cluster_ss_dps_futures.clear();
 
     ctpl::thread_pool finding_indels_thread_pool(config.threads);
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
@@ -842,7 +892,7 @@ int main(int argc, char* argv[]) {
 	std::cout << "Finding indels from unpaired consensuses." << std::endl;
 	start_time = std::chrono::high_resolution_clock::now();
 
-	chr_seqs.read_fasta_into_map(reference_fname);
+	chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
 
     ctpl::thread_pool finding_indels_from_up_consenensus_thread_pool(config.threads);
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {

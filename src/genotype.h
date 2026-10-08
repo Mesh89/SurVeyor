@@ -644,7 +644,7 @@ struct evidence_map_t {
             int score;
             bool unique;
             int hpid;
-            std::set<int> hpids;
+            std::vector<int> hpids;
 
             best_assoc_t() : passes_min_epr(false), score(0), unique(true), hpid(0), hpids() {}
             best_assoc_t(bool passes_min_epr, int score, int hpid) :
@@ -658,16 +658,27 @@ struct evidence_map_t {
         // note that unique means that there is a single best association to a HPID
         std::unordered_map<std::string, best_assoc_t> read_to_best_assoc_map;
 
+        // ALT rows are grouped by exact SV ID; resolve the shared fields once per group.
+        std::string last_sv_id;
+        sv_t* last_sv = NULL;
+        bool passes_min_epr = false;
+        int hpid = 0;
+
         // For each read, find the best association. Furthermore, flag reads that have a "best" association to multiple SVs
         while (alt_reads_association_fin >> sv_id >> bp >> read_name >> score >> pos >> alt_idx) {
-            std::string exact_sv_id = sv_id;
+            if (sv_id != last_sv_id) {
+                last_sv_id = sv_id;
+                last_sv = sv_by_exact_id.at(sv_id);
+                if (resolve_assignments) {
+                    std::string id = remove_svid_dup_suffix(sv_id);
+                    passes_min_epr = sv_epr_map[id] >= MIN_EPR;
+                    hpid = sv_hpid_map[id];
+                }
+            }
             read_alt_associations_t& read_associations = read_alt_associations[read_name];
-            read_associations.associations.push_back(read_alt_association_t(sv_by_exact_id.at(exact_sv_id), bp, pos, alt_idx, score));
+            read_associations.associations.push_back(read_alt_association_t(last_sv, bp, pos, alt_idx, score));
             if (score > read_associations.max_score) read_associations.max_score = score;
             if (!resolve_assignments) continue;
-            sv_id = remove_svid_dup_suffix(sv_id);
-            bool passes_min_epr = sv_epr_map[sv_id] >= MIN_EPR;
-            int hpid = sv_hpid_map[sv_id];
             if (!read_to_best_assoc_map.count(read_name)) {
                 read_to_best_assoc_map[read_name] = best_assoc_t(passes_min_epr, score, hpid);
             } else {
@@ -679,10 +690,10 @@ struct evidence_map_t {
                     curr_best_assoc.hpid = hpid;
                     curr_best_assoc.unique = true;
                     curr_best_assoc.hpids.clear();
-                    curr_best_assoc.hpids.insert(hpid);
+                    curr_best_assoc.hpids.push_back(hpid);
                 } else if (passes_min_epr == curr_best_assoc.passes_min_epr && score == curr_best_assoc.score && hpid != curr_best_assoc.hpid) {
                     curr_best_assoc.unique = false;
-                    curr_best_assoc.hpids.insert(hpid);
+                    if (std::find(curr_best_assoc.hpids.begin(), curr_best_assoc.hpids.end(), hpid) == curr_best_assoc.hpids.end()) curr_best_assoc.hpids.push_back(hpid);
                 }
             }
         }
