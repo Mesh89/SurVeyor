@@ -98,12 +98,15 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 
 	std::vector<std::shared_ptr<consensus_t>> consensuses_to_consider(consensuses->begin()+start_idx, consensuses->begin()+end_idx);
 
-	open_samFile_t* bam_file = new open_samFile_t(complete_bam_fname);
-	char* path = fai_path(reference_fname.c_str());
-	if (hts_set_fai_filename(bam_file->file, path) != 0) {
-		throw std::runtime_error("Failed to read reference " + reference_fname);
-	}
-	std::vector<ext_read_t*> candidate_reads_for_extension = get_extension_reads_from_consensuses(consensuses_to_consider, contig_name, chr_seqs.get_len(contig_name), config, stats, bam_file);
+	static thread_local std::unique_ptr<open_samFile_t> bam_file = []() {
+		std::unique_ptr<open_samFile_t> file(new open_samFile_t(complete_bam_fname));
+		std::unique_ptr<char, decltype(&free)> path(fai_path(reference_fname.c_str()), &free);
+		if (hts_set_fai_filename(file->file, path.get()) != 0) {
+			throw std::runtime_error("Failed to read reference " + reference_fname);
+		}
+		return file;
+	}();
+	std::vector<ext_read_t*> candidate_reads_for_extension = get_extension_reads_from_consensuses(consensuses_to_consider, contig_name, chr_seqs.get_len(contig_name), config, stats, bam_file.get());
 	if (!candidate_reads_for_extension.empty()) {
 		std::vector<Interval<ext_read_t*>> it_ivals;
 		for (ext_read_t* ext_read : candidate_reads_for_extension) {
@@ -122,9 +125,6 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 		}
 		for (ext_read_t* ext_read : candidate_reads_for_extension) delete ext_read;
 	}
-
-	delete bam_file;
-	free(path);
 
 	mutex_per_chr[contig_id].lock();
 	active_threads_per_chr[contig_id]--;

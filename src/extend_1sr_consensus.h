@@ -1,6 +1,7 @@
 #ifndef EXTEND_1SR_CONSENSUS_H_
 #define EXTEND_1SR_CONSENSUS_H_
 
+#include <cstring>
 #include <set>
 #include <unordered_map>
 #include <queue>
@@ -99,7 +100,6 @@ static void filter_reads_fully_contained_in_seed(std::vector<std::string>& read_
 
 	if (read_seqs.size() <= 1) return;
 
-	const std::string& seed_seq = read_seqs[0];
 	std::vector<std::string> filtered_read_seqs;
 	std::vector<std::string> filtered_read_quals;
 	std::vector<int> filtered_read_mapqs;
@@ -109,16 +109,51 @@ static void filter_reads_fully_contained_in_seed(std::vector<std::string>& read_
 	filtered_read_mapqs.reserve(read_mapqs.size());
 	filtered_read_starts.reserve(read_starts.size());
 
-	filtered_read_seqs.push_back(read_seqs[0]);
-	filtered_read_quals.push_back(read_quals[0]);
+	filtered_read_seqs.push_back(std::move(read_seqs[0]));
+	filtered_read_quals.push_back(std::move(read_quals[0]));
 	filtered_read_mapqs.push_back(read_mapqs[0]);
 	filtered_read_starts.push_back(read_starts[0]);
 
-	for (size_t i = 1; i < read_seqs.size(); i++) {
-		if (seed_seq.find(read_seqs[i]) != std::string::npos) continue;
+	const std::string& seed_seq = filtered_read_seqs[0];
+	using seed_key_t = std::pair<uint64_t, uint64_t>;
+	auto seed_key = [](const char* seq) {
+		seed_key_t key;
+		// Copy the raw bytes so matching stays exact for every character, including N and case.
+		std::memcpy(&key.first, seq, 8);
+		std::memcpy(&key.second, seq+8, 8);
+		return key;
+	};
+	std::vector<std::pair<seed_key_t, size_t>> seed_index;
+	if (seed_seq.length() >= 16) {
+		seed_index.reserve(seed_seq.length()-15);
+		for (size_t p = 0; p <= seed_seq.length()-16; p++) {
+			seed_index.emplace_back(seed_key(seed_seq.data()+p), p);
+		}
+		std::sort(seed_index.begin(), seed_index.end());
+	}
 
-		filtered_read_seqs.push_back(read_seqs[i]);
-		filtered_read_quals.push_back(read_quals[i]);
+	for (size_t i = 1; i < read_seqs.size(); i++) {
+		const std::string& read_seq = read_seqs[i];
+		bool contained = false;
+		if (read_seq.length() <= seed_seq.length()) {
+			if (read_seq.length() < 16) {
+				contained = seed_seq.find(read_seq) != std::string::npos;
+			} else {
+				seed_key_t key = seed_key(read_seq.data());
+				auto it = std::lower_bound(seed_index.begin(), seed_index.end(), std::make_pair(key, size_t(0)));
+				for (; it != seed_index.end() && it->first == key; ++it) {
+					size_t p = it->second;
+					if (read_seq.length() <= seed_seq.length()-p && std::memcmp(seed_seq.data()+p, read_seq.data(), read_seq.length()) == 0) {
+						contained = true;
+						break;
+					}
+				}
+			}
+		}
+		if (contained) continue;
+
+		filtered_read_seqs.push_back(std::move(read_seqs[i]));
+		filtered_read_quals.push_back(std::move(read_quals[i]));
 		filtered_read_mapqs.push_back(read_mapqs[i]);
 		filtered_read_starts.push_back(read_starts[i]);
 	}
@@ -289,6 +324,19 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 	bool* hp_prefix = new bool[max_read_len];
 
 	std::unordered_map<uint64_t, std::vector<std::pair<int,int>>> kmer_to_idx;
+	std::vector<uint64_t> query_kmers(n);
+	kmer_to_idx.reserve(n);
+	// Every read can become a query during traversal, but only its last kmer is queried.
+	for (int i = 0; i < n; i++) {
+		std::string& seq = read_seqs[i];
+		if (seq.length() < 32) continue;
+		uint64_t kmer = 0;
+		for (int j = seq.length()-32; j < seq.length(); j++) {
+			kmer = ((kmer << 2) | nucl_bm[seq[j]]);
+		}
+		query_kmers[i] = kmer;
+		kmer_to_idx[kmer];
+	}
 	for (int i = 0; i < n; i++) {
 		if (is_starting_idx[i]) continue;
 
@@ -304,7 +352,8 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			kmer = ((kmer << 2) | nv);
 
 			if (j + 1 >= min_overlap && !hp_prefix[j]) {
-				kmer_to_idx[kmer].emplace_back(i, j);
+				auto it = kmer_to_idx.find(kmer);
+				if (it != kmer_to_idx.end()) it->second.emplace_back(i, j);
 			}
 		}
 	}
@@ -332,19 +381,14 @@ void build_graph_fwd(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 		std::string& s1 = read_seqs[curr_node];
 		if (s1.length() < 32) continue;
 
-		uint64_t kmer = 0;
-		for (int j = s1.length()-32; j < s1.length(); j++) {
-			uint64_t nv = nucl_bm[s1[j]];
-			kmer = ((kmer << 2) | nv);
-		}
-
+		const auto& idxs = kmer_to_idx.at(query_kmers[curr_node]);
 		int last_accepted_j = -1;
-		for (int i = 0; i < kmer_to_idx[kmer].size(); i++) {
-			int j = kmer_to_idx[kmer][i].first;
+		for (int i = 0; i < idxs.size(); i++) {
+			int j = idxs[i].first;
 			if (is_starting_idx[j]) continue;
 			if (j == last_accepted_j) continue;
 
-			int p = kmer_to_idx[kmer][i].second; // position of kmer in read j
+			int p = idxs[i].second; // position of kmer in read j
 			std::string& s2 = read_seqs[j];
 
 			if (s1 == s2) continue;
@@ -404,6 +448,19 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 	bool* hp_prefix = new bool[max_read_len];
 
 	std::unordered_map<uint64_t, std::vector<std::pair<int, int>>> kmer_to_idx;
+	std::vector<uint64_t> query_kmers(n);
+	kmer_to_idx.reserve(n);
+	// Every read can become a query during traversal, but only its first kmer is queried.
+	for (int i = 0; i < n; i++) {
+		std::string& seq = read_seqs[i];
+		if (seq.length() < 32) continue;
+		uint64_t kmer = 0;
+		for (int j = 0; j < 32; j++) {
+			kmer = ((kmer << 2) | nucl_bm[seq[j]]);
+		}
+		query_kmers[i] = kmer;
+		kmer_to_idx[kmer];
+	}
 	for (int i = 0; i < n; i++) {
 		if (is_starting_idx[i]) continue;
 
@@ -423,7 +480,8 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 			kmer = ((kmer << 2) | nv);
 
 			if (j >= 31 && !hp_prefix[j-31]) {
-				kmer_to_idx[kmer].emplace_back(i, j);
+				auto it = kmer_to_idx.find(kmer);
+				if (it != kmer_to_idx.end()) it->second.emplace_back(i, j);
 			}
 		}
 	}
@@ -442,19 +500,14 @@ void build_graph_rev(std::vector<std::string>& read_seqs, std::vector<hts_pos_t>
 		std::string& s1 = read_seqs[curr_node];
 		if (s1.length() < 32) continue;
 
-		uint64_t kmer = 0;
-		for (int j = 0; j < 32; j++) {
-			uint64_t nv = nucl_bm[s1[j]];
-			kmer = ((kmer << 2) | nv);
-		}
-
+		const auto& idxs = kmer_to_idx.at(query_kmers[curr_node]);
 		int last_accepted_j = -1;
-		for (int i = 0; i < kmer_to_idx[kmer].size(); i++) {
-			int j = kmer_to_idx[kmer][i].first;
+		for (int i = 0; i < idxs.size(); i++) {
+			int j = idxs[i].first;
 			if (is_starting_idx[j]) continue;
 			if (j == last_accepted_j) continue;
 
-			int p = kmer_to_idx[kmer][i].second; // position of kmer in read j
+			int p = idxs[i].second; // position of kmer in read j
 			std::string& s2 = read_seqs[j];
 
 			if (s1 == s2) continue;

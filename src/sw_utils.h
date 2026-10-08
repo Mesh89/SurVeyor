@@ -352,6 +352,7 @@ std::vector<StripedSmithWaterman::Alignment> get_best_alns(char* contig_seq, hts
 	
 	std::vector<StripedSmithWaterman::Alignment> best_alns;
 	StripedSmithWaterman::Filter filter;
+	StripedSmithWaterman::Filter score_filter(false, false, 0, 32767);
 	StripedSmithWaterman::Alignment aln;
 	aligner.Align(query, contig_seq, remap_len, filter, &aln, 15);
 	best_alns.push_back(aln);
@@ -360,14 +361,15 @@ std::vector<StripedSmithWaterman::Alignment> get_best_alns(char* contig_seq, hts
 
 	if (new_start >= remap_len) return best_alns;
 
-	aligner.Align(query, contig_seq+new_start, remap_len-new_start, filter, &aln, 15);
+	aligner.Align(query, contig_seq+new_start, remap_len-new_start, score_filter, &aln, 15);
 	while (aln.sw_score == best_score) {
+		aligner.Align(query, contig_seq+new_start, remap_len-new_start, filter, &aln, 15);
 		aln.ref_begin += new_start;
 		aln.ref_end += new_start;
 		best_alns.push_back(aln);
 		new_start += aln.ref_begin+5;
 		if (new_start >= remap_len) break;
-		aligner.Align(query, contig_seq+new_start, remap_len-new_start, filter, &aln, 15);
+		aligner.Align(query, contig_seq+new_start, remap_len-new_start, score_filter, &aln, 15);
 	}
 	return best_alns;
 }
