@@ -87,6 +87,7 @@ int main(int argc, char* argv[]) {
 	std::string in_vcf_fname = argv[1];
 	std::string out_vcf_fname = argv[2];
 	std::string reference_fname = argv[3];
+	int n_threads = argc >= 5 ? std::max(1, std::stoi(argv[4])) : 1;
 
 	htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
 	bcf_hdr_t* in_vcf_hdr = bcf_hdr_read(in_vcf_file);
@@ -165,7 +166,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	chr_seqs_map_t chr_seqs;
-	chr_seqs.read_fasta_into_map(reference_fname);
+	chr_seqs.read_fasta_into_map(reference_fname, true, n_threads);
 	for (std::shared_ptr<sv_t> sv : surviving_svs) {
 		sv2bcf(in_vcf_hdr, b, sv.get(), chr_seqs.get_seq(sv->chr), false);
 		if (bcf_write(out_vcf_file, in_vcf_hdr, b) != 0) {

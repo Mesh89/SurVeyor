@@ -19,12 +19,13 @@ int main(int argc, char* argv[]) {
 	std::string out_vcf_fname = argv[2];
     std::string reference_fname = argv[3];
     std::string workdir = argv[4];
+    int n_threads = argc >= 6 ? std::max(1, std::stoi(argv[5])) : 1;
 
     std::ifstream full_cmd_fin(workdir + "/cmd.txt");
     std::string full_cmd_str;
     std::getline(full_cmd_fin, full_cmd_str);
 
-    chr_seqs.read_fasta_into_map(reference_fname);
+    chr_seqs.read_fasta_into_map(reference_fname, true, n_threads);
 
     contig_map_t contig_map;
     contig_map.load(workdir);

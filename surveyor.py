@@ -391,9 +391,9 @@ def reads_categorizer(workdir):
 
 def deduplicate_vcf(vcf_fname, deduped_vcf_fname):
     if cmd_args.tr_bed:
-        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s -T %s > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.tr_bed, cmd_args.workdir)
+        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s -T %s -t %d > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.tr_bed, cmd_args.threads, cmd_args.workdir)
     else:
-        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.workdir)
+        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s -t %d > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.threads, cmd_args.workdir)
     run_cmd(compare_cmd)
 
     with open(cmd_args.workdir + "/compare.txt") as compare_file:
@@ -455,7 +455,7 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     normalise_cmd = SURVEYOR_PATH + "/bin/normalise %s/intermediate_results/sr.vcf.gz %s/intermediate_results/sr.norm.vcf.gz %s %d %d %d" % (workdir, workdir, reference_fname, cmd_args.threads, cmd_args.min_sv_size, max_is)
     run_cmd(normalise_cmd)
 
-    merge_compatible_haplotypes_cmd = SURVEYOR_PATH + "/bin/merge_compatible_haplotypes %s/intermediate_results/sr.norm.vcf.gz %s/intermediate_results/sr.norm.dedup.vcf.gz %s" % (workdir, workdir, reference_fname)
+    merge_compatible_haplotypes_cmd = SURVEYOR_PATH + "/bin/merge_compatible_haplotypes %s/intermediate_results/sr.norm.vcf.gz %s/intermediate_results/sr.norm.dedup.vcf.gz %s %d" % (workdir, workdir, reference_fname, cmd_args.threads)
     run_cmd(merge_compatible_haplotypes_cmd)
 
     dp_clusterer = SURVEYOR_PATH + "/bin/dp_clusterer %s %s %s %s" % (bam_fname, workdir, reference_fname, sample_name)
@@ -470,16 +470,16 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     normalise_cmd = SURVEYOR_PATH + "/bin/normalise %s/intermediate_results/out.vcf.gz %s/intermediate_results/out.norm.vcf.gz %s %d %d %d" % (workdir, workdir, reference_fname, cmd_args.threads, cmd_args.min_sv_size, max_is)
     run_cmd(normalise_cmd)
     
-    merge_compatible_haplotypes_cmd = SURVEYOR_PATH + "/bin/merge_compatible_haplotypes %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/out.norm.merged.vcf.gz %s" % (workdir, workdir, reference_fname)
+    merge_compatible_haplotypes_cmd = SURVEYOR_PATH + "/bin/merge_compatible_haplotypes %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/out.norm.merged.vcf.gz %s %d" % (workdir, workdir, reference_fname, cmd_args.threads)
     run_cmd(merge_compatible_haplotypes_cmd)
 
-    expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.merged.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s" % (workdir, workdir, reference_fname)
+    expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.merged.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s %d" % (workdir, workdir, reference_fname, cmd_args.threads)
     run_cmd(expand_aux_haplotypes_cmd)
 
 
 def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model, n_iters, generate_training_data):
     consensus_cache_options = ""
-    insertions_to_duplications_cmd = SURVEYOR_PATH + "/bin/insertions_to_duplications %s/intermediate_results/calls-raw.vcf.gz %s/intermediate_results/calls-for-genotyping.vcf.gz %s %s" % (workdir, workdir, reference_fname, workdir)
+    insertions_to_duplications_cmd = SURVEYOR_PATH + "/bin/insertions_to_duplications %s/intermediate_results/calls-raw.vcf.gz %s/intermediate_results/calls-for-genotyping.vcf.gz %s %s %d" % (workdir, workdir, reference_fname, workdir, cmd_args.threads)
     run_cmd(insertions_to_duplications_cmd)
 
     mkdir_clean(workdir + "/reads_to_sv_associations")

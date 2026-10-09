@@ -819,7 +819,7 @@ int main(int argc, char* argv[]) {
 
 	if (parsed_args.count("reference")) {
 		std::string ref_fname = parsed_args["reference"].as<std::string>();
-		chr_seqs.read_fasta_into_map(ref_fname);
+		chr_seqs.read_fasta_into_map(ref_fname, true, threads);
 	}
 
     if (parsed_args.count("tandem-repeats")) {

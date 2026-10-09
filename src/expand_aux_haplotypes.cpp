@@ -66,16 +66,17 @@ std::shared_ptr<sv_t> make_aux_indel_record(std::shared_ptr<sv_t> parent, size_t
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 4) {
-        throw std::runtime_error("Usage: expand_aux_haplotypes <in.vcf.gz> <out.vcf.gz> <reference.fa>");
+    if (argc != 4 && argc != 5) {
+        throw std::runtime_error("Usage: expand_aux_haplotypes <in.vcf.gz> <out.vcf.gz> <reference.fa> [threads]");
     }
 
     std::string in_vcf_fname = argv[1];
     std::string out_vcf_fname = argv[2];
     std::string reference_fname = argv[3];
+    int n_threads = argc >= 5 ? std::max(1, std::stoi(argv[4])) : 1;
 
     chr_seqs_map_t chr_seqs;
-    chr_seqs.read_fasta_into_map(reference_fname);
+    chr_seqs.read_fasta_into_map(reference_fname, true, n_threads);
 
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
     if (in_vcf_file == NULL) {

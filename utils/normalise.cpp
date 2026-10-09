@@ -168,7 +168,7 @@ int main(int argc, char* argv[]) {
 		normalise_max_is = std::stoi(argv[6]);
 	}
 
-	chr_seqs.read_fasta_into_map(reference_fname);
+	chr_seqs.read_fasta_into_map(reference_fname, true, n_threads);
 
 	htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
 	hdr = bcf_hdr_read(in_vcf_file);
