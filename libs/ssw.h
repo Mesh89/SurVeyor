@@ -29,7 +29,7 @@ extern "C" {
 #define MAPSTR "MIDNSHP=X"
 #define SSW_REPORT_PREFIX_SCORES 0x10
 #ifndef BAM_CIGAR_SHIFT
-#define BAM_CIGAR_SHIFT 4u
+#define BAM_CIGAR_SHIFT 4
 #endif
 
 extern const uint8_t encoded_ops[];
