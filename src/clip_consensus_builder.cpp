@@ -581,6 +581,51 @@ std::set<int> construction_read_indel_lengths(const std::deque<bam1_t*>& accepte
     return indel_lengths;
 }
 
+std::pair<hts_pos_t, hts_pos_t> choose_mate_window_bounds(const std::deque<bam1_t*>& accepted_reads, bool left_clipped, hts_pos_t start, hts_pos_t end) {
+    std::vector<std::pair<hts_pos_t, hts_pos_t>> windows;
+    for (bam1_t* r : accepted_reads) {
+        if (!is_primary(r) || !is_samechr(r) || is_samestr(r) || is_outward(r) || is_short(r, stats.min_is)) continue;
+        if (left_clipped && bam_is_rev(r) && !is_mate_left_clipped(r)) {
+            windows.push_back({r->core.mpos, r->core.mpos+stats.max_is});
+        } else if (!left_clipped && !bam_is_rev(r) && !is_mate_right_clipped(r)) {
+            hts_pos_t mate_endpos = get_mate_endpos(r);
+            windows.push_back({mate_endpos-stats.max_is, mate_endpos});
+        }
+    }
+
+    std::pair<hts_pos_t, hts_pos_t> bounds{consensus_t::LOWER_BOUNDARY_NON_CALCULATED, consensus_t::UPPER_BOUNDARY_NON_CALCULATED};
+    if (windows.empty()) return bounds;
+    std::sort(windows.begin(), windows.end());
+
+    auto intersection = windows[0];
+    size_t cluster_size = 1, best_size = 0;
+    hts_pos_t best_distance = HTS_POS_MAX;
+    auto consider_cluster = [&]() {
+        hts_pos_t distance = std::max(hts_pos_t(0), std::max(intersection.first-end, start-intersection.second));
+        if (cluster_size > best_size || (cluster_size == best_size && distance < best_distance)) {
+            bounds = intersection;
+            best_size = cluster_size;
+            best_distance = distance;
+        } else if (cluster_size == best_size && distance == best_distance) {
+            bounds = {consensus_t::UPPER_BOUNDARY_NON_CALCULATED, consensus_t::LOWER_BOUNDARY_NON_CALCULATED};
+        }
+    };
+    for (size_t i = 1; i < windows.size(); i++) {
+        // Keep a nonempty running intersection, rather than chaining overlaps.
+        if (std::max(intersection.first, windows[i].first) < std::min(intersection.second, windows[i].second)) {
+            intersection.first = std::max(intersection.first, windows[i].first);
+            intersection.second = std::min(intersection.second, windows[i].second);
+            cluster_size++;
+        } else {
+            consider_cluster();
+            intersection = windows[i];
+            cluster_size = 1;
+        }
+    }
+    consider_cluster();
+    return bounds;
+}
+
 std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deque<bam1_t*> clipped, std::deque<bool>& used, clip_read_cache_t& read_cache, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
 
     if (clipped.size() <= 2 || clipped.size() > 20*stats.get_max_depth(contig_name)) {
@@ -650,8 +695,9 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
             bool left_clipped = ref_classification == consensus_ref_classification_t::LEFT;
 
             hts_pos_t breakpoint = left_clipped ? INT32_MAX : 0; // the current HTS_POS_MAX does not compile on some compilers
-            hts_pos_t other_bp_lower_boundary = consensus_t::LOWER_BOUNDARY_NON_CALCULATED;
-            hts_pos_t other_bp_upper_boundary = consensus_t::UPPER_BOUNDARY_NON_CALCULATED;
+            auto mate_window = choose_mate_window_bounds(accepted_reads, left_clipped, start, end);
+            hts_pos_t other_bp_lower_boundary = mate_window.first;
+            hts_pos_t other_bp_upper_boundary = mate_window.second;
             int fwd_clipped = 0, rev_clipped = 0;
             uint8_t max_mapq = 0;
             for (bam1_t* r : accepted_reads) {
@@ -659,16 +705,6 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
                 else fwd_clipped++;
 
                 max_mapq = std::max(max_mapq, r->core.qual);
-
-                if (!is_proper_pair(r, stats.min_is, stats.max_is)) continue;
-                if (left_clipped && bam_is_rev(r) && !is_mate_left_clipped(r)) {
-                    other_bp_lower_boundary = std::max(other_bp_lower_boundary, r->core.mpos);
-                    other_bp_upper_boundary = std::min(other_bp_upper_boundary, r->core.mpos+stats.max_is);
-                } else if (!left_clipped && !bam_is_rev(r) && !is_mate_right_clipped(r)) {
-                    hts_pos_t mate_endpos = get_mate_endpos(r);
-                    other_bp_lower_boundary = std::max(other_bp_lower_boundary, mate_endpos-stats.max_is);
-                    other_bp_upper_boundary = std::min(other_bp_upper_boundary, get_mate_endpos(r));
-                }
             }
 
             if (other_bp_lower_boundary >= other_bp_upper_boundary) {
