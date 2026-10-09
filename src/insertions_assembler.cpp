@@ -350,7 +350,9 @@ void find_insertions(int id, int contig_id, int comp_id, std::vector<cc_v_distan
             if (c1->cluster->used || c2->cluster->used) continue;
 
             pair_eval_t eval;
-            eval.success = find_insertion_from_cluster_pair(c1, c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads);
+            spec_thread_pool->push([&](int) {
+                eval.success = find_insertion_from_cluster_pair(c1, c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads);
+            }).get();
             commit_pair_eval(eval);
             if (eval.success) {
                 c1->cluster->used = true; c2->cluster->used = true;

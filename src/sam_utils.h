@@ -393,7 +393,7 @@ samFile* open_writer_mt(std::string filename, bam_hdr_t* header, htsThreadPool* 
     if (writer == NULL) {
         throw std::runtime_error("Unable to open " + filename);
     }
-    if (hts_set_opt(writer, HTS_OPT_THREAD_POOL, pool) != 0) {
+    if (pool && pool->pool && hts_set_opt(writer, HTS_OPT_THREAD_POOL, pool) != 0) {
         sam_close(writer);
         throw std::runtime_error("Failed to set thread pool for " + filename);
     }

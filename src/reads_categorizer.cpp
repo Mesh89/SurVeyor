@@ -99,7 +99,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     if (hts_set_fai_filename(bam_file.file, fai_path(reference_fname.c_str())) != 0) {
         throw std::runtime_error("Failed to read reference " + reference_fname);
     }
-    if (hts_set_opt(bam_file.file, HTS_OPT_THREAD_POOL, &hts_pool) != 0) {
+    if (hts_pool.pool && hts_set_opt(bam_file.file, HTS_OPT_THREAD_POOL, &hts_pool) != 0) {
         throw std::runtime_error("Failed to set thread pool for " + bam_fname);
     }
 
@@ -446,9 +446,13 @@ int main(int argc, char* argv[]) {
     dist_between_end_and_rnd.resize(stats.max_is+1);
 
     // Categorize reads
-    hts_pool.pool = hts_tpool_init(config.threads);
-    if (hts_pool.pool == NULL) throw std::runtime_error("Failed to initialize HTSlib thread pool");
-    ctpl::thread_pool categorize_thread_pool(config.threads);
+    int hts_threads = std::min(8, config.threads / 2);
+    int n_workers = config.threads - hts_threads;
+    if (hts_threads > 0) {
+        hts_pool.pool = hts_tpool_init(hts_threads);
+        if (hts_pool.pool == NULL) throw std::runtime_error("Failed to initialize HTSlib thread pool");
+    }
+    ctpl::thread_pool categorize_thread_pool(n_workers);
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
         std::string contig_name = contig_map.get_name(contig_id);
         std::future<void> future = categorize_thread_pool.push(categorize, contig_id, contig_name, bam_fname, reference_fname, rnd_pos_map[contig_name]);
@@ -458,7 +462,7 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < futures.size(); i++) {
         futures[i].get();
     }
-    hts_tpool_destroy(hts_pool.pool);
+    if (hts_pool.pool) hts_tpool_destroy(hts_pool.pool);
     hts_pool.pool = NULL;
 
     if (depths.size() < MIN_RND_POS) {

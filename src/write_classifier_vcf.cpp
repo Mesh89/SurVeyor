@@ -3,11 +3,13 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 
 #include <htslib/vcf.h>
+#include "htslib/thread_pool.h"
 
 struct prediction_t {
     int8_t gt;
@@ -97,36 +99,42 @@ void apply_prediction(bcf_hdr_t* hdr, bcf1_t* record, const prediction_t& predic
 }
 
 void write_classifier_vcf(const std::string& input_fname, const std::string& predictions_fname, const std::string& output_fname, const std::string& training_set_sha256, int n_threads) {
+    htsThreadPool pool = {NULL, 0};
+    if (n_threads > 1) {
+        pool.pool = hts_tpool_init(n_threads - 1);
+        if (pool.pool == NULL) throw std::runtime_error("Failed to create the shared VCF thread pool.");
+    }
+    std::unique_ptr<hts_tpool, decltype(&hts_tpool_destroy)> pool_guard(pool.pool, &hts_tpool_destroy);
     std::unordered_map<uint64_t, prediction_t> predictions = load_predictions(predictions_fname);
     
-    htsFile* in = bcf_open(input_fname.c_str(), "r");
+    std::unique_ptr<htsFile, decltype(&hts_close)> in(bcf_open(input_fname.c_str(), "r"), &hts_close);
     if (in == NULL) throw std::runtime_error("Failed to open " + input_fname + ".");
-    if (hts_set_threads(in, n_threads) != 0) { hts_close(in); throw std::runtime_error("Failed to enable multithreaded decompression for " + input_fname + "."); }
+    if (pool.pool && hts_set_opt(in.get(), HTS_OPT_THREAD_POOL, &pool) != 0) throw std::runtime_error("Failed to enable multithreaded decompression for " + input_fname + ".");
     
-    bcf_hdr_t* hdr = bcf_hdr_read(in);
-    if (hdr == NULL) { hts_close(in); throw std::runtime_error("Failed to read the header from " + input_fname + "."); }
-    if (bcf_hdr_nsamples(hdr) != 1) { bcf_hdr_destroy(hdr); hts_close(in); throw std::runtime_error("The classifier VCF writer requires exactly one sample."); }
-    update_header(hdr, training_set_sha256);
+    std::unique_ptr<bcf_hdr_t, decltype(&bcf_hdr_destroy)> hdr(bcf_hdr_read(in.get()), &bcf_hdr_destroy);
+    if (hdr == NULL) throw std::runtime_error("Failed to read the header from " + input_fname + ".");
+    if (bcf_hdr_nsamples(hdr.get()) != 1) throw std::runtime_error("The classifier VCF writer requires exactly one sample.");
+    update_header(hdr.get(), training_set_sha256);
     
-    htsFile* out = bcf_open(output_fname.c_str(), "wz");
-    if (out == NULL) { bcf_hdr_destroy(hdr); hts_close(in); throw std::runtime_error("Failed to create " + output_fname + "."); }
-    if (hts_set_threads(out, n_threads) != 0) { hts_close(out); bcf_hdr_destroy(hdr); hts_close(in); throw std::runtime_error("Failed to enable multithreaded compression for " + output_fname + "."); }
-    if (bcf_hdr_write(out, hdr) != 0) { hts_close(out); bcf_hdr_destroy(hdr); hts_close(in); throw std::runtime_error("Failed to write the VCF header."); }
+    std::unique_ptr<htsFile, decltype(&hts_close)> out(bcf_open(output_fname.c_str(), "wz"), &hts_close);
+    if (out == NULL) throw std::runtime_error("Failed to create " + output_fname + ".");
+    if (pool.pool && hts_set_opt(out.get(), HTS_OPT_THREAD_POOL, &pool) != 0) throw std::runtime_error("Failed to enable multithreaded compression for " + output_fname + ".");
+    if (bcf_hdr_write(out.get(), hdr.get()) != 0) throw std::runtime_error("Failed to write the VCF header.");
     
     int32_t current_rid = -1;
     uint64_t record_idx = 0;
-    bcf1_t* record = bcf_init();
-    if (record == NULL) { hts_close(out); bcf_hdr_destroy(hdr); hts_close(in); throw std::runtime_error("Failed to allocate a VCF record."); }
-    while (bcf_read(in, hdr, record) == 0) {
+    std::unique_ptr<bcf1_t, decltype(&bcf_destroy)> record(bcf_init(), &bcf_destroy);
+    if (record == NULL) throw std::runtime_error("Failed to allocate a VCF record.");
+    while (bcf_read(in.get(), hdr.get(), record.get()) == 0) {
         if (record->rid != current_rid) { current_rid = record->rid; record_idx = 0; }
         uint64_t record_key = (uint64_t(uint32_t(record->rid))<<32)|record_idx++;
         auto prediction = predictions.find(record_key);
-        if (prediction != predictions.end()) { clear_ml_fields(hdr, record); apply_prediction(hdr, record, prediction->second); }
-        if (bcf_write(out, hdr, record) != 0) { bcf_destroy(record); hts_close(out); bcf_hdr_destroy(hdr); hts_close(in); throw std::runtime_error("Failed to write a VCF record."); }
+        if (prediction != predictions.end()) { clear_ml_fields(hdr.get(), record.get()); apply_prediction(hdr.get(), record.get(), prediction->second); }
+        if (bcf_write(out.get(), hdr.get(), record.get()) != 0) throw std::runtime_error("Failed to write a VCF record.");
     }
-    bcf_destroy(record);
-    int in_close_result = hts_close(in), out_close_result = hts_close(out);
-    bcf_hdr_destroy(hdr);
+    record.reset();
+    int in_close_result = hts_close(in.release()), out_close_result = hts_close(out.release());
+    hdr.reset();
 
     if (in_close_result != 0) throw std::runtime_error("Failed to finalize reading " + input_fname + ".");
     if (out_close_result != 0) throw std::runtime_error("Failed to finalize " + output_fname + ".");
