@@ -993,6 +993,20 @@ std::vector<std::shared_ptr<sv_t>> detect_svs(std::string& contig_name, char* co
     return svs;
 }
 
+// Inconsistent auxiliary indels indicate that the sequence may not represent a single haplotype.
+// NOTE: this MIGHT point to a situation where part of the sequence was duplicated; however, it is a complication
+// we do not attempt to resolve, for now
+inline bool aux_list_is_single_haplotype(const sv_t* sv) {
+    std::vector<std::shared_ptr<sv_t>> edits = sv->aux_indels;
+    std::sort(edits.begin(), edits.end(), aux_indel_haplotype_order);
+    for (size_t i = 0; i < edits.size(); i++) {
+        if (i && (edits[i]->start < edits[i-1]->end ||
+                  (edits[i]->start == edits[i-1]->start && edits[i]->end == edits[i-1]->end))) return false;
+        for (const snp_t& snp : sv->aux_snps) if (edits[i]->start < snp.pos && snp.pos <= edits[i]->end) return false;
+    }
+    return true;
+}
+
 std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::shared_ptr<consensus_t> leftmost_consensus, std::shared_ptr<consensus_t> rightmost_consensus,
 	suffix_prefix_aln_t& spa, StripedSmithWaterman::Aligner& aligner, stats_t& stats, config_t& config) {
 
@@ -1105,6 +1119,7 @@ std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* con
 		std::unordered_set<std::string> aux_snp_keys, aux_indel_keys;
 		bnd->aux_snps.erase(std::remove_if(bnd->aux_snps.begin(), bnd->aux_snps.end(), [&aux_snp_keys](const snp_t& snp) { return !aux_snp_keys.insert(snp.unique_key()).second; }), bnd->aux_snps.end());
 		bnd->aux_indels.erase(std::remove_if(bnd->aux_indels.begin(), bnd->aux_indels.end(), [&aux_indel_keys](const std::shared_ptr<sv_t>& aux) { return !aux_indel_keys.insert(aux->unique_key(false)).second; }), bnd->aux_indels.end());
+		if (!aux_list_is_single_haplotype(bnd.get())) return full_svs;
 		full_svs.insert(full_svs.begin(), bnd);
 		return full_svs;
 	} else {
@@ -1166,6 +1181,7 @@ std::vector<std::shared_ptr<sv_t>> detect_bnd(std::string contig_name, char* con
 		std::unordered_set<std::string> aux_snp_keys, aux_indel_keys;
 		bnd->aux_snps.erase(std::remove_if(bnd->aux_snps.begin(), bnd->aux_snps.end(), [&aux_snp_keys](const snp_t& snp) { return !aux_snp_keys.insert(snp.unique_key()).second; }), bnd->aux_snps.end());
 		bnd->aux_indels.erase(std::remove_if(bnd->aux_indels.begin(), bnd->aux_indels.end(), [&aux_indel_keys](const std::shared_ptr<sv_t>& aux) { return !aux_indel_keys.insert(aux->unique_key(false)).second; }), bnd->aux_indels.end());
+		if (!aux_list_is_single_haplotype(bnd.get())) return full_svs;
 		full_svs.insert(full_svs.begin(), bnd);
 		return full_svs;
 	}
