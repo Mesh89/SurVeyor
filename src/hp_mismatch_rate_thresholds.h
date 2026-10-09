@@ -380,8 +380,9 @@ inline void collect_hp_5p_blocker_evidence(open_samFile_t* alignment_file, const
     if (status < -1) throw std::runtime_error("Error while reading alignments for " + region + ".");
 }
 
-// Use the longest query HP to select a calibration row; keep the first run on ties.
-inline std::vector<uint8_t> recalibrate_clip_read_qualities(bam1_t* read, const config_t& config, const hp_tail_quality_model_t& model, hp_tail_quality_table_t& quality_cache, const std::string* decoded_seq = nullptr) {
+// Select the longest query HP (first on ties), then use the model's reference-anchored
+// interpretation only if it overlaps that run. Otherwise retain the query fallback.
+inline std::vector<uint8_t> recalibrate_clip_read_qualities(bam1_t* read, const config_t& config, const hp_tail_quality_model_t& model, hp_tail_quality_table_t& quality_cache, const std::string* decoded_seq = nullptr, char* contig_seq = nullptr, hts_pos_t contig_len = 0) {
     const uint8_t* bam_quals = bam_get_qual(read);
     std::vector<uint8_t> quals(bam_quals, bam_quals + read->core.l_qseq);
     std::replace(quals.begin(), quals.end(), uint8_t(255), uint8_t(0));
@@ -393,8 +394,28 @@ inline std::vector<uint8_t> recalibrate_clip_read_qualities(bam1_t* read, const 
     int hp_len = hp.end - hp.beg;
     if (hp_len < MIN_REF_HP_LEN) return quals;
     bool is_reverse = bam_is_rev(read);
+    int left_tail_len = hp.beg, right_tail_len = seq.length() - hp.end;
+    if (contig_seq != nullptr) {
+        hts_pos_t ref_beg = std::max<hts_pos_t>(0, read->core.pos), ref_end = std::min(contig_len, bam_endpos(read));
+        // Include the complete run when the alignment starts inside it.
+        while (ref_beg > 0 && ref_beg < ref_end && contig_seq[ref_beg] == contig_seq[ref_beg-1]) ref_beg--;
+        std::vector<hp_run_context_t> hp_runs = find_hp_runs(contig_seq, contig_len, ref_beg, ref_end);
+        for (const hp_run_context_t& hp_run : hp_runs) {
+            if (hp_run.base != seq[hp.beg]) continue;
+            hp_read_info_t info = estimate_hp_read_for_calibration(read, hp_run, contig_seq, contig_len, config);
+            if (info.hp_len < 0 || info.hp_deletion_extends_outside_hp || info.hp_insertion_has_non_hp_bases) continue;
+            if (info.tail_5p_len < 0 || info.tail_3p_len <= 0 || info.tail_5p_len + info.hp_len + info.tail_3p_len != seq.length()) continue;
+            int anchored_beg = is_reverse ? info.tail_3p_len : info.tail_5p_len;
+            int anchored_end = anchored_beg + info.hp_len;
+            if (anchored_beg >= hp.end || anchored_end <= hp.beg) continue;
+            hp_len = info.hp_len;
+            left_tail_len = anchored_beg;
+            right_tail_len = seq.length() - anchored_end;
+            break;
+        }
+    }
     // BAM query sequence is reference-oriented: the 3' tail is left of the HP on reverse reads.
-    std::vector<hp_read_observation_t> observations{{seq, quals, (int) hp.beg, is_reverse, 0.0, (int) (seq.length() - hp.end), std::vector<uint8_t>(bam_quals, bam_quals + read->core.l_qseq)}};
+    std::vector<hp_read_observation_t> observations{{seq, quals, left_tail_len, is_reverse, 0.0, right_tail_len, std::vector<uint8_t>(bam_quals, bam_quals + read->core.l_qseq)}};
     recalibrate_hp_3p_tail_qualities(observations, hp_len, seq[hp.beg], model, quality_cache);
     return std::move(observations[0].quals);
 }

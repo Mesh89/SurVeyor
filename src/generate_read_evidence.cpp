@@ -125,7 +125,7 @@ int main(int argc, char* argv[]) {
     stats_t stats;
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
     chr_seqs_map_t chr_seqs;
-    chr_seqs.read_fasta_into_map(reference_fname);
+    chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
     bam_pool_t bam_pool(config.threads, bam_fname, reference_fname);
     evidence_logger_t evidence_logger(association_dir);
 

@@ -52,8 +52,10 @@ struct clip_read_cache_t {
 
     std::unordered_map<const bam1_t*, read_data_t> entries;
     hp_tail_quality_table_t& quality_cache;
+    char* contig_seq;
+    hts_pos_t contig_len;
 
-    explicit clip_read_cache_t(hp_tail_quality_table_t& quality_cache) : quality_cache(quality_cache) {}
+    explicit clip_read_cache_t(hp_tail_quality_table_t& quality_cache, char* contig_seq = nullptr, hts_pos_t contig_len = 0) : quality_cache(quality_cache), contig_seq(contig_seq), contig_len(contig_len) {}
 
     read_data_t& get(bam1_t* read) {
         auto entry = entries.find(read);
@@ -77,7 +79,7 @@ struct clip_read_cache_t {
     std::vector<uint8_t>& qualities(bam1_t* read) {
         read_data_t& data = get(read);
         if (!data.has_quals) {
-            data.quals = recalibrate_clip_read_qualities(read, config, hp_tail_quality_model, quality_cache, &data.seq);
+            data.quals = recalibrate_clip_read_qualities(read, config, hp_tail_quality_model, quality_cache, &data.seq, contig_seq, contig_len);
             data.has_quals = true;
         }
         return data.quals;
@@ -817,7 +819,7 @@ struct consensus_window_t {
 std::shared_ptr<consensus_window_t> build_consensuses(int id, std::shared_ptr<consensus_window_t> window, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
     // The sample model is immutable; only calibration-bin lookups outlive this window.
     thread_local hp_tail_quality_table_t quality_cache;
-    clip_read_cache_t read_cache(quality_cache);
+    clip_read_cache_t read_cache(quality_cache, contigs.get_seq(window->contig_name), contigs.get_len(window->contig_name));
     std::deque<bam1_t*> cluster;
     std::deque<bool> used_for_consensus;
 

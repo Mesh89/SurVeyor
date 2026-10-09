@@ -527,7 +527,7 @@ int main(int argc, char* argv[]) {
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
-    contigs.read_fasta_into_map(reference_fname);
+    contigs.read_fasta_into_map(reference_fname, true, config.threads);
     contig_map.load(workdir);
 
     assembly_failed_no_seq.open(workdir + "/intermediate_results/assembly_failed.no_seq.sv");

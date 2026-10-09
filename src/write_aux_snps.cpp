@@ -573,7 +573,7 @@ int main(int argc, char* argv[]) {
     std::string out_stvars_vcf_fname = out_stvars_prefix + ".vcf.gz";
 
     chr_seqs_map_t chr_seqs;
-    chr_seqs.read_fasta_into_map(reference_fname);
+    chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
 
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
     if (in_vcf_file == NULL) {

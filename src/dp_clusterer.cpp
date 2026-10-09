@@ -239,7 +239,7 @@ int main(int argc, char* argv[]) {
 
 	stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
-	chr_seqs.read_fasta_into_map(reference_fname);
+	chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
 
 	ctpl::thread_pool thread_pool1(config.threads);
 	std::vector<std::future<void> > futures;

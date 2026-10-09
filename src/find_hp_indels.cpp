@@ -703,7 +703,7 @@ int main(int argc, char* argv[]) {
     contig_map_t contig_map(workdir);
 
     chr_seqs_map_t chr_seqs;
-    chr_seqs.read_fasta_into_map(reference_fname);
+    chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
 
     bam_pool_t bam_pool(config.threads, alignment_fname, reference_fname);
     mateseqs_w_mapq.resize(contig_map.size());
