@@ -146,17 +146,22 @@ void cluster_ow_dps(int contig_id, std::string contig_name, std::vector<std::sha
 	}
 }
 
-void cluster_dps(int id, int contig_id, std::string contig_name, std::string bam_fname) {
+void cluster_lp_task(int id, int contig_id, std::string contig_name) {
 
 	std::vector<std::shared_ptr<deletion_t>> deletions;
-	std::vector<std::shared_ptr<duplication_t>> duplications;
 	cluster_lp_dps(contig_id, contig_name, deletions);
+
+	std::lock_guard<std::mutex> lock(maps_mtx);
+	deletions_by_chr[contig_name] = deletions;
+}
+
+void cluster_ow_task(int id, int contig_id, std::string contig_name) {
+
+	std::vector<std::shared_ptr<duplication_t>> duplications;
 	cluster_ow_dps(contig_id, contig_name, duplications);
 
-	maps_mtx.lock();
-	deletions_by_chr[contig_name] = deletions;
+	std::lock_guard<std::mutex> lock(maps_mtx);
 	duplications_by_chr[contig_name] = duplications;
-	maps_mtx.unlock();
 }
 
 void merge_sr_dp_dels(int id, int contig_id, std::string contig_name) {
@@ -245,7 +250,9 @@ int main(int argc, char* argv[]) {
 	std::vector<std::future<void> > futures;
 	for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
 		std::string contig_name = contig_map.get_name(contig_id);
-		std::future<void> future = thread_pool1.push(cluster_dps, contig_id, contig_name, bam_fname);
+		std::future<void> future = thread_pool1.push(cluster_lp_task, contig_id, contig_name);
+		futures.push_back(std::move(future));
+		future = thread_pool1.push(cluster_ow_task, contig_id, contig_name);
 		futures.push_back(std::move(future));
 	}
 	thread_pool1.stop(true);

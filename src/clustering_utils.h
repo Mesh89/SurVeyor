@@ -49,17 +49,17 @@ struct cluster_t {
 		ra_furthermost_seq = bam_get_qname(read);
 	}
 
-	static hts_pos_t distance(std::shared_ptr<cluster_t> c1, std::shared_ptr<cluster_t> c2) {
+	static hts_pos_t distance(const std::shared_ptr<cluster_t>& c1, const std::shared_ptr<cluster_t>& c2) {
 		hts_pos_t la_dist = std::max(c1->la_end, c2->la_end) - std::min(c1->la_start, c2->la_start);
 		hts_pos_t ra_dist = std::max(c1->ra_end, c2->ra_end) - std::min(c1->ra_start, c2->ra_start);
 		return std::max(la_dist, ra_dist);
 	}
 
-	static bool can_merge(std::shared_ptr<cluster_t> c1, std::shared_ptr<cluster_t> c2, int max_distance) {
+	static bool can_merge(const std::shared_ptr<cluster_t>& c1, const std::shared_ptr<cluster_t>& c2, int max_distance) {
 		return c1->la_rev == c2->la_rev && c1->ra_rev == c2->ra_rev && distance(c1, c2) <= max_distance;
 	}
 
-	static std::shared_ptr<cluster_t> merge(std::shared_ptr<cluster_t> c1, std::shared_ptr<cluster_t> c2) {
+	static std::shared_ptr<cluster_t> merge(const std::shared_ptr<cluster_t>& c1, const std::shared_ptr<cluster_t>& c2) {
 		std::shared_ptr<cluster_t> merged = std::make_shared<cluster_t>();
 		merged->la_start = std::min(c1->la_start, c2->la_start);
 		merged->la_end = std::max(c1->la_end, c2->la_end);
@@ -113,7 +113,7 @@ struct cc_distance_t {
     int distance;
     std::shared_ptr<cluster_t> c1, c2;
 
-    cc_distance_t(std::shared_ptr<cluster_t> c1, std::shared_ptr<cluster_t> c2) : distance(cluster_t::distance(c1, c2)), c1(c1), c2(c2) {}
+    cc_distance_t(const std::shared_ptr<cluster_t>& c1, const std::shared_ptr<cluster_t>& c2) : distance(cluster_t::distance(c1, c2)), c1(c1), c2(c2) {}
 };
 bool operator < (const cc_distance_t& ccd1, const cc_distance_t& ccd2) { // reverse op for priority queue
     return ccd1.distance > ccd2.distance;
