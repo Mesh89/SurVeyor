@@ -5,7 +5,9 @@
 #include <unordered_set>
 #include <map>
 #include <algorithm>
+#include <deque>
 #include <memory>
+#include <sstream>
 #include <unistd.h>
 
 #include <htslib/sam.h>
@@ -29,6 +31,7 @@ config_t config;
 stats_t stats;
 std::string workdir;
 std::mutex mtx;
+ctpl::thread_pool* spec_thread_pool = nullptr;
 
 contig_map_t contig_map;
 chr_seqs_map_t contigs;
@@ -39,6 +42,25 @@ std::vector<std::shared_ptr<sv_t>> insertions;
 
 const double BASE_ACCEPTANCE_THRESHOLD = 0.95;
 const int TOO_MANY_READS = 1000;
+
+struct pair_eval_t {
+    bool success = false;
+    std::vector<std::shared_ptr<sv_t>> found;
+    std::ostringstream failed_no_seq, failed_cycle, failed_too_many_reads;
+};
+
+void commit_pair_eval(pair_eval_t& eval) {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        insertions.insert(insertions.end(), eval.found.begin(), eval.found.end());
+    }
+    {
+        std::lock_guard<std::mutex> lock(failed_assembly_mtx);
+        assembly_failed_no_seq << eval.failed_no_seq.str();
+        assembly_failed_cycle_writer << eval.failed_cycle.str();
+        assembly_failed_too_many_reads_writer << eval.failed_too_many_reads.str();
+    }
+}
 
 struct cc_v_distance_t {
     std::shared_ptr<insertion_cluster_t> c1, c2;
@@ -55,7 +77,8 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 				   std::unordered_map<std::string, std::string>& matequals,
                    StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& permissive_aligner,
                    StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
-                   stats_t& stats) {
+                   stats_t& stats, std::vector<std::shared_ptr<sv_t>>& found,
+                   std::ostream& failed_no_seq, std::ostream& failed_cycle, std::ostream& failed_too_many_reads) {
 
 	if (l_cluster->cluster->count + r_cluster->cluster->count > TOO_MANY_READS) return false;
 
@@ -87,13 +110,11 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 
     std::string contig_name = contig_map.get_name(contig_id);
     if (regions.empty()) {
-		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, assembly_failed_no_seq, assembly_failed_cycle_writer, assembly_failed_too_many_reads_writer,
+		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
 				aligner_to_base, harsh_aligner, config, stats);
                 
         if (ins != NULL) {
-			mtx.lock();
-            insertions.push_back(ins);
-			mtx.unlock();
+            found.push_back(ins);
             return true;
 		}
 		return false;
@@ -126,13 +147,11 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     }
 	int tot_reads = r_cluster->cluster->reads.size() + l_cluster->cluster->reads.size();
 	if (rc_accepted_reads == 0 || lc_accepted_reads == 0 || double(rc_accepted_reads+lc_accepted_reads)/tot_reads < 0.5) {
-		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, assembly_failed_no_seq, assembly_failed_cycle_writer, assembly_failed_too_many_reads_writer,
+		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
 				aligner_to_base, harsh_aligner, config, stats);
 
 		if (ins != NULL) {
-            mtx.lock();
-            insertions.push_back(ins);
-			mtx.unlock();
+            found.push_back(ins);
 			return true;
 		}
 	}
@@ -143,9 +162,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     std::shared_ptr<insertion_t> insertion = detect_reference_guided_assembly_insertion(contig_name, contigs.get_seq(contig_name), contigs.get_len(contig_name), 
         corrected_consensus_sequence, r_cluster, l_cluster, ro_remap_side, lo_remap_side, best_region, is_rc, left_bp_precise, right_bp_precise, aligner, stats, config);
     if (insertion != NULL) {
-        mtx.lock();
-        insertions.push_back(insertion);
-        mtx.unlock();
+        found.push_back(insertion);
         success = true;
     }
     return success;
@@ -321,23 +338,70 @@ void find_insertions(int id, int contig_id, int comp_id, std::vector<cc_v_distan
                      std::shared_ptr<std::unordered_map<std::string, std::string>> mateseqs,
                      std::shared_ptr<std::unordered_map<std::string, std::string>> matequals) {
 
-    StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
-    StripedSmithWaterman::Aligner permissive_aligner(2, 2, 4, 1, false);
-    StripedSmithWaterman::Aligner aligner_to_base(1, 4, 6, 1, true);
-    StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, true);
+    if (cc_v_distances.size() < 64) {
+        StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
+        StripedSmithWaterman::Aligner permissive_aligner(2, 2, 4, 1, false);
+        StripedSmithWaterman::Aligner aligner_to_base(1, 4, 6, 1, true);
+        StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, true);
 
-    for (cc_v_distance_t& cc_v_distance : cc_v_distances) {
+        for (cc_v_distance_t& cc_v_distance : cc_v_distances) {
+            std::shared_ptr<insertion_cluster_t> c1 = cc_v_distance.c1;
+            std::shared_ptr<insertion_cluster_t> c2 = cc_v_distance.c2;
+            if (c1->cluster->used || c2->cluster->used) continue;
 
-        std::shared_ptr<insertion_cluster_t> c1 = cc_v_distance.c1;
-        std::shared_ptr<insertion_cluster_t> c2 = cc_v_distance.c2;
+            pair_eval_t eval;
+            eval.success = find_insertion_from_cluster_pair(c1, c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads);
+            commit_pair_eval(eval);
+            if (eval.success) {
+                c1->cluster->used = true; c2->cluster->used = true;
+            }
+        }
+    } else {
+        size_t n = cc_v_distances.size(), next = 0;
+        size_t max_in_flight = 2*config.threads;
+        std::vector<std::unique_ptr<pair_eval_t>> evals(n);
+        std::deque<std::pair<size_t, std::future<void>>> in_flight;
 
-        if (c1->cluster->used || c2->cluster->used) continue;
+        auto launch = [&]() {
+            while (in_flight.size() < max_in_flight && next < n) {
+                size_t i = next++;
+                cc_v_distance_t& cc_v_distance = cc_v_distances[i];
+                if (cc_v_distance.c1->cluster->used || cc_v_distance.c2->cluster->used) continue;
+                evals[i].reset(new pair_eval_t());
+                // Reserve the queue entry before submitting so every task is tracked if allocation fails.
+                in_flight.emplace_back(i, std::future<void>());
+                in_flight.back().second = spec_thread_pool->push([&, i](int) {
+                    StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
+                    StripedSmithWaterman::Aligner permissive_aligner(2, 2, 4, 1, false);
+                    StripedSmithWaterman::Aligner aligner_to_base(1, 4, 6, 1, true);
+                    StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, true);
+                    pair_eval_t& eval = *evals[i];
+                    cc_v_distance_t& cc_v_distance = cc_v_distances[i];
+                    eval.success = find_insertion_from_cluster_pair(cc_v_distance.c1, cc_v_distance.c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads);
+                });
+            }
+        };
 
-        // remap clusters
-		bool success = find_insertion_from_cluster_pair(c1, c2, contig_id, hdr, *mateseqs.get(), *matequals.get(),
-			aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats);
-        if (success) {
-            c1->cluster->used = true; c2->cluster->used = true;
+        try {
+            for (size_t i = 0; i < n; i++) {
+                launch();
+                if (in_flight.empty() || in_flight.front().first != i) continue;
+                in_flight.front().second.get();
+                in_flight.pop_front();
+                cc_v_distance_t& cc_v_distance = cc_v_distances[i];
+                if (!cc_v_distance.c1->cluster->used && !cc_v_distance.c2->cluster->used) {
+                    commit_pair_eval(*evals[i]);
+                    if (evals[i]->success) {
+                        cc_v_distance.c1->cluster->used = true; cc_v_distance.c2->cluster->used = true;
+                    }
+                }
+                evals[i].reset();
+            }
+        } catch (...) {
+            for (auto& pending : in_flight) {
+                if (pending.second.valid()) pending.second.wait();
+            }
+            throw;
         }
     }
     std::unordered_set<std::shared_ptr<insertion_cluster_t> > clusters;
@@ -534,6 +598,7 @@ int main(int argc, char* argv[]) {
     assembly_failed_cycle_writer.open(workdir + "/intermediate_results/assembly_failed.w_cycle.sv");
     assembly_failed_too_many_reads_writer.open(workdir + "/intermediate_results/assembly_failed.too_many_reads.sv");
 
+    spec_thread_pool = new ctpl::thread_pool(config.threads);
     ctpl::thread_pool thread_pool(config.threads);
     std::vector<std::future<void> > futures;
 
@@ -544,6 +609,9 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < futures.size(); i++) {
         futures[i].get();
     }
+    spec_thread_pool->stop(true);
+    delete spec_thread_pool;
+    spec_thread_pool = nullptr;
 
 	bcf1_t* bcf_entry = bcf_init();
 

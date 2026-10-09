@@ -343,7 +343,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seqs_map_t& contigs,
 		std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
-		std::ofstream& assembly_failed_no_seq, std::ofstream& assembly_failed_cycle_writer, std::ofstream& assembly_failed_too_many_reads_writer,
+		std::ostream& assembly_failed_no_seq, std::ostream& assembly_failed_cycle_writer, std::ostream& assembly_failed_too_many_reads_writer,
 		StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
 		config_t& config, stats_t& stats) {
 
