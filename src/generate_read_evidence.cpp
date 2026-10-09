@@ -127,6 +127,7 @@ int main(int argc, char* argv[]) {
     chr_seqs_map_t chr_seqs;
     chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
     bam_pool_t bam_pool(config.threads, bam_fname, reference_fname);
+    for (open_samFile_t* reader : bam_pool.pool) hts_set_cache_size(reader->file, config.bam_reader_cache_size);
     evidence_logger_t evidence_logger(association_dir);
 
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");

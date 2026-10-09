@@ -28,6 +28,7 @@ KSEQ_INIT(int, read)
 struct config_t {
 
     int threads, seed;
+    int bam_reader_cache_size = 256 << 20; // Bytes per reader.
     int min_clip_len, min_stable_mapq, min_diff_hsr;
     int coverage_window_size = 1000;
     int high_confidence_mapq;
@@ -51,6 +52,7 @@ struct config_t {
         fin.close();
 
         threads = std::stoi(config_params["threads"]);
+        if (config_params.count("bam_reader_cache_size")) bam_reader_cache_size = std::stoi(config_params["bam_reader_cache_size"]);
         seed = std::stoi(config_params["seed"]);
         min_clip_len = std::stoi(config_params["min_clip_len"]);
         if (config_params.count("coverage_window_size")) coverage_window_size = std::stoi(config_params["coverage_window_size"]);

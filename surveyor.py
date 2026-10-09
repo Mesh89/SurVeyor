@@ -21,6 +21,12 @@ def valid_nonnegative_int(arg):
         raise argparse.ArgumentTypeError("Value must be non-negative.")
     return value
 
+def valid_bam_reader_cache_size(arg):
+    value = valid_nonnegative_int(arg)
+    if value > 2047: # htslib accepts the cache size as an int byte count.
+        raise argparse.ArgumentTypeError("Value must be at most 2047 MiB.")
+    return value
+
 parser = argparse.ArgumentParser(description='SurVeyor, an SV caller.')
 parser.add_argument('--version', action='version', version="SurVeyor v%s" % VERSION, help='Print version number.')
 
@@ -32,6 +38,7 @@ common_parser.add_argument('--malloc-mmap-threshold', type=valid_nonnegative_int
 common_parser.add_argument('--malloc-top-pad', type=valid_nonnegative_int, default=67108864, metavar='BYTES', help='Set MALLOC_TOP_PAD_ for all pipeline subprocesses, overriding the environment. Default: %(default)s (64 MiB).')
 
 call_genotype_shared_options_parser = argparse.ArgumentParser(add_help=False)
+call_genotype_shared_options_parser.add_argument('--bam-reader-cache-size', type=valid_bam_reader_cache_size, default=256, metavar='MiB', help='BGZF cache size per BAM reader for evidence generation and genotyping. Total cache budget is threads times this size. Default: %(default)s MiB; 0 disables caching.')
 call_genotype_shared_options_parser.add_argument('--seed', type=int, default=0, help='Seed for random sampling of genomic positions.')
 call_genotype_shared_options_parser.add_argument('--max-seq-error', type=float, default=0.04, help='Max sequencing error admissible on the platform used.')
 call_genotype_shared_options_parser.add_argument('--min-sv-size', type=valid_min_sv_size, default=50, help='Min SV size.')
@@ -344,6 +351,7 @@ def reads_categorizer(workdir):
     mkdir(workdir)
     with open(workdir + "/config.txt", "w") as config_file:
         config_file.write("threads %d\n" % cmd_args.threads)
+        config_file.write("bam_reader_cache_size %d\n" % (cmd_args.bam_reader_cache_size << 20))
         config_file.write("seed %d\n" % cmd_args.seed)
         config_file.write("min_sv_size %s\n" % cmd_args.min_sv_size)
         config_file.write("min_clip_len %s\n" % cmd_args.min_clip_len)

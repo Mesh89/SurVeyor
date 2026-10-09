@@ -44,7 +44,6 @@ config_t config;
 contig_map_t contig_map;
 stats_t stats;
 const bool USE_HP_SPECIFIC_PATH = false;
-const int BAM_READER_CACHE_SIZE = 32 << 20; // Per reader; total cache memory scales with thread count.
 
 std::string bam_fname, reference_fname, workdir;
 bam_pool_t* bam_pool;
@@ -1243,7 +1242,7 @@ int main(int argc, char* argv[]) {
 
     chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
     bam_pool = new bam_pool_t(config.threads, bam_fname, reference_fname);
-    for (open_samFile_t* reader : bam_pool->pool) hts_set_cache_size(reader->file, BAM_READER_CACHE_SIZE);
+    for (open_samFile_t* reader : bam_pool->pool) hts_set_cache_size(reader->file, config.bam_reader_cache_size);
 
     // read crossing isize distribution
     std::ifstream crossing_isizes_dist_fin(workdir + "/crossing_isizes.txt");
