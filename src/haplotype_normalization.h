@@ -460,8 +460,8 @@ bool realign_haplotype_atoms(std::shared_ptr<sv_t> sv, std::vector<std::shared_p
 	std::vector<snp_t> aux_snps = sv->aux_snps;
 	std::vector<allele_edit_t> lf_edits, rf_edits;
 	std::vector<allele_base_mapping_t> lf_mapping, rf_mapping;
-	char* lf_seq = generate_haplotype_left(chr_seq, ins_start, extend, aux_indels, aux_snps, provenance ? &lf_edits : nullptr, provenance ? &lf_mapping : nullptr);
-	char* rf_seq = generate_haplotype_right(chr_seq, chr_len, ins_end+1, extend, aux_indels, aux_snps, provenance ? &rf_edits : nullptr, provenance ? &rf_mapping : nullptr);
+	char* lf_seq = generate_haplotype_left(chr_seq, ins_start, extend, aux_indels, aux_snps, provenance ? &lf_edits : nullptr, provenance ? &lf_mapping : nullptr, sv->id, sv->chr);
+	char* rf_seq = generate_haplotype_right(chr_seq, chr_len, ins_end+1, extend, aux_indels, aux_snps, provenance ? &rf_edits : nullptr, provenance ? &rf_mapping : nullptr, sv->id, sv->chr);
 
 	hts_pos_t lf_len = strlen(lf_seq), rf_len = strlen(rf_seq), alt_len = lf_len + sv->ins_seq.length() + rf_len;
 	char* putative_alt_allele = new char[alt_len + 1];
