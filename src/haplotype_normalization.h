@@ -555,7 +555,7 @@ std::shared_ptr<sv_t> update_main_var_from_realigned_vars(std::shared_ptr<sv_t> 
 std::shared_ptr<sv_t> realign_indel_haplotype(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
 	bool has_replaced_ref = sv->start != sv->end && !sv->ins_seq.empty();
 	bool has_aux_indels = !sv->aux_indels.empty();
-	if (sv->incomplete_ins_seq() || (!has_replaced_ref && !has_aux_indels) || sv->svsize() > 100) return sv;
+	if (sv->incomplete_ins_seq() || (!has_replaced_ref && !has_aux_indels) || sv->svsize() >= 50) return sv;
 
 	std::vector<std::shared_ptr<sv_t>> realigned_svs;
 	std::vector<snp_t> snps;
