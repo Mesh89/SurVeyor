@@ -29,7 +29,7 @@ static const int8_t kBaseTranslation[128] = {
 
 void BuildSwScoreMatrix(const uint8_t& match_score,
                         const uint8_t& mismatch_penalty,
-			int8_t* matrix, bool Nasmatch) {
+			int8_t* matrix, bool Nasmatch, bool NvsNasmatch) {
 
   // The score matrix looks like
   //                 // A,  C,  G,  T,  N
@@ -53,6 +53,9 @@ void BuildSwScoreMatrix(const uint8_t& match_score,
 
   for (int i = 0; i < 5; ++i)
     matrix[id++] = static_cast<int8_t>(Nasmatch ? match_score : -mismatch_penalty); // For N
+
+  // N matches only N.
+  if (NvsNasmatch) matrix[24] = static_cast<int8_t>(match_score);
 
 }
 
@@ -255,7 +258,8 @@ Aligner::Aligner(
     const uint8_t& mismatch_penalty,
     const uint8_t& gap_opening_penalty,
     const uint8_t& gap_extending_penalty,
-    bool Nasmatch)
+    bool Nasmatch,
+    bool NvsNasmatch)
 
     : score_matrix_(NULL)
     , score_matrix_size_(5)
@@ -268,7 +272,7 @@ Aligner::Aligner(
     , translated_reference_(NULL)
     , reference_length_(0)
 {
-  BuildDefaultMatrix(Nasmatch);
+  BuildDefaultMatrix(Nasmatch, NvsNasmatch);
 }
 
 Aligner::Aligner(const int8_t* score_matrix,
@@ -474,7 +478,8 @@ bool Aligner::ReBuild(
     const uint8_t& mismatch_penalty,
     const uint8_t& gap_opening_penalty,
     const uint8_t& gap_extending_penalty,
-    bool Nasmatch) {
+    bool Nasmatch,
+    bool NvsNasmatch) {
   if (translation_matrix_) return false;
 
   SetAllDefault();
@@ -484,7 +489,7 @@ bool Aligner::ReBuild(
   gap_opening_penalty_   = gap_opening_penalty;
   gap_extending_penalty_ = gap_extending_penalty;
 
-  BuildDefaultMatrix(Nasmatch);
+  BuildDefaultMatrix(Nasmatch, NvsNasmatch);
 
   return true;
 }
@@ -506,10 +511,10 @@ bool Aligner::ReBuild(
   return true;
 }
 
-void Aligner::BuildDefaultMatrix(bool Nasmatch) {
+void Aligner::BuildDefaultMatrix(bool Nasmatch, bool NvsNasmatch) {
   ClearMatrices();
   score_matrix_ = new int8_t[score_matrix_size_ * score_matrix_size_];
-  BuildSwScoreMatrix(match_score_, mismatch_penalty_, score_matrix_, Nasmatch);
+  BuildSwScoreMatrix(match_score_, mismatch_penalty_, score_matrix_, Nasmatch, NvsNasmatch);
   translation_matrix_size_ = SizeOfArray(kBaseTranslation);
   translation_matrix_ = new int8_t[SizeOfArray(kBaseTranslation)];
   memcpy(translation_matrix_, kBaseTranslation, sizeof(int8_t) * SizeOfArray(kBaseTranslation));

@@ -14,7 +14,8 @@ struct normalization_context_t {
 };
 
 inline StripedSmithWaterman::Aligner& normalization_aligner() {
-	static thread_local StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
+	// Haplotype flanks are copied from the reference, so reference N gaps must align to themselves.
+	static thread_local StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false, true);
 	return aligner;
 }
 
