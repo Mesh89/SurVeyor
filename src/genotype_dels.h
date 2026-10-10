@@ -235,17 +235,20 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
         bool alt_spans_bp2 = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;
         bool alt_better = alt_aln.sw_score > ref_aln_score && (alt_spans_bp1 || alt_spans_bp2);
         if (alt_better) {
-            std::shared_ptr<bam1_t> alt_read(bam_dup1(read), bam_destroy1);
-            if (alt_spans_bp1) {
-                alt_bp1_reads.push_back(alt_read);
-                alt_bp1_scores.push_back(alt_aln.sw_score);
-                alt_bp1_positions.push_back(alt_aln.ref_begin);
+            if (passes_original_bam_alt_veto(read, contig_seq, contig_len, alt_aln.sw_score)) {
+                std::shared_ptr<bam1_t> alt_read(bam_dup1(read), bam_destroy1);
+                if (alt_spans_bp1) {
+                    alt_bp1_reads.push_back(alt_read);
+                    alt_bp1_scores.push_back(alt_aln.sw_score);
+                    alt_bp1_positions.push_back(alt_aln.ref_begin);
+                }
+                if (alt_spans_bp2) {
+                    alt_bp2_reads.push_back(alt_read);
+                    alt_bp2_scores.push_back(alt_aln.sw_score);
+                    alt_bp2_positions.push_back(alt_aln.ref_begin);
+                }
             }
-            if (alt_spans_bp2) {
-                alt_bp2_reads.push_back(alt_read);
-                alt_bp2_scores.push_back(alt_aln.sw_score);
-                alt_bp2_positions.push_back(alt_aln.ref_begin);
-            }
+            // Count prospective evidence even when the ALT-only veto rejects it.
             evidence_count++;
         } else if (ref_aln_score > alt_aln.sw_score) {
             if (ref_bp1_better) {

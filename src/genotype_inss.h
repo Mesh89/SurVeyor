@@ -171,12 +171,14 @@ void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file,
         StripedSmithWaterman::Alignment& alt_aln = alt1_aln.sw_score >= alt2_aln.sw_score ? alt1_aln : alt2_aln;
         StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
         if (alt_aln.sw_score > ref_aln.sw_score) {
-            if (alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
+            // Keep a vetoed ALT read out of the existing REF/ER branches.
+            bool alt_eligible = passes_original_bam_alt_veto(read, contig_seq, contig_len, alt_aln.sw_score);
+            if (alt_eligible && alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
                 alt_bp1_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
                 alt_bp1_scores.push_back(alt1_aln.sw_score);
                 alt_bp1_positions.push_back(alt1_aln.ref_begin);
             }
-            if (alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
+            if (alt_eligible && alt1_aln.sw_score <= alt2_aln.sw_score && alt2_covers_bp2) {
                 alt_bp2_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
                 alt_bp2_scores.push_back(alt2_aln.sw_score);
                 alt_bp2_positions.push_back(alt2_aln.ref_begin);

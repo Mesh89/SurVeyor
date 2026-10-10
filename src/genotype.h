@@ -21,6 +21,7 @@
 #include "../libs/ssw_selected.h"
 #include "extend_1sr_consensus.h"
 #include "sam_utils.h"
+#include "original_bam_score.h"
 #include "types.h"
 #include "var_utils.h"
 #include "vcf_utils.h"
