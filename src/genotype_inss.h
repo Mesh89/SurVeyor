@@ -26,8 +26,8 @@ ins_alignment_targets_t build_ins_alignment_targets(insertion_t* ins, char* cont
     hts_pos_t ins_lh_len = std::min(extend, hts_pos_t(ins->ins_seq.length()));
     hts_pos_t ins_rh_len = ins_lh_len;
 
-    std::unique_ptr<char[]> lf_seq(generate_haplotype_left(contig_seq, targets.ins_start-1, extend, ins->aux_indels, ins->aux_snps));
-    std::unique_ptr<char[]> rf_seq(generate_haplotype_right(contig_seq, contig_len, targets.ins_end, extend, ins->aux_indels, ins->aux_snps));
+    std::unique_ptr<char[]> lf_seq(generate_haplotype_left(contig_seq, targets.ins_start-1, extend, ins->aux_indels, ins->aux_snps, nullptr, nullptr, ins->id, ins->chr));
+    std::unique_ptr<char[]> rf_seq(generate_haplotype_right(contig_seq, contig_len, targets.ins_end, extend, ins->aux_indels, ins->aux_snps, nullptr, nullptr, ins->id, ins->chr));
     targets.alt_lf_len = strlen(lf_seq.get());
     targets.alt_rf_len = strlen(rf_seq.get());
 
@@ -341,9 +341,9 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
     auto score_ins_consensus = [&](const std::string& consensus_seq, bool bp1) {
         std::vector<allele_edit_t> lf_edits, rf_edits;
         std::vector<allele_base_mapping_t> lf_map, rf_map;
-        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &lf_edits, &lf_map);
+        char* lf_seq = generate_haplotype_left(contig_seq, ins_start-1, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &lf_edits, &lf_map, ins->id, ins->chr);
         int alt_lf_len = strlen(lf_seq);
-        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &rf_edits, &rf_map);
+        char* rf_seq = generate_haplotype_right(contig_seq, contig_len, ins_end, consensus_seq.length(), ins->aux_indels, ins->aux_snps, &rf_edits, &rf_map, ins->id, ins->chr);
         int alt_rf_len = strlen(rf_seq);
         int ins_seq_portion_len = std::min(ins->ins_seq.length(), consensus_seq.length());
         int extra_len = std::max(0, int(consensus_seq.length())-int(ins->ins_seq.length()));

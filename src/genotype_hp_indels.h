@@ -548,8 +548,8 @@ hp_indel_alignment_targets_t build_hp_indel_alignment_targets(std::vector<sv_t*>
     targets.ref_allele_hp_range = {left_flank_len, left_flank_len + ref_hp_len};
 
     for (sv_t* hp_indel : hp_indels) {
-        char* lh_seq = generate_haplotype_left(contig_seq, ref_hp_range.beg - 1, extend, hp_indel->aux_indels, hp_indel->aux_snps);
-        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, ref_hp_range.end, extend, hp_indel->aux_indels, hp_indel->aux_snps);
+        char* lh_seq = generate_haplotype_left(contig_seq, ref_hp_range.beg - 1, extend, hp_indel->aux_indels, hp_indel->aux_snps, nullptr, nullptr, hp_indel->id, hp_indel->chr);
+        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, ref_hp_range.end, extend, hp_indel->aux_indels, hp_indel->aux_snps, nullptr, nullptr, hp_indel->id, hp_indel->chr);
         hts_pos_t alt_lh_len = strlen(lh_seq);
         hts_pos_t alt_rh_len = strlen(rh_seq);
 

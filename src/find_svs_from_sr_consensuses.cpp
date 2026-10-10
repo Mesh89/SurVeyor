@@ -47,7 +47,7 @@ std::vector<std::mutex> mutex_per_chr;
 
 std::mutex mtx;
 
-void transfer_external_bnd_aux(const std::shared_ptr<inversion_t>& inv, const std::shared_ptr<breakend_t>& bnd_rf, const std::shared_ptr<breakend_t>& bnd_lf) {
+bool transfer_external_bnd_aux(const std::shared_ptr<inversion_t>& inv, const std::shared_ptr<breakend_t>& bnd_rf, const std::shared_ptr<breakend_t>& bnd_lf) {
 	std::unordered_set<std::string> snp_keys, indel_keys;
 	std::vector<snp_t> deduplicated_snps;
 	std::vector<std::shared_ptr<sv_t>> deduplicated_indels;
@@ -66,8 +66,11 @@ void transfer_external_bnd_aux(const std::shared_ptr<inversion_t>& inv, const st
 			if (outside_reported_interval && outside_inverted_interval && indel_keys.insert(indel->unique_key(false)).second) deduplicated_indels.push_back(indel);
 		}
 	}
+	std::unordered_set<hts_pos_t> snp_positions;
+	for (const snp_t& snp : deduplicated_snps) if (!snp_positions.insert(snp.pos).second) return false;
 	inv->aux_snps.swap(deduplicated_snps);
 	inv->aux_indels.swap(deduplicated_indels);
+	return true;
 }
 
 
@@ -606,7 +609,7 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 		inv->inv_end = inv_end;
 		inv->source = bnd_rf->source + "-" + bnd_lf->source;
 		inv->imprecise = imprecise;
-		transfer_external_bnd_aux(inv, bnd_rf, bnd_lf);
+		if (!transfer_external_bnd_aux(inv, bnd_rf, bnd_lf)) continue;
 		if (inv->svsize() >= config.min_sv_size) {
 			local_svs.push_back(inv);
 		}

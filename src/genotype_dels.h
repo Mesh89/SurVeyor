@@ -34,8 +34,8 @@ del_read_alignment_sequences_t build_del_read_alignment_sequences(deletion_t* de
     del_read_alignment_sequences_t result;
     hts_pos_t extend = stats.read_len-1;
 
-    result.lh_seq.reset(generate_haplotype_left(contig_seq, del_start-1, extend, del->aux_indels, del->aux_snps));
-    result.rh_seq.reset(generate_haplotype_right(contig_seq, contig_len, del_end, extend, del->aux_indels, del->aux_snps));
+    result.lh_seq.reset(generate_haplotype_left(contig_seq, del_start-1, extend, del->aux_indels, del->aux_snps, nullptr, nullptr, del->id, del->chr));
+    result.rh_seq.reset(generate_haplotype_right(contig_seq, contig_len, del_end, extend, del->aux_indels, del->aux_snps, nullptr, nullptr, del->id, del->chr));
     hts_pos_t alt_start = std::max(hts_pos_t(0), del_start-extend);
     hts_pos_t alt_end = std::min(del_end+extend, contig_len);
     result.alt_lh_len = strlen(result.lh_seq.get());
@@ -347,9 +347,9 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     auto score_del_consensus = [&](const std::string& consensus_seq) {
         std::vector<allele_edit_t> lh_edits, rh_edits;
         std::vector<allele_base_mapping_t> lh_map, rh_map;
-        char* lh_seq = generate_haplotype_left(contig_seq, del_start-1, consensus_seq.length(), del->aux_indels, del->aux_snps, &lh_edits, &lh_map);
+        char* lh_seq = generate_haplotype_left(contig_seq, del_start-1, consensus_seq.length(), del->aux_indels, del->aux_snps, &lh_edits, &lh_map, del->id, del->chr);
         hts_pos_t lh_len = strlen(lh_seq);
-        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, del_end, consensus_seq.length(), del->aux_indels, del->aux_snps, &rh_edits, &rh_map);
+        char* rh_seq = generate_haplotype_right(contig_seq, contig_len, del_end, consensus_seq.length(), del->aux_indels, del->aux_snps, &rh_edits, &rh_map, del->id, del->chr);
         hts_pos_t rh_len = strlen(rh_seq);
         alignment_targets_t targets;
         targets.alt_len = lh_len+del->ins_seq.length()+rh_len;

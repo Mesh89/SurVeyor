@@ -215,7 +215,7 @@ int calculate_mh_len(sv_t* sv) {
 
     // cap microhomology length at 1000 bp to avoid excessive runtime
     int rf_len_cap = std::min(hts_pos_t(1000), sv->svsize());
-    char* right_flanking = generate_haplotype_right(chr_seq, chr_len, sv->end+1, rf_len_cap, sv->aux_indels, sv->aux_snps);
+    char* right_flanking = generate_haplotype_right(chr_seq, chr_len, sv->end+1, rf_len_cap, sv->aux_indels, sv->aux_snps, nullptr, nullptr, sv->id, sv->chr);
     int rf_len = strlen(right_flanking);
 
     int mh_len = 0;

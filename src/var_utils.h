@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <stdexcept>
 #include "types.h"
 
 const int MIN_HP_LEN_FOR_HP_GENOTYPING = 3;
@@ -98,21 +99,50 @@ inline bool aux_indel_haplotype_order(const std::shared_ptr<sv_t>& a, const std:
     return a->ins_seq < b->ins_seq;
 }
 
+// The builders sort both lists before validation; indel start is the anchor base.
+inline void validate_aux_haplotype(const std::vector<std::shared_ptr<sv_t>>& aux_indels, const std::vector<snp_t>& aux_snps) {
+    for (size_t i = 1; i < aux_snps.size(); i++) {
+        if (aux_snps[i].pos == aux_snps[i-1].pos) {
+            std::string chr = aux_snps[i].chr;
+            if (chr.empty() && !aux_indels.empty()) chr = aux_indels.front()->chr;
+            throw std::runtime_error("Conflicting AUX SNPs" + (chr.empty() ? "" : " on " + chr) + " at positions " + std::to_string(aux_snps[i-1].pos) + " and " + std::to_string(aux_snps[i].pos) + ".");
+        }
+    }
+    size_t snp_idx = 0;
+    for (size_t i = 0; i < aux_indels.size(); i++) {
+        const std::shared_ptr<sv_t>& indel = aux_indels[i];
+        if (i > 0 && indel->start < aux_indels[i-1]->end) {
+            const std::shared_ptr<sv_t>& prev = aux_indels[i-1];
+            throw std::runtime_error("Overlapping AUX indels on " + indel->chr + " at positions " + std::to_string(prev->start) + ".." + std::to_string(prev->end) + " and " + std::to_string(indel->start) + ".." + std::to_string(indel->end) + ".");
+        }
+        if (indel->svtype() != "DEL") continue;
+        while (snp_idx < aux_snps.size() && aux_snps[snp_idx].pos <= indel->start) snp_idx++;
+        if (snp_idx < aux_snps.size() && aux_snps[snp_idx].pos <= indel->end) {
+            throw std::runtime_error("AUX SNP on " + indel->chr + " at position " + std::to_string(aux_snps[snp_idx].pos) + " lies inside AUX DEL at positions " + std::to_string(indel->start) + ".." + std::to_string(indel->end) + ".");
+        }
+    }
+}
+
 inline void append_reference_mapping(std::vector<allele_base_mapping_t>& mapping, hts_pos_t ref_start, int len, bool reverse = false) {
     for (int i = 0; i < len; i++) mapping.push_back({reverse ? ref_start+len-1-i : ref_start+i, reverse});
 }
 
 inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos_t hap_len, 
-    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr, std::vector<allele_base_mapping_t>* mapping = nullptr) {
+    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr, std::vector<allele_base_mapping_t>* mapping = nullptr, const std::string& id = "", const std::string& chr = "") {
     
     std::sort(aux_indels.begin(), aux_indels.end(), aux_indel_haplotype_order);
     std::sort(aux_snps.begin(), aux_snps.end(), [](snp_t& a, snp_t& b) {
         return a.pos < b.pos;
     });
+    try {
+        validate_aux_haplotype(aux_indels, aux_snps);
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Invalid AUX haplotype for SV " + id + (chr.empty() ? "" : " on " + chr) + ": " + e.what());
+    }
 
-    // Find last SNP / indel strictly to the left of hap_end (i.e., with pos / end < hap_end)
+    // Include SNPs on the inclusive endpoint; indels must end strictly before it.
     int curr_snp_idx = aux_snps.size()-1, curr_indel_idx = aux_indels.size()-1;
-    while (curr_snp_idx >= 0 && aux_snps[curr_snp_idx].pos >= hap_end) curr_snp_idx--;
+    while (curr_snp_idx >= 0 && aux_snps[curr_snp_idx].pos > hap_end) curr_snp_idx--;
     while (curr_indel_idx >= 0 && aux_indels[curr_indel_idx]->end >= hap_end) curr_indel_idx--;
         
     // Output buffer
@@ -180,7 +210,7 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
 }
 
 inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_pos_t hap_start, hts_pos_t hap_len,
-    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr, std::vector<allele_base_mapping_t>* mapping = nullptr) {
+    std::vector<std::shared_ptr<sv_t>>& aux_indels, std::vector<snp_t>& aux_snps, std::vector<allele_edit_t>* edits = nullptr, std::vector<allele_base_mapping_t>* mapping = nullptr, const std::string& id = "", const std::string& chr = "") {
 
     // Note that aux_indels coordinates are in VCF format
 
@@ -188,8 +218,13 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
     std::sort(aux_snps.begin(), aux_snps.end(), [](const snp_t& a, const snp_t& b) {
         return a.pos < b.pos;
     });
+    try {
+        validate_aux_haplotype(aux_indels, aux_snps);
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Invalid AUX haplotype for SV " + id + (chr.empty() ? "" : " on " + chr) + ": " + e.what());
+    }
 
-    // Find first SNP / indel strictly to the right of hap_start (mirror of left's >= hap_end skip)
+    // Include SNPs at hap_start and indels whose changed bases start there or later.
     int curr_snp_idx = 0, curr_indel_idx = 0;
     while (curr_snp_idx < (int)aux_snps.size() && aux_snps[curr_snp_idx].pos < hap_start) curr_snp_idx++;
     while (curr_indel_idx < (int)aux_indels.size() && aux_indels[curr_indel_idx]->start < hap_start-1) curr_indel_idx++;

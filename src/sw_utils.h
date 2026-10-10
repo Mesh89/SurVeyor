@@ -993,10 +993,12 @@ std::vector<std::shared_ptr<sv_t>> detect_svs(std::string& contig_name, char* co
     return svs;
 }
 
-// Inconsistent auxiliary indels indicate that the sequence may not represent a single haplotype.
+// Inconsistent auxiliary variants indicate that the sequence may not represent a single haplotype.
 // NOTE: this MIGHT point to a situation where part of the sequence was duplicated; however, it is a complication
 // we do not attempt to resolve, for now
 inline bool aux_list_is_single_haplotype(const sv_t* sv) {
+    std::unordered_set<hts_pos_t> snp_positions;
+    for (const snp_t& snp : sv->aux_snps) if (!snp_positions.insert(snp.pos).second) return false;
     std::vector<std::shared_ptr<sv_t>> edits = sv->aux_indels;
     std::sort(edits.begin(), edits.end(), aux_indel_haplotype_order);
     for (size_t i = 0; i < edits.size(); i++) {
