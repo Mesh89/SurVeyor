@@ -179,7 +179,7 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
     std::vector<std::shared_ptr<bam1_t>> ref_bp1_reads, ref_bp2_reads;
     std::vector<int> alt_bp1_scores, alt_bp2_scores, alt_bp1_positions, alt_bp2_positions;
     std::vector<std::string> er_read_names;
-    int evidence_count = 0;
+    int bp_reads = 0;
 
     std::stringstream l_region, r_region;
     l_region << del->chr << ":" << targets.alt_start << "-" << targets.ref_bp1_end;
@@ -212,6 +212,12 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
             if (mate_endpos > del_end+stats.max_is) continue;
             if (mate_endpos < del_end && (abs(mate_endpos-bam_endpos(read)) > 5 || !is_right_clipped(read, config.min_clip_len))) continue;
             seq = get_sequence(read, true);
+        }
+
+        bp_reads++;
+        if (bp_reads > 4 * stats.get_max_depth(del->chr)) {
+            del->sample_info.too_deep = true;
+            break;
         }
 
         uint16_t ref_aln_score = 0;
@@ -248,25 +254,15 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
                     alt_bp2_positions.push_back(alt_aln.ref_begin);
                 }
             }
-            // Count prospective evidence even when the ALT-only veto rejects it.
-            evidence_count++;
         } else if (ref_aln_score > alt_aln.sw_score) {
             if (ref_bp1_better) {
                 ref_bp1_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-                evidence_count++;
             }
             if (ref_bp2_better) {
                 ref_bp2_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
-                evidence_count++;
             }
         } else {
             er_read_names.push_back(read_name_with_suffix(read));
-            evidence_count++;
-        }
-
-        if (evidence_count > 4 * stats.get_max_depth(del->chr)) {
-            del->sample_info.too_deep = true;
-            break;
         }
     }
 

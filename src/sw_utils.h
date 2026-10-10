@@ -190,6 +190,26 @@ suffix_prefix_aln_t aln_suffix_prefix_perfect(const std::string& s1, const std::
     return suffix_prefix_aln_t(0, 0, 0);
 }
 
+suffix_prefix_aln_t aln_suffix_prefix_qual(const std::string& s1, const std::string& q1, const std::string& s2, const std::string& q2, int min_overlap, double max_seq_error, int serious_q = 40) {
+    int s1_len = s1.length(), s2_len = s2.length();
+    for (int overlap = std::min(s1_len, s2_len); overlap >= min_overlap; overlap--) {
+        int s1_beg = s1_len-overlap;
+        int mismatches = 0, max_mismatches = (int) (overlap*max_seq_error);
+        bool rejected = false;
+        for (int i = 0; i < overlap; i++) {
+            if (toupper(s1[s1_beg+i]) == toupper(s2[i])) continue;
+            // Missing qualities cannot make a mismatch serious.
+            bool serious = s1_beg+i < q1.length() && i < q2.length() && q1[s1_beg+i]-33 >= serious_q && q2[i]-33 >= serious_q;
+            if (serious || ++mismatches > max_mismatches) {
+                rejected = true;
+                break;
+            }
+        }
+        if (!rejected) return suffix_prefix_aln_t(overlap, overlap-mismatches, mismatches);
+    }
+    return suffix_prefix_aln_t(0, 0, 0);
+}
+
 // Finds the best alignment between a suffix of s1 and a prefix of s2
 // Disallows gaps
 int number_of_mismatches_fast(const char* s1, const char* s2, int len, int max_mismatches) {
@@ -884,7 +904,18 @@ std::vector<std::shared_ptr<sv_t>> detect_svs(std::string& contig_name, char* co
 			lc_consensus_qual = lc_consensus->qual.substr(lc_consensus->lowq_prefix);
 			spa = aln_suffix_prefix_perfect(rc_consensus_seq, lc_consensus_seq, min_overlap);
 			if (spa.overlap < min_overlap || is_homopolymer(lc_consensus_seq.c_str(), spa.overlap)) {
-				return std::vector<std::shared_ptr<sv_t>>();
+				spa = aln_suffix_prefix_qual(rc_consensus->sequence, rc_consensus->qual, lc_consensus->sequence, lc_consensus->qual, min_overlap, 0.04);
+				if (spa.overlap < min_overlap || is_homopolymer(lc_consensus->sequence.c_str(), spa.overlap)) {
+					spa = aln_suffix_prefix_qual(rc_consensus_seq, rc_consensus_qual, lc_consensus_seq, lc_consensus_qual, min_overlap, 0.04);
+					if (spa.overlap < min_overlap || is_homopolymer(lc_consensus_seq.c_str(), spa.overlap)) {
+						return std::vector<std::shared_ptr<sv_t>>();
+					}
+				} else {
+					rc_consensus_seq = rc_consensus->sequence;
+					lc_consensus_seq = lc_consensus->sequence;
+					rc_consensus_qual = rc_consensus->qual;
+					lc_consensus_qual = lc_consensus->qual;
+				}
 			}
 		}
 
