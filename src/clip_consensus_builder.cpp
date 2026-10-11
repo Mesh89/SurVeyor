@@ -36,8 +36,9 @@ chr_seqs_map_t contigs;
 hp_tail_quality_model_t hp_tail_quality_model;
 
 std::unordered_map<std::string, int> detected_svs_count;
-std::unordered_set<std::string> detected_svs_count_is_hq;
+std::unordered_map<std::string, int> detected_svs_count_hq;
 std::unordered_map<std::string, coarse_coverage_track_t> coverage_tracks;
+std::unordered_map<std::string, coarse_coverage_track_t> highmq_coverage_tracks;
 
 // BAM records stay immutable and alive throughout a window's work. Cache only
 // within that task, even when adjacent windows share the same BAM pointers.
@@ -85,6 +86,13 @@ struct clip_read_cache_t {
         return data.quals;
     }
 };
+
+bool region_touches_excessive_coverage(const std::string& contig_name, hts_pos_t start, hts_pos_t end, const std::unordered_map<std::string, coarse_coverage_track_t>& tracks) {
+    auto track = tracks.find(contig_name);
+    if (track == tracks.end()) return false;
+    uint64_t threshold = uint64_t(4)*stats.get_max_depth(contig_name);
+    return track->second.exceeds(start, end, threshold);
+}
 
 bool cluster_touches_excessive_coverage(const std::string& contig_name, const std::deque<bam1_t*>& clipped) {
     const auto& tracks = coverage_tracks;
@@ -812,7 +820,7 @@ void process_unused_read(bam1_t* read, const std::string& contig_name, clip_read
     for (auto& sv : svs) {
         detected_svs_count[sv->unique_key(false)]++;
         if (read->core.qual >= config.high_confidence_mapq) {
-            detected_svs_count_is_hq.insert(sv->unique_key(false));
+            detected_svs_count_hq[sv->unique_key(false)]++;
         }
     }
 }
@@ -945,6 +953,7 @@ int main(int argc, char* argv[]) {
     for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
         std::string contig_name = contig_map.get_name(contig_id);
         coverage_tracks.emplace(contig_name, read_coarse_coverage(workspace + "/coverage/" + std::to_string(contig_id) + ".bin", contigs.get_len(contig_name), config.coverage_window_size));
+        highmq_coverage_tracks.emplace(contig_name, read_coarse_coverage(workspace + "/coverage/" + std::to_string(contig_id) + ".highmq.bin", contigs.get_len(contig_name), config.coverage_window_size));
     }
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
@@ -1154,8 +1163,9 @@ int main(int argc, char* argv[]) {
 
     // Write detected SVs to VCF
     std::unordered_map<std::string, std::vector<std::shared_ptr<sv_t>>> svs_by_chr;
-    for (const std::string& sv_str : detected_svs_count_is_hq) {
-        if (detected_svs_count[sv_str] >= 2) { // SV detected by at least 2 reads
+    for (const auto& sv_count : detected_svs_count) {
+        const std::string& sv_str = sv_count.first;
+        if (sv_count.second >= 2) { // SV detected by at least 2 reads
             std::string chr, insseq, svtype;
             hts_pos_t start, end;
             size_t pos1 = sv_str.find(':');
@@ -1167,6 +1177,11 @@ int main(int argc, char* argv[]) {
             end = std::stol(sv_str.substr(pos2+1, pos3-pos2-1));
             svtype = sv_str.substr(pos3+1, pos4-pos3-1);
             insseq = sv_str.substr(pos4+1);
+
+            // In high total coverage, require two HQ reads and reject high HQ coverage.
+            if (region_touches_excessive_coverage(chr, start, end+1, coverage_tracks)) {
+                if (region_touches_excessive_coverage(chr, start, end+1, highmq_coverage_tracks) || detected_svs_count_hq[sv_str] < 2) continue;
+            }
 
             if (svtype == "DEL") {
                 std::shared_ptr<deletion_t> del = std::make_shared<deletion_t>(chr, start, end, "", nullptr, nullptr, nullptr, nullptr);
