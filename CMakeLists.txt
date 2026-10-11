@@ -16,8 +16,9 @@ if (APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "x86_64")
 endif()
 
-include_directories(htslib-1.21)
-include_directories(htslib-1.21/include)
+set(HTSLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/htslib-1.24")
+include_directories("${HTSLIB_DIR}")
+include_directories("${HTSLIB_DIR}/include")
 
 # C and C++ target flags must agree; selection lives in the SSW adapter files.
 set(SSW_SOURCES libs/ssw_selected.c libs/ssw_selected.cpp)
@@ -45,7 +46,12 @@ add_executable(insertions_to_duplications ${SSW_SOURCES} utils/insertions_to_dup
 add_executable(check_duplicate_ids utils/check_duplicate_ids.cpp)
 add_executable(expand_aux_haplotypes src/expand_aux_haplotypes.cpp)
 
-find_library(HTS_LIB hts PATHS htslib-1.21/lib NO_DEFAULT_PATH)
+# Refresh cached paths when upgrading the bundled HTSlib.
+unset(HTS_LIB CACHE)
+find_library(HTS_LIB hts PATHS "${HTSLIB_DIR}/lib" NO_DEFAULT_PATH)
+if (NOT HTS_LIB)
+    message(FATAL_ERROR "HTSlib 1.24 is not built. Run ./build_htslib.sh first.")
+endif()
 
 target_link_libraries(reads_categorizer "${HTS_LIB}")
 target_link_libraries(clip_consensus_builder "${HTS_LIB}")
