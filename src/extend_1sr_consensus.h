@@ -21,16 +21,16 @@ struct ext_read_t {
 	std::string qname;
 	hts_pos_t start, end;
 	uint8_t mapq;
-	bool rev, same_chr, left_clipped;
+	bool rev, same_chr, left_clipped, stable_end;
 	int sequence_len = 0;
 	char* sequence = NULL;
 	char* qual = NULL;
 
-	ext_read_t(bam1_t* read) {
-		init(read);
+	ext_read_t(bam1_t* read, const config_t& config) {
+		init(read, config);
 	}
 
-	void init(bam1_t* read) {
+	void init(bam1_t* read, const config_t& config) {
 		qname = bam_get_qname(read);
 		start = read->core.pos;
 		end = bam_endpos(read);
@@ -38,6 +38,7 @@ struct ext_read_t {
 		rev = bam_is_rev(read);
 		same_chr = is_samechr(read);
 		left_clipped = is_left_clipped(read, 1);
+		stable_end = is_stable_end(read, config);
 		if (sequence_len < read->core.l_qseq) {
 			if (sequence != NULL) delete[] sequence;
 			if (qual != NULL) delete[] qual;
@@ -69,14 +70,14 @@ struct ext_read_allocator_t {
 
     ext_read_allocator_t() {}
 
-    ext_read_t* get(bam1_t* read) {
+    ext_read_t* get(bam1_t* read, const config_t& config) {
         ext_read_t* r = nullptr;
 		if (!reads.empty()) {
 			r = reads.front();
 			reads.pop();
 		}
-        if (!r) return new ext_read_t(read);
-        r->init(read);
+        if (!r) return new ext_read_t(read, config);
+        r->init(read, config);
         return r;
     }
 
@@ -570,7 +571,7 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 	});
 	for (Interval<ext_read_t*> i_read : target_reads) {
 		ext_read_t* ext_read = i_read.value;
-		if (!ext_read->rev && ext_read->mapq >= high_confidence_mapq &&
+		if (!ext_read->rev && ext_read->stable_end &&
 			!ext_read->same_chr && ext_read->start >= fwd_mates_start && ext_read->start <= fwd_mates_end) {
 			if (mateseqs_w_mapq.count(ext_read->qname) == 0) {
 				throw std::runtime_error("ERROR: mateseqs_w_mapq does not contain " + ext_read->qname);
@@ -582,7 +583,7 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 			read_quals.push_back(mate.qual);
 			read_mapqs.push_back(mate.mapq);
 			read_starts.push_back(0); // dummy value
-		} else if (ext_read->rev && ext_read->mapq >= high_confidence_mapq &&
+		} else if (ext_read->rev && ext_read->stable_end &&
 				!ext_read->same_chr && ext_read->end >= rev_mates_start && ext_read->end <= rev_mates_end) {
 			if (mateseqs_w_mapq.count(ext_read->qname) == 0) {
 				throw std::runtime_error("ERROR: mateseqs_w_mapq does not contain " + ext_read->qname);
@@ -656,7 +657,7 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 			if (is_samechr(read) && is_samestr(read) && read->core.qual <= get_mq(read)) {
 				if ((!bam_is_rev(read) && read->core.mpos < read->core.pos) ||
 					(bam_is_mrev(read) && read->core.mpos > read->core.pos)) {
-					ext_read_t* ext_read_rc = ext_read_allocator.get(read);
+					ext_read_t* ext_read_rc = ext_read_allocator.get(read, config);
 					rc(ext_read_rc->sequence);
 					std::reverse(ext_read_rc->qual, ext_read_rc->qual + ext_read_rc->sequence_len);
 					ext_read_rc->rev = !bam_is_rev(read);
@@ -667,7 +668,7 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 			// we are downsampling by keeping only the highest mapping quality read at each start position 
 			// (plus max_depth left-clipped reads because they have a legitimate reason for starting at the same position)
 			if (curr_read == nullptr) {
-				curr_read = ext_read_allocator.get(read);
+				curr_read = ext_read_allocator.get(read, config);
 			} else if (read->core.pos > curr_read->start) { // new start position, push curr_read and left-clipped reads
 				if (!curr_read->left_clipped) {
 					region_reads.push_back(curr_read);
@@ -678,15 +679,15 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 					region_reads.push_back(lc_reads_pq.top());
 					lc_reads_pq.pop();
 				}
-				curr_read = ext_read_allocator.get(read);
+				curr_read = ext_read_allocator.get(read, config);
 			} else if (curr_read->mapq < read->core.qual || curr_read->left_clipped && !is_left_clipped(read, 1)) {
 				// replace curr_read with the new read if the latter has higher mapping quality or curr_read is left-clipped and the new read is not
 				ext_read_allocator.release(curr_read);
-				curr_read = ext_read_allocator.get(read);
+				curr_read = ext_read_allocator.get(read, config);
 			} 
 			
 			if (is_left_clipped(read, 1)) {
-				lc_reads_pq.push(ext_read_allocator.get(read));
+				lc_reads_pq.push(ext_read_allocator.get(read, config));
 				if (lc_reads_pq.size() > stats.get_max_depth(contig_name)) { 
 					// keep only max_depth left-clipped reads with the highest mapping quality
 					ext_read_allocator.release(lc_reads_pq.top());
