@@ -167,9 +167,7 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 		}
 		return file;
 	}();
-	// The loader sorts its intervals; retain the original order for each consensus's extension.
-	std::vector<hts_pair_pos_t> read_target_ivals = target_ivals;
-	std::vector<ext_read_t*> candidate_reads_for_extension = get_extension_reads(contig_name, read_target_ivals, contig_len, config, stats, bam_file.get());
+	std::vector<ext_read_t*> candidate_reads_for_extension = get_extension_reads(contig_name, target_ivals, contig_len, config, stats, bam_file.get());
 	if (!candidate_reads_for_extension.empty()) {
 		std::vector<Interval<ext_read_t*>> it_ivals;
 		for (ext_read_t* ext_read : candidate_reads_for_extension) {

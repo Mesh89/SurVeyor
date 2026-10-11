@@ -608,105 +608,95 @@ void get_extension_read_seqs(IntervalTree<ext_read_t*>& candidate_reads_itree, s
 std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vector<hts_pair_pos_t>& target_ivals, hts_pos_t contig_len,
 		config_t& config, stats_t& stats, open_samFile_t* bam_file) {
 
-	std::sort(target_ivals.begin(), target_ivals.end(), [](hts_pair_pos_t& a, hts_pair_pos_t& b) {return a.beg < b.beg;});
-
-	std::vector<hts_pair_pos_t> merged_target_ivals;
-	for (int i = 0; i < target_ivals.size(); i++) {
-		if (target_ivals[i].end < target_ivals[i].beg) continue;
-		if (!merged_target_ivals.empty() && target_ivals[i].beg-merged_target_ivals.back().end < stats.read_len) {
-			merged_target_ivals.back().end = std::max(merged_target_ivals.back().end, target_ivals[i].end);
-		} else {
-			merged_target_ivals.push_back(target_ivals[i]);
-		}
-	}
-	if (merged_target_ivals.empty()) return {};
-
-	ext_read_allocator_t ext_read_allocator;
-	
-	std::vector<ext_read_t*> reads;
-	bam1_t* read = bam_init1();
-	for (hts_pair_pos_t target_ival : merged_target_ivals) {
+	std::vector<std::string> region_strings;
+	for (hts_pair_pos_t target_ival : target_ivals) {
+		if (target_ival.end < target_ival.beg) continue;
 		hts_pos_t fwd_mates_start = std::max(hts_pos_t(1), target_ival.beg-stats.max_is+stats.read_len);
 		hts_pos_t rev_mates_end = std::min(target_ival.end+stats.max_is-stats.read_len, contig_len);
+		if (rev_mates_end < fwd_mates_start) continue;
+		region_strings.push_back(contig_name+":"+std::to_string(fwd_mates_start)+"-"+std::to_string(rev_mates_end));
+	}
+	if (region_strings.empty()) return {};
 
-		std::stringstream ss;
-		ss << contig_name << ":" << fwd_mates_start << "-" << rev_mates_end;
+	std::vector<char*> regions;
+	for (std::string& region : region_strings) regions.push_back(&region[0]);
+	ext_read_allocator_t ext_read_allocator;
+	std::vector<ext_read_t*> reads;
+	bam1_t* read = bam_init1();
+	ext_read_t* curr_read = nullptr;
 
-		std::vector<ext_read_t*> region_reads;
-		region_reads.reserve(target_ival.end-target_ival.beg+1);
-		ext_read_t* curr_read = nullptr;
+	// priority queue to hold left-clipped reads that start at the same position, sorted by mapping quality
+	struct ext_read_cmp_mapq {
+		bool operator()(ext_read_t* a, ext_read_t* b) {
+			return a->mapq > b->mapq;
+		}
+	};
+	std::priority_queue<ext_read_t*, std::vector<ext_read_t*>, ext_read_cmp_mapq> lc_reads_pq;
 
-		// priority queue to hold left-clipped reads that start at the same position, sorted by mapping quality
-		struct ext_read_cmp_mapq {
-			bool operator()(ext_read_t* a, ext_read_t* b) {
-				return a->mapq > b->mapq;
-			}
-		};
-		std::priority_queue<ext_read_t*, std::vector<ext_read_t*>, ext_read_cmp_mapq> lc_reads_pq;
+	// HTSlib merges the expanded regions and returns each record once, in file order.
+	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+		if (is_unmapped(read) || !is_primary(read)) continue;
+		if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
 
-
-		hts_itr_t* iter = sam_itr_querys(bam_file->idx, bam_file->header, ss.str().c_str());
-		while (sam_itr_next(bam_file->file, iter, read) >= 0) {
-			if (is_unmapped(read) || !is_primary(read)) continue;
-			if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
-
-			// for same strand pairs that may be due to inversions, add a copy of the unstable end in the the correct orientation
-			// same strand is not always due to inversions (transpositions may also cause this), and we do not know which case we are dealing with
-			// therefore, when there is no clear stable end, and the read may either be the unstable end of an inversion or the stable end of a transposition,
-			// we add a copy of the read in both orientations, and let the extension algorithm decide which one to use
-			if (is_samechr(read) && is_samestr(read) && read->core.qual <= get_mq(read)) {
-				if ((!bam_is_rev(read) && read->core.mpos < read->core.pos) ||
-					(bam_is_mrev(read) && read->core.mpos > read->core.pos)) {
-					ext_read_t* ext_read_rc = ext_read_allocator.get(read, config);
-					rc(ext_read_rc->sequence);
-					std::reverse(ext_read_rc->qual, ext_read_rc->qual + ext_read_rc->sequence_len);
-					ext_read_rc->rev = !bam_is_rev(read);
-					region_reads.push_back(ext_read_rc);
-				}
-			}
-
-			// we are downsampling by keeping only the highest mapping quality read at each start position 
-			// (plus max_depth left-clipped reads because they have a legitimate reason for starting at the same position)
-			if (curr_read == nullptr) {
-				curr_read = ext_read_allocator.get(read, config);
-			} else if (read->core.pos > curr_read->start) { // new start position, push curr_read and left-clipped reads
-				if (!curr_read->left_clipped) {
-					region_reads.push_back(curr_read);
-				} else {
-					ext_read_allocator.release(curr_read);
-				}
-				while (!lc_reads_pq.empty()) {
-					region_reads.push_back(lc_reads_pq.top());
-					lc_reads_pq.pop();
-				}
-				curr_read = ext_read_allocator.get(read, config);
-			} else if (curr_read->mapq < read->core.qual || curr_read->left_clipped && !is_left_clipped(read, 1)) {
-				// replace curr_read with the new read if the latter has higher mapping quality or curr_read is left-clipped and the new read is not
-				ext_read_allocator.release(curr_read);
-				curr_read = ext_read_allocator.get(read, config);
-			} 
-			
-			if (is_left_clipped(read, 1)) {
-				lc_reads_pq.push(ext_read_allocator.get(read, config));
-				if (lc_reads_pq.size() > stats.get_max_depth(contig_name)) { 
-					// keep only max_depth left-clipped reads with the highest mapping quality
-					ext_read_allocator.release(lc_reads_pq.top());
-					lc_reads_pq.pop();
-				}
+		// for same strand pairs that may be due to inversions, add a copy of the unstable end in the the correct orientation
+		// same strand is not always due to inversions (transpositions may also cause this), and we do not know which case we are dealing with
+		// therefore, when there is no clear stable end, and the read may either be the unstable end of an inversion or the stable end of a transposition,
+		// we add a copy of the read in both orientations, and let the extension algorithm decide which one to use
+		if (is_samechr(read) && is_samestr(read) && read->core.qual <= get_mq(read)) {
+			if ((!bam_is_rev(read) && read->core.mpos < read->core.pos) ||
+				(bam_is_mrev(read) && read->core.mpos > read->core.pos)) {
+				ext_read_t* ext_read_rc = ext_read_allocator.get(read, config);
+				rc(ext_read_rc->sequence);
+				std::reverse(ext_read_rc->qual, ext_read_rc->qual + ext_read_rc->sequence_len);
+				ext_read_rc->rev = !bam_is_rev(read);
+				reads.push_back(ext_read_rc);
 			}
 		}
-		if (curr_read != nullptr) {
+
+		// we are downsampling by keeping only the highest mapping quality read at each start position 
+		// (plus max_depth left-clipped reads because they have a legitimate reason for starting at the same position)
+		if (curr_read == nullptr) {
+			curr_read = ext_read_allocator.get(read, config);
+		} else if (read->core.pos > curr_read->start) { // new start position, push curr_read and left-clipped reads
 			if (!curr_read->left_clipped) {
-				region_reads.push_back(curr_read);
+				reads.push_back(curr_read);
 			} else {
 				ext_read_allocator.release(curr_read);
 			}
+			while (!lc_reads_pq.empty()) {
+				reads.push_back(lc_reads_pq.top());
+				lc_reads_pq.pop();
+			}
+			curr_read = ext_read_allocator.get(read, config);
+		} else if (curr_read->mapq < read->core.qual || curr_read->left_clipped && !is_left_clipped(read, 1)) {
+			// replace curr_read with the new read if the latter has higher mapping quality or curr_read is left-clipped and the new read is not
+			ext_read_allocator.release(curr_read);
+			curr_read = ext_read_allocator.get(read, config);
+		} 
+		
+		if (is_left_clipped(read, 1)) {
+			lc_reads_pq.push(ext_read_allocator.get(read, config));
+			if (lc_reads_pq.size() > stats.get_max_depth(contig_name)) { 
+				// keep only max_depth left-clipped reads with the highest mapping quality
+				ext_read_allocator.release(lc_reads_pq.top());
+				lc_reads_pq.pop();
+			}
 		}
-
-		reads.insert(reads.end(), region_reads.begin(), region_reads.end());
-		hts_itr_destroy(iter);
+	}
+	if (curr_read != nullptr) {
+		if (!curr_read->left_clipped) {
+			reads.push_back(curr_read);
+		} else {
+			ext_read_allocator.release(curr_read);
+		}
+	}
+	while (!lc_reads_pq.empty()) {
+		reads.push_back(lc_reads_pq.top());
+		lc_reads_pq.pop();
 	}
 
+	hts_itr_destroy(iter);
 	bam_destroy1(read);
 
 	return reads;
