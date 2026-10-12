@@ -18,11 +18,29 @@
 #include "sw_utils.h"
 
 static const char HP_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "hp_3p_mismatch_rate_thresholds.tsv";
+static const char DNR_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "dnr_3p_mismatch_rate_thresholds.tsv";
+const int MIN_CONSENSUS_DNR_UNITS = 4;
+
+// Merge the two phases of each repeat; reverse-complement classes remain distinct.
+inline int dnr_class_idx(char first, char second) {
+    if (first > second) std::swap(first, second);
+    if (first == 'A' && second == 'C') return 0;
+    if (first == 'A' && second == 'G') return 1;
+    if (first == 'A' && second == 'T') return 2;
+    if (first == 'C' && second == 'G') return 3;
+    if (first == 'C' && second == 'T') return 4;
+    if (first == 'G' && second == 'T') return 5;
+    return -1;
+}
 
 struct hp_mismatch_rate_thresholds_t {
     std::array<std::vector<double>, 4> thresholds_by_base;
+    std::array<std::vector<double>, 6> dnr_thresholds_by_class;
 
-    explicit hp_mismatch_rate_thresholds_t(const std::string& fname) { load(fname); }
+    explicit hp_mismatch_rate_thresholds_t(const std::string& workdir) {
+        load(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+        load_dnr(workdir + "/" + DNR_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    }
 
     void load(const std::string& fname) {
         std::ifstream fin(fname);
@@ -50,12 +68,38 @@ struct hp_mismatch_rate_thresholds_t {
         if (expected_hp_len == 0) throw std::runtime_error("No HP mismatch-rate thresholds in " + fname + ".");
     }
 
+    void load_dnr(const std::string& fname) {
+        std::ifstream fin(fname);
+        if (!fin) throw std::runtime_error("Unable to open " + fname + ".");
+
+        std::string header[7];
+        const char* expected[] = {"UNITS", "AC", "AG", "AT", "CG", "CT", "GT"};
+        for (int i = 0; i < 7; i++) if (!(fin >> header[i]) || header[i] != expected[i]) throw std::runtime_error("Invalid header in " + fname + ".");
+        int units, expected_units = 0;
+        while (fin >> units) {
+            if (units != expected_units++) throw std::runtime_error("Invalid DNR unit count in " + fname + ".");
+            for (std::vector<double>& thresholds : dnr_thresholds_by_class) {
+                double threshold;
+                if (!(fin >> threshold) || !std::isfinite(threshold) || threshold < 0 || threshold > 1) throw std::runtime_error("Invalid threshold in " + fname + ".");
+                thresholds.push_back(threshold);
+            }
+        }
+        if (!fin.eof() || expected_units == 0) throw std::runtime_error("Invalid data in " + fname + ".");
+    }
+
     double get_threshold(int hp_len, char hp_base) const {
         if (hp_len < 0) throw std::invalid_argument("HP length cannot be negative.");
         int hp_base_idx = get_base_idx(hp_base);
         if (hp_base_idx < 0) throw std::invalid_argument("HP base must be A, C, G, or T.");
         const std::vector<double>& thresholds = thresholds_by_base[hp_base_idx];
         return thresholds[std::min<size_t>(hp_len, thresholds.size() - 1)];
+    }
+
+    double get_dnr_threshold(int units, int class_idx) const {
+        if (units < 0) throw std::invalid_argument("DNR unit count cannot be negative.");
+        if (class_idx < 0 || class_idx >= dnr_thresholds_by_class.size()) throw std::invalid_argument("Invalid DNR class index.");
+        const std::vector<double>& thresholds = dnr_thresholds_by_class[class_idx];
+        return thresholds[std::min<size_t>(units, thresholds.size() - 1)];
     }
 
 private:
@@ -71,8 +115,9 @@ private:
 struct consensus_hp_region_t {
     int beg, end;
     char base;
+    int period;
 
-    consensus_hp_region_t(int beg = 0, int end = 0, char base = 'N') : beg(beg), end(end), base(base) {}
+    consensus_hp_region_t(int beg = 0, int end = 0, char base = 'N', int period = 1) : beg(beg), end(end), base(base), period(period) {}
     int length() const { return end - beg; }
 };
 
@@ -97,6 +142,17 @@ inline std::vector<consensus_hp_region_t> find_consensus_hp_regions(const std::s
         if ((hp_base == 'A' || hp_base == 'C' || hp_base == 'G' || hp_base == 'T') && hp_end - hp_beg >= 5) hp_regions.push_back({hp_beg, hp_end, hp_base});
         hp_beg = hp_end;
     }
+    // Append maximal perfect DNRs, retaining any trailing partial unit in the region.
+    for (int dnr_beg = 0; dnr_beg + 1 < seq.length();) {
+        if (dnr_class_idx(uppercase_hp_base(seq[dnr_beg]), uppercase_hp_base(seq[dnr_beg + 1])) < 0) {
+            dnr_beg++;
+            continue;
+        }
+        int dnr_end = dnr_beg + 2;
+        while (dnr_end < seq.length() && uppercase_hp_base(seq[dnr_end]) == uppercase_hp_base(seq[dnr_end - 2])) dnr_end++;
+        if ((dnr_end - dnr_beg) / 2 >= MIN_CONSENSUS_DNR_UNITS) hp_regions.push_back({dnr_beg, dnr_end, 'N', 2});
+        dnr_beg = dnr_end - 1; // Adjacent repeats can share their boundary base.
+    }
     return hp_regions;
 }
 
@@ -112,7 +168,7 @@ inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool i
 
     int aligned_len = aln.query_end - aln.query_begin;
     if (aligned_len <= 0) return false;
-    // Accept the ordinary whole-alignment allowance before trying HP-specific rescue.
+    // Accept the ordinary whole-alignment allowance before trying repeat-specific rescue.
     if (round_up_non_hp_threshold) {
         if (aln.mismatches <= std::ceil(config.max_seq_error * aligned_len)) return true;
     } else if (aln.mismatches / double(aligned_len) <= config.max_seq_error) return true;
@@ -121,10 +177,21 @@ inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool i
         for (const consensus_hp_region_t& hp : hp_regions) {
             int tail_3p_len = is_reverse ? hp.beg - aln.ref_begin : aln.ref_end - hp.end;
             if (aln.ref_begin >= hp.beg || aln.ref_end <= hp.end || tail_3p_len < config.min_clip_len) continue;
-            char sequenced_hp_base = is_reverse ? complement_hp_base(hp.base) : hp.base;
-            double threshold = hp_mismatch_rate_thresholds->get_threshold(hp.length(), sequenced_hp_base);
+            double threshold;
+            if (hp.period == 2) {
+                char first = uppercase_hp_base(consensus_seq[is_reverse ? hp.end - 1 : hp.beg]);
+                char second = uppercase_hp_base(consensus_seq[is_reverse ? hp.end - 2 : hp.beg + 1]);
+                if (is_reverse) {
+                    first = complement_hp_base(first);
+                    second = complement_hp_base(second);
+                }
+                threshold = hp_mismatch_rate_thresholds->get_dnr_threshold(hp.length() / 2, dnr_class_idx(first, second));
+            } else {
+                char sequenced_hp_base = is_reverse ? complement_hp_base(hp.base) : hp.base;
+                threshold = hp_mismatch_rate_thresholds->get_threshold(hp.length(), sequenced_hp_base);
+            }
 
-            // Each eligible HP defines its own core and tail boundaries.
+            // Each eligible repeat defines its own core and tail boundaries.
             int five_p_and_hp_beg = is_reverse ? hp.beg : aln.ref_begin;
             int five_p_and_hp_end = is_reverse ? aln.ref_end : hp.end;
             int three_p_beg = is_reverse ? aln.ref_begin : hp.end;

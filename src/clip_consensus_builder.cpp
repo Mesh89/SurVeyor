@@ -957,7 +957,7 @@ int main(int argc, char* argv[]) {
     }
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
-    hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir);
 
     const hts_pos_t window_size = 100000;
     const size_t max_cluster_read_visits = 20000;

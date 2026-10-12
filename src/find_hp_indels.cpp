@@ -674,6 +674,197 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
     return result;
 }
 
+std::array<hp_mismatch_rates_by_len_t, 6> collect_dnr_tail_rates(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, hts_pos_t chunk_beg, hts_pos_t chunk_end, config_t* config, stats_t* stats, bam_pool_t* bam_pool) {
+    std::array<hp_mismatch_rates_by_len_t, 6> rates_by_class;
+    std::array<std::vector<bool>, 6> seen_units;
+    open_samFile_t* alignment_file = bam_pool->get_bam_reader(id);
+    std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read(bam_init1(), &bam_destroy1);
+    if (!read) throw std::runtime_error("Unable to allocate an alignment record.");
+    int max_depth = 2 * stats->get_max_depth(contig_name);
+
+    // Find maximal alternating runs, extending past the chunk boundary to measure their full length.
+    for (hts_pos_t beg = chunk_beg; beg < chunk_end && beg + 1 < contig_len;) {
+        int ref_class = dnr_class_idx(contig_seq[beg], contig_seq[beg + 1]);
+        // A run starting in the preceding chunk is owned by that chunk.
+        if (ref_class < 0 || (beg > 0 && contig_seq[beg + 1] == contig_seq[beg - 1])) {
+            beg++;
+            continue;
+        }
+        hts_pos_t end = beg + 2;
+        while (end < contig_len && contig_seq[end] == contig_seq[end - 2]) end++;
+        int units = (end - beg) / 2;
+        if (units >= MIN_CONSENSUS_DNR_UNITS) {
+            // Sample only the first locus of each reference class and unit count within this chunk.
+            if (seen_units[ref_class].size() <= units) seen_units[ref_class].resize(units + 1, false);
+            if (!seen_units[ref_class][units]) {
+                seen_units[ref_class][units] = true;
+                std::string region = contig_name + ":" + std::to_string(beg + 1) + "-" + std::to_string(end);
+                std::unique_ptr<hts_itr_t, decltype(&hts_itr_destroy)> iter(sam_itr_querys(alignment_file->idx, alignment_file->header, region.c_str()), &hts_itr_destroy);
+                if (!iter) throw std::runtime_error("Unable to query alignments for " + region + ".");
+                struct dnr_observation_t {
+                    std::string flank, tail;
+                    std::vector<uint8_t> flank_quals;
+                    int sequenced_class;
+                    bool is_reverse;
+                };
+                std::map<int, std::vector<dnr_observation_t>> observations_by_units;
+                int primary_reads = 0, status;
+                while ((status = sam_itr_next(alignment_file->file, iter.get(), read.get())) >= 0) {
+                    if (is_unmapped(read.get()) || !is_primary(read.get())) continue;
+                    // Count all overlapping primary reads before applying calibration filters.
+                    if (++primary_reads > max_depth) break;
+                    if ((read->core.flag & BAM_FDUP) || read->core.qual < 20 || read->core.l_qseq <= 0) continue;
+
+                    // Use the complete aligned repeat span, so substitutions inside it do not shorten the run.
+                    // Include insertions at its boundaries or inside it, but reject deletions crossing either boundary.
+                    bool is_reverse = bam_is_rev(read.get());
+                    std::string seq = get_sequence(read.get());
+                    std::vector<hts_pos_t> qpos_to_rpos(seq.length(), -1);
+                    hts_pos_t rpos = read->core.pos;
+                    int qpos = 0, repeat_beg = -1, repeat_end = -1, left_clip = 0, right_clip = 0;
+                    bool invalid_indel = false;
+                    std::array<std::array<int, 4>, 2> aligned_base_counts{};
+                    std::vector<std::pair<int, int>> repeat_insertions;
+                    uint32_t* cigar = bam_get_cigar(read.get());
+                    for (uint32_t c = 0; c < read->core.n_cigar; c++) {
+                        int op = bam_cigar_op(cigar[c]), len = bam_cigar_oplen(cigar[c]);
+                        int query_beg = -1, query_end = -1;
+                        if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
+                            for (int pos = 0; pos < len; pos++) qpos_to_rpos[qpos + pos] = rpos + pos;
+                            hts_pos_t overlap_beg = std::max(rpos, beg), overlap_end = std::min(rpos + len, end);
+                            if (overlap_beg < overlap_end) {
+                                query_beg = qpos + overlap_beg - rpos;
+                                query_end = qpos + overlap_end - rpos;
+                            }
+                        } else if (op == BAM_CINS && beg <= rpos && rpos <= end) {
+                            query_beg = qpos;
+                            query_end = qpos + len;
+                            repeat_insertions.push_back({query_beg, query_end});
+                        } else if ((op == BAM_CDEL || op == BAM_CREF_SKIP) && rpos < end && rpos + len > beg) {
+                            if (op == BAM_CREF_SKIP || rpos < beg || rpos + len > end) invalid_indel = true;
+                        }
+                        if (query_beg >= 0) {
+                            if (repeat_beg < 0) repeat_beg = query_beg;
+                            repeat_end = query_end;
+                            if (op != BAM_CINS) {
+                                for (int q = query_beg; q < query_end; q++) {
+                                    int base = base_to_index(seq[q]);
+                                    if (base >= 0) aligned_base_counts[(q - repeat_beg) % 2][base]++;
+                                }
+                            }
+                        }
+                        if (op == BAM_CSOFT_CLIP) {
+                            if (qpos == 0) left_clip = len;
+                            if (qpos + len == seq.length()) right_clip = len;
+                        }
+                        if (bam_cigar_type(op) & 1) qpos += len;
+                        if (bam_cigar_type(op) & 2) rpos += len;
+                    }
+                    if (invalid_indel || repeat_beg < 0 || repeat_end > seq.length() || repeat_end - repeat_beg < 2) continue;
+
+                    // Validate inserted sequence against the repeat phase; aligned substitutions remain inside the span.
+                    int anchor_beg = repeat_beg;
+                    // Infer each phase from aligned bases, so an insertion or an isolated error cannot set the motif.
+                    char repeat_bases[2];
+                    for (int phase = 0; phase < 2; phase++) {
+                        const auto& counts = aligned_base_counts[phase];
+                        auto best = std::max_element(counts.begin(), counts.end());
+                        repeat_bases[phase] = *best > 0 ? "ACGT"[best - counts.begin()] : 'N';
+                    }
+                    if (dnr_class_idx(repeat_bases[0], repeat_bases[1]) < 0) continue;
+                    for (const auto& insertion : repeat_insertions) {
+                        for (int q = insertion.first; q < insertion.second; q++) {
+                            if (seq[q] != repeat_bases[(q - anchor_beg) % 2]) invalid_indel = true;
+                        }
+                    }
+                    if (invalid_indel) continue;
+
+                    // Extend only into soft clips; matching bases aligned outside the reference run remain in the flanks.
+                    while (repeat_beg > 0 && repeat_beg - 1 < left_clip && seq[repeat_beg - 1] == repeat_bases[(anchor_beg - repeat_beg + 1) % 2]) repeat_beg--;
+                    while (repeat_end < seq.length() && repeat_end >= seq.length() - right_clip && seq[repeat_end] == repeat_bases[(repeat_end - anchor_beg) % 2]) repeat_end++;
+                    int sequenced_class = is_reverse ? dnr_class_idx(complement_hp_base(repeat_bases[0]), complement_hp_base(repeat_bases[1])) : dnr_class_idx(repeat_bases[0], repeat_bases[1]);
+                    int run_len = repeat_end - repeat_beg;
+                    int flank_len = is_reverse ? seq.length() - repeat_end : repeat_beg;
+                    int tail_len = is_reverse ? repeat_beg : seq.length() - repeat_end;
+                    if (flank_len < config->min_clip_len || tail_len < config->min_clip_len) continue; // Also excludes repeats continuing to either read end.
+
+                    // Match HP's 5' check: follow the alignment, or remap a clipped flank next to the repeat with zero leeway.
+                    int flank_mismatches = is_reverse ? tail_mismatch_count_from_mapping(seq, qpos_to_rpos, contig_seq, contig_len, repeat_end, seq.length(), false, left_clip > 0, right_clip > 0, 0, end) : tail_mismatch_count_from_mapping(seq, qpos_to_rpos, contig_seq, contig_len, 0, repeat_beg, true, left_clip > 0, right_clip > 0, 0, beg);
+                    if (flank_mismatches > config->max_seq_error * flank_len) continue;
+                    // Store only flank and tail bases, ordered outward from the repeat on the reference strand.
+                    const uint8_t* bam_quals = bam_get_qual(read.get());
+                    std::string flank(flank_len, 'N'), tail(tail_len, 'N');
+                    std::vector<uint8_t> flank_quals(flank_len);
+                    for (int pos = 0; pos < flank_len; pos++) {
+                        int q = is_reverse ? repeat_end + pos : repeat_beg - 1 - pos;
+                        flank[pos] = seq[q];
+                        flank_quals[pos] = bam_quals[q];
+                    }
+                    for (int pos = 0; pos < tail_len; pos++) {
+                        int q = is_reverse ? repeat_beg - 1 - pos : repeat_end + pos;
+                        tail[pos] = seq[q];
+                    }
+                    std::replace(flank_quals.begin(), flank_quals.end(), uint8_t(255), uint8_t(0));
+                    observations_by_units[run_len / 2].push_back({std::move(flank), std::move(tail), std::move(flank_quals), sequenced_class, is_reverse});
+                }
+                if (status < -1) throw std::runtime_error("Error while reading alignments for " + region + ".");
+                // Discard the whole locus if any primary overlaps push it above the depth limit.
+                if (primary_reads <= max_depth) {
+                    for (const auto& group : observations_by_units) {
+                        // Both sides start at the repeat boundary, so every flank has offset zero.
+                        // Only 5' bases vote, so each tail is scored against independent opposite-side evidence.
+                        std::array<std::vector<std::string>, 2> flank_seqs;
+                        std::array<std::vector<const uint8_t*>, 2> flank_quals;
+                        for (const dnr_observation_t& observation : group.second) {
+                            int side = observation.is_reverse ? 1 : 0;
+                            flank_seqs[side].push_back(observation.flank);
+                            flank_quals[side].push_back(observation.flank_quals.data());
+                        }
+                        std::array<std::string, 2> flank_consensuses;
+                        for (int side = 0; side < 2; side++) {
+                            positional_consensus_t consensus = build_positional_consensus(flank_seqs[side], flank_quals[side], std::vector<hts_pos_t>(flank_seqs[side].size(), 0));
+                            // Keep the contiguous flank from the repeat boundary to the first position failing both HP criteria.
+                            int kept_len = 0;
+                            for (int pos = 0; pos < consensus.seq.length(); pos++) {
+                                if (consensus.coverage[pos] < MIN_SUPPORTING_READS && consensus.qual[pos] - 33 < 40) break;
+                                kept_len++;
+                            }
+                            flank_consensuses[side] = consensus.seq.substr(0, kept_len);
+                        }
+
+                        // Count every retained position, walking outward from the read's own repeat boundary.
+                        for (const dnr_observation_t& observation : group.second) {
+                            const std::string& consensus = flank_consensuses[observation.is_reverse ? 0 : 1];
+                            int compared = std::min(observation.tail.length(), consensus.length());
+                            if (compared == 0) continue;
+                            int mismatches = 0;
+                            for (int pos = 0; pos < compared; pos++) mismatches += observation.tail[pos] != consensus[pos];
+                            int cls = observation.sequenced_class, observed_units = group.first;
+                            if (rates_by_class[cls].size() <= observed_units) rates_by_class[cls].resize(observed_units + 1);
+                            rates_by_class[cls][observed_units].push_back(double(mismatches) / compared);
+                        }
+                    }
+                }
+            }
+        }
+        // Adjacent maximal repeats can share their boundary base.
+        beg = end - 1;
+    }
+    return rates_by_class;
+}
+
+void write_dnr_mismatch_rate_thresholds(const std::array<std::vector<double>, 6>& thresholds_by_class, const std::string& fname) {
+    std::ofstream fout(fname);
+    if (!fout) throw std::runtime_error("Unable to open " + fname + " for writing.");
+    fout << "UNITS\tAC\tAG\tAT\tCG\tCT\tGT\n" << std::setprecision(17);
+    for (size_t units = 0; units < thresholds_by_class[0].size(); units++) {
+        fout << units;
+        for (int cls = 0; cls < 6; cls++) fout << "\t" << thresholds_by_class[cls][units];
+        fout << "\n";
+    }
+    if (!fout) throw std::runtime_error("Unable to write " + fname + ".");
+}
+
 int main(int argc, char* argv[]) {
     bool thresholds_only = false;
     bool invalid_args = false;
@@ -756,6 +947,38 @@ int main(int argc, char* argv[]) {
     for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) hp_mismatch_rate_thresholds_by_base[hp_base_idx] = estimate_hp_mismatch_rate_thresholds(threshold_estimation_rates_by_hp_len_and_base[hp_base_idx], config.max_seq_error);
     write_hp_mismatch_rate_thresholds(hp_mismatch_rate_thresholds_by_base, workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
     write_hp_tail_error_table(tail_error_table, workdir + "/hp_3p_tail_error_probabilities.txt");
+
+    // Train DNR thresholds in a separate pass over the same chunks, including thresholds-only runs.
+    std::vector<std::future<std::array<hp_mismatch_rates_by_len_t, 6>>> dnr_futures;
+    {
+        ctpl::thread_pool thread_pool(config.threads);
+        for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
+            std::string contig_name = contig_map.get_name(contig_id);
+            hts_pos_t contig_len = chr_seqs.get_len(contig_name);
+            for (hts_pos_t chunk_beg = 0; chunk_beg < contig_len; chunk_beg += CHUNK_SIZE) {
+                dnr_futures.push_back(thread_pool.push(collect_dnr_tail_rates, contig_name, chr_seqs.get_seq(contig_name), contig_len, chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool));
+            }
+        }
+        thread_pool.stop(true);
+    }
+    // Combine chunk observations into sample-wide rate lists for each class and unit count.
+    std::array<hp_mismatch_rates_by_len_t, 6> dnr_rates_by_class;
+    for (auto& future : dnr_futures) {
+        auto chunk_rates = future.get();
+        for (int cls = 0; cls < 6; cls++) {
+            if (dnr_rates_by_class[cls].size() < chunk_rates[cls].size()) dnr_rates_by_class[cls].resize(chunk_rates[cls].size());
+            for (size_t units = 0; units < chunk_rates[cls].size(); units++) dnr_rates_by_class[cls][units].insert(dnr_rates_by_class[cls][units].end(), chunk_rates[cls][units].begin(), chunk_rates[cls][units].end());
+        }
+    }
+    // Give every TSV column the same row range and reuse the HP estimator's pooling and robust limits.
+    size_t unit_count = MIN_REF_HP_LEN + 1;
+    for (const auto& rates : dnr_rates_by_class) unit_count = std::max(unit_count, rates.size());
+    std::array<std::vector<double>, 6> dnr_thresholds_by_class;
+    for (int cls = 0; cls < 6; cls++) {
+        dnr_rates_by_class[cls].resize(unit_count);
+        dnr_thresholds_by_class[cls] = estimate_hp_mismatch_rate_thresholds(dnr_rates_by_class[cls], config.max_seq_error);
+    }
+    write_dnr_mismatch_rate_thresholds(dnr_thresholds_by_class, workdir + "/" + DNR_MISMATCH_RATE_THRESHOLDS_FILENAME);
     if (thresholds_only) return 0;
     hp_tail_quality_model_t quality_model = make_hp_tail_quality_model(tail_error_table);
     futures.clear();

@@ -1237,7 +1237,7 @@ int main(int argc, char* argv[]) {
     contig_map.load(workdir);
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
-    hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir);
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
     chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
