@@ -299,6 +299,7 @@ void merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 }
 
 bool merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consensus_t* target, int min_overlap) {
+	const int MAX_MERGE_OVERLAP_DEVIATION = 10;
 	if (c1->cigar_indel_lengths != c2->cigar_indel_lengths) return false;
 	hts_pos_t lower = std::max(c1->other_bp_lower_boundary, c2->other_bp_lower_boundary);
 	hts_pos_t upper = std::min(c1->other_bp_upper_boundary, c2->other_bp_upper_boundary);
@@ -326,6 +327,7 @@ bool merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 	if (hq_overlap >= min_hq_seq_len/2 && hq_overlap < min_hq_seq_len) { // first, try to see if the high quality parts are compatible
 		int hq_seq_overlap = compatible_overlap(c1_hq_seq, c1_hq_qual, c2_hq_seq, c2_hq_qual);
 		if (hq_seq_overlap) {
+			if (std::abs(hq_seq_overlap - hq_overlap) > MAX_MERGE_OVERLAP_DEVIATION) return false;
 			merge_overlapping_pair_of_clusters(c1, c2, target, c1_hq_seq, c1_hq_qual, c2_hq_seq, c2_hq_qual, hq_seq_overlap);
 			return true;
 		}
@@ -333,6 +335,7 @@ bool merge_overlapping_pair_of_clusters(consensus_t* c1, consensus_t* c2, consen
 	
 	int seq_overlap = compatible_overlap(c1->sequence, c1->qual, c2->sequence, c2->qual); // then, try the whole sequences
 	if (seq_overlap) {
+		if (std::abs(seq_overlap - overlap) > MAX_MERGE_OVERLAP_DEVIATION) return false;
 		merge_overlapping_pair_of_clusters(c1, c2, target, c1->sequence, c1->qual, c2->sequence, c2->qual, seq_overlap);
 		return true;
 	}
