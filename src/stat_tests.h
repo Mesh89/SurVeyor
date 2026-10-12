@@ -804,7 +804,13 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 	std::vector<pairs_data_t> neutral_bp1_pairs_data(insertions.size());
 	std::vector<pairs_data_t> stray_bp1_pairs_data(insertions.size()), stray_bp2_pairs_data(insertions.size());	
 
-	std::unordered_map<std::string, std::vector<std::pair<pairs_data_t*, bam1_t*> > > pairs_waiting_for_neg_nm;
+	struct pending_pair_t {
+		hts_pos_t pos, endpos, mpos, mate_endpos;
+		uint8_t qual;
+		int64_t mq, nm;
+		std::vector<pairs_data_t*> targets;
+	};
+	std::unordered_map<std::string, pending_pair_t> pairs_waiting_for_neg_nm;
 
 	int curr_del_bystart_idx = 0, curr_del_byend_idx = 0;
     hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
@@ -870,16 +876,37 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 						insertion_t* ins = insertions_by_start[i];
 						int idx = insertion_to_idx[ins];
 						pairs_data_t* pairs_data = (read->core.isize > stats.max_is-ins->svlen() ? &ref_bp1_pairs_data[idx] : &neutral_bp1_pairs_data[idx]);
-						pairs_waiting_for_neg_nm[std::string(bam_get_qname(read))].push_back({pairs_data, bam_dup1(read)});
+						pending_pair_t& pair = pairs_waiting_for_neg_nm[std::string(bam_get_qname(read))];
+						if (pair.targets.empty()) {
+							pair.pos = read->core.pos;
+							pair.endpos = bam_endpos(read);
+							pair.mpos = read->core.mpos;
+							pair.mate_endpos = get_mate_endpos(read);
+							pair.qual = read->core.qual;
+							pair.mq = get_mq(read);
+							pair.nm = get_nm(read);
+						}
+						pair.targets.push_back(pairs_data);
 					}
 				}
 			} else {
-				std::vector<std::pair<pairs_data_t*, bam1_t*> >& pairs = pairs_waiting_for_neg_nm[std::string(bam_get_qname(read))];
-				for (int i = 0; i < pairs.size(); i++) {
-					add_read(*pairs[i].first, pairs[i].second, get_nm(read));
-					bam_destroy1(pairs[i].second);
+				auto it = pairs_waiting_for_neg_nm.find(std::string(bam_get_qname(read)));
+				if (it != pairs_waiting_for_neg_nm.end()) {
+					pending_pair_t& pair = it->second;
+					int64_t mate_nm = get_nm(read);
+					for (pairs_data_t* pairs_data : pair.targets) {
+						if (pair.pos < pairs_data->bp_lf_start) pairs_data->bp_lf_start = pair.pos;
+						if (pair.endpos > pairs_data->bp_lf_end) pairs_data->bp_lf_end = pair.endpos;
+						if (pair.mpos < pairs_data->bp_rf_start) pairs_data->bp_rf_start = pair.mpos;
+						if (pair.mate_endpos > pairs_data->bp_rf_end) pairs_data->bp_rf_end = pair.mate_endpos;
+
+						pairs_data->pairs_pos_mqs.push_back(pair.qual);
+						pairs_data->pairs_neg_mqs.push_back(pair.mq);
+						pairs_data->pairs_pos_nms.push_back(pair.nm);
+						pairs_data->pairs_neg_nms.push_back(mate_nm);
+					}
+					pairs_waiting_for_neg_nm.erase(it);
 				}
-				pairs_waiting_for_neg_nm.erase(std::string(bam_get_qname(read)));
 			}
 		}
     }
@@ -896,6 +923,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 
     for (char* region : regions) free(region);
     hts_itr_destroy(iter);
+    bam_destroy1(read);
 
 }
 void calculate_ptn_ratio(std::string contig_name, std::vector<inversion_t*>& inversions, open_samFile_t* bam_file, config_t& config, stats_t& stats) {
