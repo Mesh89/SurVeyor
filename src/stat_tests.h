@@ -2,9 +2,11 @@
 #define STAT_TESTS_H
 
 #include <cstdint>
+#include <climits>
 #include <cstring>
 #include <cmath>
 #include <htslib/sam.h>
+#include <stdexcept>
 #include <unordered_map>
 
 #include "../libs/ssw_selected.h"
@@ -15,6 +17,26 @@
 #include "utils.h"
 #include "sam_utils.h"
 #include "sw_utils.h"
+
+struct cram_required_fields_guard_t {
+    htsFile* file;
+
+    cram_required_fields_guard_t(htsFile* file, int fields) : file(hts_get_format(file)->format == cram ? file : nullptr) {
+        if (this->file && hts_set_opt(this->file, CRAM_OPT_REQUIRED_FIELDS, fields) != 0) throw std::runtime_error("Failed to set CRAM required fields for stat tests.");
+    }
+    ~cram_required_fields_guard_t() {
+        if (file) hts_set_opt(file, CRAM_OPT_REQUIRED_FIELDS, INT_MAX);
+    }
+
+    cram_required_fields_guard_t(const cram_required_fields_guard_t&) = delete;
+    cram_required_fields_guard_t& operator=(const cram_required_fields_guard_t&) = delete;
+};
+
+// Every mask below includes SAM_SEQ: HTSlib 1.21/1.24 acquires a slice's reference
+// only for sequence but always releases it, so mixing decodes without SAM_SEQ
+// triggers cram_ref_decr_locked. Sequence also supplies NM and read length.
+// Each new iterator frees the previous container; masks apply to newly decoded
+// slices on this worker's reader, and the guard restores full decoding on exit.
 
 struct read_w_cached_info_t {
     bam1_t* read;
@@ -50,6 +72,7 @@ struct region_w_median_t {
 void depth_filter_indel(std::string contig_name, std::vector<sv_t*>& svs, open_samFile_t* bam_file, config_t& config, stats_t& stats) {
 
 	if (svs.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, SAM_FLAG | SAM_RNAME | SAM_POS | SAM_MAPQ | SAM_CIGAR | SAM_SEQ);
 	std::sort(svs.begin(), svs.end(), [](const sv_t* s1, const sv_t* s2) {
 		return s1->start < s2->start;
 	});
@@ -202,6 +225,7 @@ void set_bp_pairs_info(sv_t::bp_pairs_info_t& bp_pairs_info, pairs_data_t& pairs
 void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletions, open_samFile_t* bam_file, config_t& config, stats_t& stats) {
 
 	if (deletions.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, SAM_FLAG | SAM_RNAME | SAM_POS | SAM_MAPQ | SAM_CIGAR | SAM_RNEXT | SAM_PNEXT | SAM_TLEN | SAM_SEQ | SAM_AUX);
 
 	std::sort(deletions.begin(), deletions.end(), [](const deletion_t* d1, const deletion_t* d2) {
 		return d1->start < d2->start;
@@ -300,6 +324,7 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& duplications, open_samFile_t* bam_file, config_t& config, stats_t& stats) {
 
 	if (duplications.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, SAM_FLAG | SAM_RNAME | SAM_POS | SAM_MAPQ | SAM_CIGAR | SAM_RNEXT | SAM_PNEXT | SAM_TLEN | SAM_SEQ | SAM_AUX);
 
 	std::vector<char*> lc_cluster_regions, rc_cluster_regions;
 	for (duplication_t* dup : duplications) {
@@ -393,6 +418,7 @@ void calculate_confidence_interval_size(std::string contig_name, const std::vect
 										config_t& config, stats_t& stats) {
 
 	if (svs.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, SAM_FLAG | SAM_RNAME | SAM_POS | SAM_MAPQ | SAM_CIGAR | SAM_RNEXT | SAM_PNEXT | SAM_TLEN | SAM_SEQ);
 
 	std::sort(svs.begin(), svs.end(), [](const sv_t* d1, const sv_t* d2) {
 		return (d1->start+d1->end)/2 < (d2->start+d2->end)/2;
@@ -482,6 +508,7 @@ struct pairs_count_t {
 void calculate_ptn_ratio(std::string contig_name, std::vector<sv_t*>& svs, open_samFile_t* bam_file, config_t& config, stats_t& stats) {
 
 	if (svs.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, INT_MAX & ~SAM_QUAL);
 
 	std::vector<pairs_count_t> bkp_with_conc_pairs_count;
 	for (sv_t* sv : svs) {
@@ -571,6 +598,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& dele
 	config_t& config, stats_t& stats, bool reassign_evidence, evidence_map_t* evidence_map, std::string nm_file = "") {
 	
 	if (deletions.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, INT_MAX & ~SAM_QUAL);
 
 	std::vector<char*> regions;
 	for (deletion_t* del : deletions) {
@@ -651,6 +679,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 	config_t& config, stats_t& stats, hts_pos_t contig_len, bool reassign_evidence, evidence_map_t* evidence_map, std::string nm_file = "") {
 	
 	if (duplications.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, INT_MAX & ~SAM_QUAL);
 
 	std::vector<char*> regions;
 	for (duplication_t* dup : duplications) {
@@ -748,6 +777,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 	bool reassign_evidence, evidence_map_t* evidence_map, ext_mate_map_t& mateseqs_w_mapq_chr) {
 	
 	if (insertions.empty()) return;
+	cram_required_fields_guard_t required_fields(bam_file->file, INT_MAX & ~SAM_QUAL);
 
 	std::vector<char*> regions;
     for (insertion_t* ins : insertions) {

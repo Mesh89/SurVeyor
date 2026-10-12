@@ -58,6 +58,10 @@ void get_base_stats(int id, std::string bam_fname, std::string reference_fname, 
     if (hts_set_fai_filename(bam_file.file, fai_path(reference_fname.c_str())) != 0) {
         throw std::runtime_error("Failed to read reference " + reference_fname);
     }
+    // Only FLAG, TLEN and read length are read; keep SAM_SEQ so l_qseq is unchanged.
+    if (hts_set_opt(bam_file.file, CRAM_OPT_REQUIRED_FIELDS, SAM_FLAG | SAM_RNAME | SAM_POS | SAM_MAPQ | SAM_CIGAR | SAM_RNEXT | SAM_PNEXT | SAM_TLEN | SAM_SEQ) != 0) {
+        throw std::runtime_error("Failed to set CRAM required fields for " + bam_fname);
+    }
 
     std::vector<hts_pos_t> local_dist;
     bam1_t* read = bam_init1();
