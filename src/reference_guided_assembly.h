@@ -609,7 +609,8 @@ std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::str
 		covered_segments.push_back({lo_remap_side.clip_remap_info->start, lo_remap_side.clip_remap_info->end});
 	}
 
-	int ins_seq_start = insertion->left_anchor_aln->seq_len - insertion->mh_len;
+	size_t found = junction_seq.find(insertion->ins_seq);
+	int ins_seq_start = (found != std::string::npos) ? (int) found : insertion->left_anchor_aln->seq_len - insertion->mh_len;
 	int ins_seq_end = ins_seq_start + insertion->ins_seq.length();
 
 	int i = 0;
