@@ -56,7 +56,7 @@ std::shared_ptr<sv_t> make_aux_indel_record(std::shared_ptr<sv_t> parent, size_t
     aux_record->junction_remap_ref_beg = parent->junction_remap_ref_beg;
     aux_record->junction_remap_ref_end = parent->junction_remap_ref_end;
     aux_record->aux_snps = parent->aux_snps;
-    append_indel_atoms(aux_record->aux_indels, parent);
+    if (parent->svtype() != "INS" || !parent->incomplete_ins_seq()) append_indel_atoms(aux_record->aux_indels, parent);
     for (size_t i = 0; i < parent->aux_indels.size(); i++) {
         if (i != aux_idx) {
             aux_record->aux_indels.push_back(copy_indel_atom(parent->aux_indels[i]));
