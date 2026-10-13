@@ -198,6 +198,38 @@ std::shared_ptr<sv_t> atomize_del(std::shared_ptr<sv_t> sv, const normalization_
 	return sv;
 }
 
+std::shared_ptr<sv_t> end_align_del(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
+	hts_pos_t n = sv->ins_seq.length();
+	if (sv->ins_seq.find('-') != std::string::npos || n > sv->end-sv->start) return sv;
+
+	char* chr_seq = context.chr_seq;
+	hts_pos_t start_mm = 0, end_mm = 0;
+	for (hts_pos_t i = 0; i < n; i++) {
+		if (toupper(sv->ins_seq[i]) != toupper(chr_seq[sv->start+1+i])) start_mm++;
+		if (toupper(sv->ins_seq[i]) != toupper(chr_seq[sv->end-n+1+i])) end_mm++;
+	}
+	bool align_end = end_mm <= start_mm;
+	hts_pos_t mm = align_end ? end_mm : start_mm;
+	// Score improvement over separate deletion and insertion gaps.
+	if (5 + 3*n - 5*mm <= 0) return sv;
+
+	hts_pos_t first = align_end ? sv->end-n+1 : sv->start+1;
+	for (hts_pos_t i = 0; i < n; i++) {
+		char alt_base = sv->ins_seq[i];
+		if (toupper(chr_seq[first+i]) != toupper(alt_base) && is_genomic_base(alt_base)) {
+			sv->aux_snps.push_back(snp_t(first+i, alt_base));
+			if (provenance != nullptr) provenance->add_snp(first+i, alt_base, provenance->insertion_origin(sv.get(), i));
+		}
+	}
+	if (align_end) sv->end -= n;
+	else sv->start += n;
+	sv->ins_seq = "";
+	std::sort(sv->aux_snps.begin(), sv->aux_snps.end(), [](const snp_t& a, const snp_t& b) { return a.pos < b.pos; });
+
+	if (sv->start >= sv->end) return nullptr;
+	return sv;
+}
+
 std::shared_ptr<sv_t> atomize_ins(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
 	if (sv->start == sv->end) return sv;
 	std::vector<hts_pos_t> original_positions = insertion_origin_slice(provenance, sv.get(), 0, sv->ins_seq.length());
@@ -316,6 +348,7 @@ std::shared_ptr<sv_t> merge_adjacent_main_indel(std::shared_ptr<sv_t> main_sv, n
 
 std::shared_ptr<sv_t> atomize_limited(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
 	if (sv->svtype() == "DEL" && sv->svsize() <= 70) return atomize_del(sv, context, provenance);
+	if (sv->svtype() == "DEL" && !sv->ins_seq.empty()) return end_align_del(sv, context, provenance);
 	if (sv->svtype() == "INS" && !sv->incomplete_ins_seq() && sv->ins_seq.length() <= 70) return atomize_ins(sv, context, provenance);
 	return sv;
 }
