@@ -396,6 +396,26 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
             hp_indel->aux_snps.push_back(snp);
         }
     }
+    int ref_hp_len = hp_run.end - hp_run.beg;
+    if (alt_hp_len > ref_hp_len) {
+        std::string alt_run(alt_hp_len, hp_run.base);
+        for (const snp_t& snp : alt_hp->aux_snps) {
+            int alt_pos = snp.pos - ref_beg;
+            if (alt_pos < alt_hp_beg || alt_pos >= alt_hp_end) continue;
+            auto qpos_it = std::find(aln_summary.qpos_to_rpos.begin(), aln_summary.qpos_to_rpos.end(), alt_pos);
+            if (qpos_it == aln_summary.qpos_to_rpos.end()) continue;
+            int qpos = qpos_it - aln_summary.qpos_to_rpos.begin();
+            if (qpos < callable_beg || qpos >= callable_end || consensus.base_quality_margins[qpos] < 40) continue;
+            alt_run[alt_pos - alt_hp_beg] = snp.alt_base;
+        }
+        int prefix = 0, suffix = 0;
+        while (prefix < ref_hp_len && alt_run[prefix] == hp_run.base) prefix++;
+        while (prefix + suffix < ref_hp_len && alt_run[alt_hp_len - 1 - suffix] == hp_run.base) suffix++;
+        if (alt_run != std::string(alt_hp_len, hp_run.base) && prefix + suffix == ref_hp_len) {
+            hp_indel->start = hp_indel->end = hp_run.beg + prefix - 1;
+            hp_indel->ins_seq = alt_run.substr(prefix, alt_hp_len - ref_hp_len);
+        }
+    }
     for (std::shared_ptr<sv_t> aux_indel : alt_hp->aux_indels) {
         int alt_beg = aux_indel->start + 1 - ref_beg;
         int alt_end = aux_indel->end + 1 - ref_beg;
