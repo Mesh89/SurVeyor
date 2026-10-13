@@ -383,19 +383,7 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
     hp_indel->junction_remap_ref_beg = ref_beg + callable_range.first;
     hp_indel->junction_remap_ref_end = hp_run.end + callable_range.second - alt_hp_end;
 
-    for (snp_t snp : alt_hp->aux_snps) {
-        int alt_pos = snp.pos - ref_beg;
-        if (alt_hp_beg <= alt_pos && alt_pos < alt_hp_end) continue;
-        if (alt_pos < alt_hp_beg ? !callable_left : !callable_right) continue;
-        auto qpos_it = std::find(aln_summary.qpos_to_rpos.begin(), aln_summary.qpos_to_rpos.end(), alt_pos);
-        if (qpos_it == aln_summary.qpos_to_rpos.end()) continue;
-        int qpos = qpos_it - aln_summary.qpos_to_rpos.begin();
-        if (qpos >= consensus.base_quality_margins.size() || consensus.base_quality_margins[qpos] < 40) continue;
-        snp.pos = alt_base_to_genomic(alt_pos);
-        if (callable_beg <= qpos && qpos < callable_end) {
-            hp_indel->aux_snps.push_back(snp);
-        }
-    }
+    bool rewritten_insertion = false;
     int ref_hp_len = hp_run.end - hp_run.beg;
     if (alt_hp_len > ref_hp_len) {
         std::string alt_run(alt_hp_len, hp_run.base);
@@ -414,6 +402,21 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
         if (alt_run != std::string(alt_hp_len, hp_run.base) && prefix + suffix == ref_hp_len) {
             hp_indel->start = hp_indel->end = hp_run.beg + prefix - 1;
             hp_indel->ins_seq = alt_run.substr(prefix, alt_hp_len - ref_hp_len);
+            rewritten_insertion = true;
+        }
+    }
+    for (snp_t snp : alt_hp->aux_snps) {
+        int alt_pos = snp.pos - ref_beg;
+        bool in_hp = alt_hp_beg <= alt_pos && alt_pos < alt_hp_end;
+        snp.pos = alt_base_to_genomic(alt_pos);
+        if (in_hp && (rewritten_insertion || snp.pos < hp_run.beg)) continue;
+        if (!in_hp && (alt_pos < alt_hp_beg ? !callable_left : !callable_right)) continue;
+        auto qpos_it = std::find(aln_summary.qpos_to_rpos.begin(), aln_summary.qpos_to_rpos.end(), alt_pos);
+        if (qpos_it == aln_summary.qpos_to_rpos.end()) continue;
+        int qpos = qpos_it - aln_summary.qpos_to_rpos.begin();
+        if (qpos >= consensus.base_quality_margins.size() || consensus.base_quality_margins[qpos] < 40) continue;
+        if (callable_beg <= qpos && qpos < callable_end) {
+            hp_indel->aux_snps.push_back(snp);
         }
     }
     for (std::shared_ptr<sv_t> aux_indel : alt_hp->aux_indels) {
