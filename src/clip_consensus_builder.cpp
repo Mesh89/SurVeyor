@@ -35,8 +35,154 @@ std::string workdir, workspace;
 chr_seqs_map_t contigs;
 hp_tail_quality_model_t hp_tail_quality_model;
 
-std::unordered_map<std::string, int> detected_svs_count;
-std::unordered_map<std::string, int> detected_svs_count_hq;
+struct read_sv_support_t {
+    struct read_t {
+        std::string seq, qual;
+        hts_pair_pos_t span;
+        std::unordered_map<std::string, std::shared_ptr<sv_t>> indels;
+        bool skipped = false;
+
+        bool spans(const sv_t& indel) const {
+            return !skipped && span.beg <= indel.start && span.end > indel.end+1;
+        }
+    };
+
+    int count = 0, count_hq = 0;
+    std::vector<read_t> reads;
+
+    void add_read(const sv_t& sv, bam1_t* read, const std::string& seq, const uint8_t* quals, int high_confidence_mapq) {
+        count++;
+        if (read->core.qual >= high_confidence_mapq) count_hq++;
+        read_t observation;
+        observation.span = {read->core.pos, bam_endpos(read)};
+        uint32_t* cigar = bam_get_cigar(read);
+        hts_pos_t ref_pos = read->core.pos;
+        int query_pos = 0;
+        for (int i = 0; i < read->core.n_cigar; i++) {
+            int op = bam_cigar_op(cigar[i]), len = bam_cigar_oplen(cigar[i]);
+            hts_pos_t ref_end = ref_pos + ((bam_cigar_type(op) & 2) ? len : 0);
+            if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
+                observation.seq.append(seq, query_pos, len);
+                observation.qual.append(reinterpret_cast<const char*>(quals)+query_pos, len);
+            } else if (op == BAM_CREF_SKIP) {
+                observation.skipped = true; // A reference skip is not a candidate AUX deletion.
+            } else if (op == BAM_CINS || op == BAM_CDEL) {
+                bool main_indel = ref_pos == sv.start+1 && ((op == BAM_CDEL && ref_end == sv.end+1 && sv.ins_seq.empty()) || (op == BAM_CINS && sv.start == sv.end && seq.compare(query_pos, len, sv.ins_seq) == 0));
+                if (!main_indel) {
+                    std::shared_ptr<sv_t> indel;
+                    if (op == BAM_CDEL) indel = std::make_shared<deletion_t>(sv.chr, ref_pos-1, ref_end-1, "", nullptr, nullptr, nullptr, nullptr);
+                    else indel = std::make_shared<insertion_t>(sv.chr, ref_pos-1, ref_pos-1, seq.substr(query_pos, len), nullptr, nullptr, nullptr, nullptr);
+                    observation.indels.emplace(indel->unique_key(false), indel);
+                }
+            }
+            if (bam_cigar_type(op) & 1) query_pos += len;
+            ref_pos = ref_end;
+        }
+        reads.push_back(std::move(observation));
+    }
+
+    void set_aux_variants(sv_t& sv, const char* reference, hts_pos_t contig_len) const {
+        sv.aux_snps.clear();
+        sv.aux_indels.clear();
+        sv.junction_remap_ref_beg = sv.start;
+        sv.junction_remap_ref_end = sv.end+1;
+        std::unordered_map<std::string, std::pair<std::shared_ptr<sv_t>, int>> indel_support;
+        for (const auto& read : reads) for (const auto& indel : read.indels) {
+            if (!read.spans(*indel.second)) continue;
+            auto& support = indel_support[indel.first];
+            support.first = indel.second;
+            support.second++;
+        }
+        std::unordered_set<std::string> accepted;
+        for (const auto& support : indel_support) {
+            const auto& indel = support.second.first;
+            if (indel->start == sv.start || (indel->start < sv.end && sv.start <= indel->end)) continue;
+            int spanning = std::count_if(reads.begin(), reads.end(), [&](const read_t& read) { return read.spans(*indel); });
+            if (support.second.second >= 2 && 2*support.second.second > spanning) {
+                accepted.insert(support.first);
+                sv.aux_indels.push_back(indel);
+            }
+        }
+        std::sort(sv.aux_indels.begin(), sv.aux_indels.end(), aux_indel_haplotype_order);
+        // Different spanning denominators can give overlapping deletions separate majorities.
+        for (size_t i = 1; i < sv.aux_indels.size(); i++) for (size_t j = 0; j < i; j++) {
+            const auto& a = sv.aux_indels[i];
+            const auto& b = sv.aux_indels[j];
+            if (a->start == b->start || a->start < b->end) {
+                accepted.erase(a->unique_key(false)); accepted.erase(b->unique_key(false));
+            }
+        }
+        sv.aux_indels.erase(std::remove_if(sv.aux_indels.begin(), sv.aux_indels.end(), [&](const std::shared_ptr<sv_t>& indel) { return !accepted.count(indel->unique_key(false)); }), sv.aux_indels.end());
+
+        // Inserted query bases were omitted in add_read; compress reference deletions here.
+        std::vector<sv_t*> deletions;
+        if (sv.end > sv.start) deletions.push_back(&sv);
+        for (const auto& indel : sv.aux_indels) if (indel->end > indel->start) deletions.push_back(indel.get());
+        std::sort(deletions.begin(), deletions.end(), [](const sv_t* a, const sv_t* b) { return a->start < b->start; });
+        std::vector<std::string> seqs, quals;
+        std::vector<hts_pos_t> offsets;
+        for (const auto& read : reads) {
+            if (read.skipped) continue;
+            bool consistent = true;
+            for (const auto& indel : read.indels) if (!accepted.count(indel.first)) consistent = false;
+            for (const auto& indel : sv.aux_indels) if (read.spans(*indel) && !read.indels.count(indel->unique_key(false))) consistent = false;
+            if (!consistent) continue;
+            hts_pos_t offset = read.span.beg;
+            for (const auto* del : deletions) offset -= std::max<hts_pos_t>(0, std::min(read.span.beg-del->start-1, del->end-del->start));
+            std::string bases, qualities;
+            size_t next_del = 0;
+            hts_pos_t pos = read.span.beg, skip_end = pos;
+            for (size_t i = 0; i < read.seq.size(); i++, pos++) {
+                while (next_del < deletions.size() && deletions[next_del]->start < pos) {
+                    auto* del = deletions[next_del++];
+                    if (del == &sv || read.indels.count(del->unique_key(false))) pos = std::max(pos, del->end+1);
+                    else skip_end = std::max(skip_end, del->end+1);
+                }
+                // A nonspanning read may start/end inside an accepted deletion.
+                if (pos < skip_end) continue;
+                bases += read.seq[i]; qualities += read.qual[i];
+            }
+            if (bases.empty()) continue;
+            seqs.push_back(std::move(bases)); quals.push_back(std::move(qualities)); offsets.push_back(offset);
+        }
+        if (seqs.empty()) { sv.aux_indels.clear(); return; }
+        for (const auto& indel : sv.aux_indels) {
+            sv.junction_remap_ref_beg = std::min(sv.junction_remap_ref_beg, indel->start);
+            sv.junction_remap_ref_end = std::max(sv.junction_remap_ref_end, indel->end+1);
+        }
+        hts_pos_t origin = *std::min_element(offsets.begin(), offsets.end());
+        for (auto& offset : offsets) offset -= origin;
+        std::vector<const uint8_t*> flank_quals;
+        for (const auto& qual : quals) flank_quals.push_back(reinterpret_cast<const uint8_t*>(qual.data()));
+        positional_consensus_t consensus = build_positional_consensus(seqs, flank_quals, offsets, true);
+        std::vector<hts_pos_t> confident;
+        for (hts_pos_t i = 0; i < consensus.seq.size(); i++) {
+            hts_pos_t pos = origin+i;
+            for (const auto* del : deletions) if (pos > del->start) pos += del->end-del->start;
+            if (pos < 0 || pos >= contig_len) continue;
+            if (consensus.max_base_freq[i] < 2 || !passes_aux_snp_quality(i, consensus.seq.size(), consensus.qual, 0, 0) || !is_genomic_base(reference[pos])) continue;
+            confident.push_back(pos);
+            if (base_to_index(consensus.seq[i]) != base_to_index(reference[pos])) {
+                sv.aux_snps.push_back(snp_t(pos, consensus.seq[i]));
+                sv.junction_remap_ref_beg = std::min(sv.junction_remap_ref_beg, pos);
+                sv.junction_remap_ref_end = std::max(sv.junction_remap_ref_end, pos+1);
+            }
+        }
+        // Include every reported variant, then extend only through consecutive callable columns.
+        auto left = std::lower_bound(confident.begin(), confident.end(), sv.junction_remap_ref_beg);
+        while (left != confident.begin() && *(left-1) == sv.junction_remap_ref_beg-1) { --left; --sv.junction_remap_ref_beg; }
+        auto right = std::lower_bound(confident.begin(), confident.end(), sv.junction_remap_ref_end);
+        while (right != confident.end() && *right == sv.junction_remap_ref_end) { ++right; ++sv.junction_remap_ref_end; }
+    }
+};
+
+struct read_contig_t {
+    std::unordered_map<std::string, read_sv_support_t> support;
+    std::vector<std::shared_ptr<sv_t>> svs;
+    size_t pending_windows = 0;
+    bool scanned = false, finalized = false;
+};
+std::vector<read_contig_t> read_contigs;
 std::unordered_map<std::string, coarse_coverage_track_t> coverage_tracks;
 std::unordered_map<std::string, coarse_coverage_track_t> highmq_coverage_tracks;
 
@@ -463,7 +609,7 @@ std::vector<bool> find_accepted_reads(std::string& consensus_seq, std::deque<bam
 
         const std::string& read_seq = read_cache.sequence(r);
         ungapped_aln_t aln(0, r->core.l_qseq, offset, offset + r->core.l_qseq, mm, r->core.l_qseq - mm);
-        if (passes_consensus_mismatch_filter(read_seq, bam_is_rev(r), consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config, true)) {
+        if (passes_consensus_mismatch_filter(read_seq, bam_is_rev(r), consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config)) {
             // The read should either map much better to the consensus than to the reference,
             // or contain an SV-sized net indel with respect to the reference.
             int orig_score = compute_read_score(r, 1, -4, -6, -1);
@@ -811,17 +957,25 @@ void route_consensuses(const std::vector<consensus_t*>& consensuses,
     }
 }
 
-void process_unused_read(bam1_t* read, const std::string& contig_name, clip_read_cache_t* read_cache = nullptr) {
+void process_unused_read(int contig_id, bam1_t* read, const std::string& contig_name, clip_read_cache_t* read_cache = nullptr) {
     std::string decoded_seq;
     if (!read_cache) decoded_seq = get_sequence(read);
     const std::string& read_seq = read_cache ? read_cache->sequence(read) : decoded_seq;
     std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_aln(read, contig_name, read_seq, get_qual_ascii(read), nullptr, 0, 0, stats, config);
-    std::lock_guard<std::mutex> lock(mtx);
+    if (svs.empty()) return;
+    thread_local hp_tail_quality_table_t quality_cache;
+    std::vector<uint8_t> recalibrated_quals;
+    if (!read_cache) recalibrated_quals = recalibrate_clip_read_qualities(read, config, hp_tail_quality_model, quality_cache, &read_seq, contigs.get_seq(contig_name), contigs.get_len(contig_name));
+    const auto& quals = read_cache ? read_cache->qualities(read) : recalibrated_quals;
     for (auto& sv : svs) {
-        detected_svs_count[sv->unique_key(false)]++;
-        if (read->core.qual >= config.high_confidence_mapq) {
-            detected_svs_count_hq[sv->unique_key(false)]++;
-        }
+        std::string key = sv->unique_key(false);
+        read_sv_support_t prepared;
+        prepared.add_read(*sv, read, read_seq, quals.data(), config.high_confidence_mapq);
+        std::lock_guard<std::mutex> lock(mtx);
+        auto& support = read_contigs[contig_id].support[key];
+        support.count += prepared.count;
+        support.count_hq += prepared.count_hq;
+        support.reads.push_back(std::move(prepared.reads.back()));
     }
 }
 
@@ -840,9 +994,9 @@ struct clip_read_t {
     explicit clip_read_t(bam1_t* read) : read(read) {}
     ~clip_read_t() { bam_destroy1(read); }
 
-    void finish_use(const std::string& contig_name, clip_read_cache_t* read_cache = nullptr) {
+    void finish_use(int contig_id, const std::string& contig_name, clip_read_cache_t* read_cache = nullptr) {
         // The last user sees all consensus-usage flags, regardless of completion order.
-        if (remaining_uses.fetch_sub(1) == 1 && !used_for_consensus) process_unused_read(read, contig_name, read_cache);
+        if (remaining_uses.fetch_sub(1) == 1 && !used_for_consensus) process_unused_read(contig_id, read, contig_name, read_cache);
     }
 };
 
@@ -895,7 +1049,7 @@ std::shared_ptr<consensus_window_t> build_consensuses(int id, std::shared_ptr<co
     for (size_t i = 0; i < used_for_consensus.size(); i++) {
         if (used_for_consensus[i]) window->reads[window->retired_reads+i]->used_for_consensus = true;
     }
-    for (auto& read : window->reads) read->finish_use(window->contig_name, &read_cache);
+    for (auto& read : window->reads) read->finish_use(window->contig_id, window->contig_name, &read_cache);
     // Completed windows retain only consensus results, not BAM records or read slots.
     std::vector<std::shared_ptr<clip_read_t>>().swap(window->reads);
     return window;
@@ -934,6 +1088,55 @@ void write_consensuses(std::string contig_name, std::string clip_fname, std::vec
     clip_fout.close();
 }
 
+// Both scanning and contig post-processing can finish last. Claim finalization under
+// the support mutex, then build calls and release all evidence outside the lock.
+void finish_read_contig(int contig_id, size_t completed_windows, bool scanned) {
+    std::unordered_map<std::string, read_sv_support_t> supports;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        auto& contig = read_contigs[contig_id];
+        contig.pending_windows -= completed_windows;
+        contig.scanned |= scanned;
+        if (!contig.scanned || contig.pending_windows || contig.finalized) return;
+        contig.finalized = true;
+        supports.swap(contig.support);
+    }
+    for (const auto& sv_support : supports) {
+        const std::string& sv_str = sv_support.first;
+        const read_sv_support_t& support = sv_support.second;
+        if (support.count >= 2) { // SV detected by at least 2 reads
+            std::string chr, insseq, svtype;
+            hts_pos_t start, end;
+            size_t pos1 = sv_str.find(':');
+            size_t pos2 = sv_str.find(':', pos1+1);
+            size_t pos3 = sv_str.find(':', pos2+1);
+            size_t pos4 = sv_str.find(':', pos3+1);
+            chr = sv_str.substr(0, pos1);
+            start = std::stol(sv_str.substr(pos1+1, pos2-pos1-1));
+            end = std::stol(sv_str.substr(pos2+1, pos3-pos2-1));
+            svtype = sv_str.substr(pos3+1, pos4-pos3-1);
+            insseq = sv_str.substr(pos4+1);
+
+            // In high total coverage, require two HQ reads and reject high HQ coverage.
+            if (region_touches_excessive_coverage(chr, start, end+1, coverage_tracks)) {
+                if (region_touches_excessive_coverage(chr, start, end+1, highmq_coverage_tracks) || support.count_hq < 2) continue;
+            }
+
+            if (svtype == "DEL") {
+                std::shared_ptr<deletion_t> del = std::make_shared<deletion_t>(chr, start, end, "", nullptr, nullptr, nullptr, nullptr);
+                del->source = "READ";
+                support.set_aux_variants(*del, contigs.get_seq(chr), contigs.get_len(chr));
+                read_contigs[contig_id].svs.push_back(del);
+            } else if (svtype == "INS") {
+                std::shared_ptr<insertion_t> ins = std::make_shared<insertion_t>(chr, start, end, insseq, nullptr, nullptr, nullptr, nullptr);
+                ins->source = "READ";
+                support.set_aux_variants(*ins, contigs.get_seq(chr), contigs.get_len(chr));
+                read_contigs[contig_id].svs.push_back(ins);
+            }
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     if (argc != 4) {
         std::cerr << "Usage: clip_consensus_builder <workdir> <reference.fa> <sample>\n";
@@ -946,6 +1149,7 @@ int main(int argc, char* argv[]) {
     std::string sample_name = argv[3];
 
     contig_map_t contig_map(workdir);
+    read_contigs.resize(contig_map.size());
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
 
@@ -1015,9 +1219,12 @@ int main(int argc, char* argv[]) {
             }
             result.reset();
         }
-        postprocessing_futures.push_back(thread_pool.push([&](int id, std::string contig_name, std::string clip_fname, std::vector<consensus_t*>& lc_consensuses, std::vector<consensus_t*>& rc_consensuses) {
+        int contig_id = window->contig_id;
+        size_t window_count = results.windows.size();
+        postprocessing_futures.push_back(thread_pool.push([&, contig_id, window_count](int id, std::string contig_name, std::string clip_fname, std::vector<consensus_t*>& lc_consensuses, std::vector<consensus_t*>& rc_consensuses) {
             try {
                 write_consensuses(contig_name, clip_fname, lc_consensuses, rc_consensuses);
+                finish_read_contig(contig_id, window_count, false);
             } catch (...) {
                 report_failure(std::current_exception());
                 throw;
@@ -1048,6 +1255,13 @@ int main(int argc, char* argv[]) {
         });
     };
     auto scan_windows = [&](const std::function<bool(std::shared_ptr<consensus_window_t>)>& emit_window) {
+        auto emit_counted_window = [&](std::shared_ptr<consensus_window_t> window) {
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                read_contigs[window->contig_id].pending_windows++;
+            }
+            return emit_window(std::move(window));
+        };
         for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
             if (cancelled) return;
             std::string contig_name = contig_map.get_name(contig_id);
@@ -1069,7 +1283,7 @@ int main(int argc, char* argv[]) {
                     window->cluster_read_visits += active_reads.size();
                 }
                 while (!active_reads.empty() && !reads_belong_to_same_cluster(active_reads.front()->read, read)) {
-                    active_reads.front()->finish_use(contig_name);
+                    active_reads.front()->finish_use(contig_id, contig_name);
                     active_reads.pop_front();
                 }
                 active_reads.push_back(owned_read);
@@ -1078,9 +1292,9 @@ int main(int argc, char* argv[]) {
                     // Include the triggering read so the worker completes its final cluster,
                     // even beyond either scheduling limit. Carry the surviving cluster intact.
                     if (window->reads.size() > active_reads.size()) {
-                        if (!emit_window(window)) return;
+                        if (!emit_counted_window(window)) return;
                     } else {
-                        for (auto& window_read : window->reads) window_read->finish_use(contig_name);
+                        for (auto& window_read : window->reads) window_read->finish_use(contig_id, contig_name);
                     }
                     // A new window resets the work counter while retaining the 100 kb grid.
                     window = std::make_shared<consensus_window_t>(contig_id, contig_name, (cluster_start/window_size+1)*window_size);
@@ -1090,8 +1304,9 @@ int main(int argc, char* argv[]) {
                 }
             }
             window->last_window = true;
-            if (!emit_window(window)) return;
-            for (auto& active_read : active_reads) active_read->finish_use(contig_name);
+            if (!emit_counted_window(window)) return;
+            for (auto& active_read : active_reads) active_read->finish_use(contig_id, contig_name);
+            finish_read_contig(contig_id, 0, true);
         }
     };
     std::thread scanner;
@@ -1161,44 +1376,6 @@ int main(int argc, char* argv[]) {
     thread_pool.stop(true);
     if (failure) std::rethrow_exception(failure);
 
-    // Write detected SVs to VCF
-    std::unordered_map<std::string, std::vector<std::shared_ptr<sv_t>>> svs_by_chr;
-    for (const auto& sv_count : detected_svs_count) {
-        const std::string& sv_str = sv_count.first;
-        if (sv_count.second >= 2) { // SV detected by at least 2 reads
-            std::string chr, insseq, svtype;
-            hts_pos_t start, end;
-            size_t pos1 = sv_str.find(':');
-            size_t pos2 = sv_str.find(':', pos1+1);
-            size_t pos3 = sv_str.find(':', pos2+1);
-            size_t pos4 = sv_str.find(':', pos3+1);
-            chr = sv_str.substr(0, pos1);
-            start = std::stol(sv_str.substr(pos1+1, pos2-pos1-1));
-            end = std::stol(sv_str.substr(pos2+1, pos3-pos2-1));
-            svtype = sv_str.substr(pos3+1, pos4-pos3-1);
-            insseq = sv_str.substr(pos4+1);
-
-            // In high total coverage, require two HQ reads and reject high HQ coverage.
-            if (region_touches_excessive_coverage(chr, start, end+1, coverage_tracks)) {
-                if (region_touches_excessive_coverage(chr, start, end+1, highmq_coverage_tracks) || detected_svs_count_hq[sv_str] < 2) continue;
-            }
-
-            if (svtype == "DEL") {
-                std::shared_ptr<deletion_t> del = std::make_shared<deletion_t>(chr, start, end, "", nullptr, nullptr, nullptr, nullptr);
-                del->source = "READ";
-                del->junction_remap_ref_beg = start;
-                del->junction_remap_ref_end = end + 1;
-                svs_by_chr[chr].push_back(del);
-            } else if (svtype == "INS") {
-                std::shared_ptr<insertion_t> ins = std::make_shared<insertion_t>(chr, start, end, insseq, nullptr, nullptr, nullptr, nullptr);
-                ins->source = "READ";
-                ins->junction_remap_ref_beg = start;
-                ins->junction_remap_ref_end = end + 1;
-                svs_by_chr[chr].push_back(ins);
-            }
-        }
-    }
-
     std::string full_cmd_fname = workdir + "/cmd.txt";
 	std::ifstream full_cmd_fin(full_cmd_fname);
 	std::string full_cmd_str;
@@ -1213,7 +1390,9 @@ int main(int argc, char* argv[]) {
 
     bcf1_t* sv_vcf_record = bcf_init();
     for (const std::string& contig_name : contigs.ordered_contigs) {
-        std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
+        auto contig_id = contig_map.name_to_id.find(contig_name);
+        if (contig_id == contig_map.name_to_id.end()) continue;
+        std::vector<std::shared_ptr<sv_t>>& svs = read_contigs[contig_id->second].svs;
         std::sort(svs.begin(), svs.end(), sv_output_order);
         for (const auto& sv : svs) {
             sv2bcf(sv_vcf_header, sv_vcf_record, sv.get(), contigs.get_seq(sv->chr));

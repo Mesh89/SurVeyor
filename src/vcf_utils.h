@@ -822,7 +822,7 @@ bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name,
 	const char* hpid_tag = "##INFO=<ID=HPID,Number=1,Type=Integer,Description=\"Identifier of the local haplotype represented by this call.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, hpid_tag, &len));
 
-	const char* junction_remap_ref_range_tag = "##INFO=<ID=JUNCTION_REMAP_REF_RANGE,Number=2,Type=Integer,Description=\"1-based half-open [start,end) coordinates of the reference interval covered when the putative alternate junction allele was remapped to the reference.\">";
+	const char* junction_remap_ref_range_tag = "##INFO=<ID=JUNCTION_REMAP_REF_RANGE,Number=2,Type=Integer,Description=\"1-based half-open [start,end) reference interval over which the reported haplotype is considered reliable.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, junction_remap_ref_range_tag, &len));
 
 	const char* svinsseq_tag = "##INFO=<ID=SVINSSEQ,Number=1,Type=String,Description=\"Inserted sequence.\">";
@@ -853,7 +853,7 @@ bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name,
 	const char* ia_tag = "##INFO=<ID=INCOMPLETE_ASSEMBLY,Number=0,Type=Flag,Description=\"The inserted sequence is too long, and it could not be fully assembled using short reads.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, ia_tag, &len));
 
-	const char* aux_indels_tag = "##INFO=<ID=AUX_INDELS,Number=1,Type=String,Description=\"Auxiliary indels supporting the variant.\">";
+	const char* aux_indels_tag = "##INFO=<ID=AUX_INDELS,Number=1,Type=String,Description=\"Auxiliary indels supporting the variant. For READ calls, each indel must occur in at least two and more than half of the main-call supporting reads spanning its anchor and the first reference base after it.\">";
 	bcf_hdr_add_hrec(header, bcf_hdr_parse_line(header, aux_indels_tag, &len));
 
 	const char* aux_snps_tag = "##INFO=<ID=AUX_SNPS,Number=1,Type=String,Description=\"Auxiliary SNPs supporting the variant.\">";

@@ -47,6 +47,15 @@ std::vector<std::mutex> mutex_per_chr;
 
 std::mutex mtx;
 
+void merge_read_haplotypes(std::vector<std::shared_ptr<sv_t>>& svs, const std::vector<std::shared_ptr<sv_t>>& read_svs) {
+	// READ calls can carry distinct AUX SNP context for the same main event.
+	std::unordered_set<std::string> haplotype_keys;
+	for (const auto& sv : svs) haplotype_keys.insert(hpid_key(*sv));
+	for (const auto& sv : read_svs) {
+		if (haplotype_keys.insert(hpid_key(*sv)).second) svs.push_back(sv);
+	}
+}
+
 bool transfer_external_bnd_aux(const std::shared_ptr<inversion_t>& inv, const std::shared_ptr<breakend_t>& bnd_rf, const std::shared_ptr<breakend_t>& bnd_lf) {
 	std::unordered_set<std::string> snp_keys, indel_keys;
 	std::vector<snp_t> deduplicated_snps;
@@ -1006,18 +1015,7 @@ int main(int argc, char* argv[]) {
 		std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
 
 		// merge with read_svs and hp_svs
-		std::unordered_set<std::string> svs_unique_keys, svs_haplotype_keys;
-		for (std::shared_ptr<sv_t> sv : svs) {
-			svs_unique_keys.insert(sv->unique_key(false));
-			svs_haplotype_keys.insert(hpid_key(*sv));
-		}
-		auto& read_svs = read_svs_by_chr[contig_name];
-		for (std::shared_ptr<sv_t> sv : read_svs) {
-			if (sv->source == "READ" && svs_unique_keys.count(sv->unique_key(false)) > 0) continue;
-			if (svs_haplotype_keys.insert(hpid_key(*sv)).second) {
-				svs.push_back(sv);
-			}
-		}
+		merge_read_haplotypes(svs, read_svs_by_chr[contig_name]);
 
 		for (std::shared_ptr<sv_t> sv : svs) {
 			// do some light filtering here - it helps merge_compatible_haplotypes not merge good calls with calls that will get filtered

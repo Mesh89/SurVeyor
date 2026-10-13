@@ -203,12 +203,9 @@ int main(int argc, char* argv[]) {
 
 		if ((sv->svtype() == "DEL" || sv->svtype() == "INS") && max_indel_size(sv) < min_indel_size) continue;
 
+		// TODO: Handle left alignment moving variants outside JUNCTION_REMAP_REF_RANGE.
 		left_align(sv);
 		canonicalize_aux(sv);
-		if (sv->source == "READ") {
-			sv->junction_remap_ref_beg = sv->start;
-			sv->junction_remap_ref_end = sv->end + 1;
-		}
 		svs.push_back(sv);
 	}
 

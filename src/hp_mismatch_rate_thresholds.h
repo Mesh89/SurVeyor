@@ -164,14 +164,12 @@ inline double ungapped_mismatch_rate_for_ref_range(const std::string& read_seq, 
 }
 
 inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_reverse, const std::string& consensus_seq, const ungapped_aln_t& aln,
-    const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, const config_t& config, bool round_up_non_hp_threshold = false) {
+    const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, const config_t& config) {
 
     int aligned_len = aln.query_end - aln.query_begin;
     if (aligned_len <= 0) return false;
     // Accept the ordinary whole-alignment allowance before trying repeat-specific rescue.
-    if (round_up_non_hp_threshold) {
-        if (aln.mismatches <= std::ceil(config.max_seq_error * aligned_len)) return true;
-    } else if (aln.mismatches / double(aligned_len) <= config.max_seq_error) return true;
+    if (aln.mismatches / double(aligned_len) <= config.max_seq_error) return true;
 
     if (hp_mismatch_rate_thresholds != nullptr) {
         for (const consensus_hp_region_t& hp : hp_regions) {
