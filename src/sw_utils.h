@@ -521,7 +521,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 	}
 
 	std::vector<std::shared_ptr<sv_t>> main_svs;
+	std::unordered_map<sv_t*, hts_pair_pos_t> island_ranges;
 	if (main_sv != nullptr) main_svs.push_back(main_sv);
+	if (main_sv != nullptr) island_ranges[main_sv.get()] = {main_sv->start, main_sv->end};
 	while (!aux_svs.empty()) {
 		if (main_sv == nullptr) {
 			// main_sv = the largest SV among aux_svs
@@ -554,14 +556,16 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(std::vector<uint32_t>& ci
 			}
 		}
 		aux_svs.erase(std::remove(aux_svs.begin(), aux_svs.end(), nullptr), aux_svs.end());	
+		island_ranges[main_sv.get()] = {island_start, island_end};
 
 		main_sv = nullptr; // reset main_sv to pick the next largest SV in the next iteration
 	}
 
-	// associate SNPs to the closest main SV within readlen-2*min_clip_len bp
+	// Associate SNPs inside or within readlen-2*min_clip_len bp of each indel island.
 	for (snp_t& snp : snps) {
 		for (auto& sv : main_svs) {
-			int dist = std::min(abs((int)snp.pos - (int)sv->start), abs((int)snp.pos - (int)sv->end));
+			const auto& island = island_ranges.at(sv.get());
+			hts_pos_t dist = std::max<hts_pos_t>(0, std::max(island.beg - snp.pos, snp.pos - island.end));
 			if (dist < stats.read_len - 2*config.min_clip_len) {
 				sv->aux_snps.push_back(snp);
 			}
