@@ -753,29 +753,22 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		}
 
         // otherwise, it's an insertion
-        std::string mh;
-        if (lp_suffix_score.first > rp_prefix_score.first) { 
-            // the suffix of the left part is more similar to the reference, hence we choose
-			// the right-clip (if any) of the left part + the prefix of the right part 
-            //to add as part of the inserted sequence
-            int right_bp_adjustment = 0;
-            int query_mh_bases = query_prefix_len(right_part_aln.cigar, mh_len, right_bp_adjustment);
-            mh = right_part.substr(0, query_mh_bases);
-            right_bp = left_bp + right_bp_adjustment;
-            middle_part = left_part.substr(left_part.length() - get_right_clip_size(left_part_aln)) + middle_part + mh;
-			prefix_mh_len = mh.length();
-        } else {
-            // the prefix of the right part is more similar to the reference, hence we choose 
-			// the suffix of the left part + the left-clip (if any) of the right part
-            // to add as part of the inserted sequence
-            int left_bp_adjustment = 0;
-            int query_mh_bases = query_suffix_len(left_part_aln.cigar, mh_len, left_bp_adjustment);
-            mh = left_part.substr(left_part.length() - query_mh_bases);
-            left_bp = right_bp - left_bp_adjustment;
-            middle_part = mh + middle_part + right_part.substr(0, get_left_clip_size(right_part_aln));
-			middle_query_begin = best_i - query_mh_bases;
-			prefix_mh_len = mh.length();
+        int best_k = 0, min_cost = INT32_MAX;
+        for (int k = 0; k <= mh_len; k++) {
+            int cost = find_aln_suffix_score(left_part_aln.cigar, mh_len-k, 1, -4, -6, -1).first + find_aln_prefix_score(right_part_aln.cigar, k, 1, -4, -6, -1).first;
+            if (cost < min_cost) {
+                min_cost = cost;
+                best_k = k;
+            }
         }
+        int left_bp_adjustment = 0, right_bp_adjustment = 0;
+        int left_query_bases = query_suffix_len(left_part_aln.cigar, mh_len-best_k, left_bp_adjustment);
+        int right_query_bases = query_prefix_len(right_part_aln.cigar, best_k, right_bp_adjustment);
+        left_bp = left_bp - (mh_len-best_k) - left_bp_adjustment;
+        right_bp = right_bp + best_k + right_bp_adjustment;
+        middle_part = left_part.substr(left_part.length() - left_query_bases) + middle_part + right_part.substr(0, right_query_bases);
+		middle_query_begin = best_i - left_query_bases;
+		prefix_mh_len = left_query_bases - get_right_clip_size(left_part_aln) + right_query_bases - get_left_clip_size(right_part_aln);
     } else {
 		middle_part = left_part.substr(left_part.length() - get_right_clip_size(left_part_aln)) + middle_part +
 					  right_part.substr(0, get_left_clip_size(right_part_aln));
