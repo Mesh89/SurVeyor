@@ -230,6 +230,41 @@ std::shared_ptr<sv_t> end_align_del(std::shared_ptr<sv_t> sv, const normalizatio
 	return sv;
 }
 
+std::shared_ptr<sv_t> end_align_ins(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
+	hts_pos_t d = sv->end - sv->start, n = sv->ins_seq.length();
+	if (d == 0 || sv->incomplete_ins_seq() || d > n) return sv;
+	std::vector<hts_pos_t> original_positions = insertion_origin_slice(provenance, sv.get(), 0, n);
+
+	char* chr_seq = context.chr_seq;
+	hts_pos_t start_mm = 0, end_mm = 0;
+	for (hts_pos_t i = 0; i < d; i++) {
+		if (toupper(sv->ins_seq[i]) != toupper(chr_seq[sv->start+1+i])) start_mm++;
+		if (toupper(sv->ins_seq[n-d+i]) != toupper(chr_seq[sv->start+1+i])) end_mm++;
+	}
+	bool align_start = start_mm <= end_mm;
+	hts_pos_t mm = align_start ? start_mm : end_mm;
+	// Score improvement over separate deletion and insertion gaps.
+	if (5 + 3*d - 5*mm <= 0) return sv;
+
+	hts_pos_t offset = align_start ? 0 : n-d;
+	for (hts_pos_t i = 0; i < d; i++) {
+		char alt_base = sv->ins_seq[offset+i];
+		if (toupper(chr_seq[sv->start+1+i]) != toupper(alt_base) && is_genomic_base(alt_base)) {
+			hts_pos_t snp_pos = sv->start+1+i;
+			sv->aux_snps.push_back(snp_t(snp_pos, alt_base));
+			if (provenance != nullptr) provenance->add_snp(snp_pos, alt_base, original_positions[offset+i]);
+		}
+	}
+	sv->ins_seq = align_start ? sv->ins_seq.substr(d) : sv->ins_seq.substr(0, n-d);
+	if (provenance != nullptr) provenance->inserted[sv.get()] = query_origin_slice(&original_positions, align_start ? d : 0, n-d);
+	if (align_start) sv->start = sv->end;
+	else sv->end = sv->start;
+	std::sort(sv->aux_snps.begin(), sv->aux_snps.end(), [](const snp_t& a, const snp_t& b) { return a.pos < b.pos; });
+
+	if (sv->ins_seq.empty()) return nullptr;
+	return sv;
+}
+
 std::shared_ptr<sv_t> atomize_ins(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
 	if (sv->start == sv->end) return sv;
 	std::vector<hts_pos_t> original_positions = insertion_origin_slice(provenance, sv.get(), 0, sv->ins_seq.length());
@@ -350,6 +385,7 @@ std::shared_ptr<sv_t> atomize_limited(std::shared_ptr<sv_t> sv, const normalizat
 	if (sv->svtype() == "DEL" && sv->svsize() <= 70) return atomize_del(sv, context, provenance);
 	if (sv->svtype() == "DEL" && !sv->ins_seq.empty()) return end_align_del(sv, context, provenance);
 	if (sv->svtype() == "INS" && !sv->incomplete_ins_seq() && sv->ins_seq.length() <= 70) return atomize_ins(sv, context, provenance);
+	if (sv->svtype() == "INS" && sv->start != sv->end && !sv->incomplete_ins_seq() && sv->ins_seq.length() > 70) return end_align_ins(sv, context, provenance);
 	return sv;
 }
 

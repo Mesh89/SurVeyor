@@ -716,9 +716,12 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		}
 	}
 
-	// if either the left or right part is fully lowq, find variants by realigning the full junction
-	if ((left_part_aln.query_end-left_part_aln.query_begin)/(double) left_part.length() < 0.5 
-	|| (right_part_aln.query_end-right_part_aln.query_begin)/(double) right_part.length() < 0.5) {
+	// Keep long anchors even when consensus extension makes them a small fraction of the part.
+	// If either anchor fails both limits, use the variants from the full-junction alignment.
+	const int MIN_ABSOLUTE_ANCHOR_LEN = 100;
+	int left_aligned_len = left_part_aln.query_end-left_part_aln.query_begin, right_aligned_len = right_part_aln.query_end-right_part_aln.query_begin;
+	if ((left_aligned_len/(double) left_part.length() < 0.5 && left_aligned_len < MIN_ABSOLUTE_ANCHOR_LEN)
+	|| (right_aligned_len/(double) right_part.length() < 0.5 && right_aligned_len < MIN_ABSOLUTE_ANCHOR_LEN)) {
 		return full_svs;
 	}
 
