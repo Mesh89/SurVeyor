@@ -47,6 +47,7 @@ std::vector<std::pair<uint64_t, uint32_t> > partial_sums;
 
 std::vector<uint32_t> isize_counts;
 std::vector<std::vector<uint32_t> > isizes_count_geq_i;
+std::vector<std::vector<uint32_t> > isizes_count_leq_i;
 
 std::ofstream open_mateseqs_fout(int contig_id) {
     std::string fname = std::to_string(contig_id) + ".txt";
@@ -308,14 +309,21 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 
     for (int i = 0; i < rnd_positions.size(); i++) {
 		std::vector<uint32_t> local_isizes_count_geq_i(stats.max_is+1); // position i contains the count of isizes that are >= than i
-		for (uint32_t isize : isize_dist_by_rndpos[i]) local_isizes_count_geq_i[isize]++;
+		std::vector<uint32_t> local_isizes_count_leq_i(stats.max_is+1); // position i contains the count of isizes that are <= than i
+		for (uint32_t isize : isize_dist_by_rndpos[i]) {
+			local_isizes_count_geq_i[isize]++;
+			local_isizes_count_leq_i[isize]++;
+		}
 		for (int j = stats.max_is-1; j >= 0; j--) {
 			local_isizes_count_geq_i[j] += local_isizes_count_geq_i[j+1];
 		}
+		for (int j = 1; j <= stats.max_is; j++) local_isizes_count_leq_i[j] += local_isizes_count_leq_i[j-1];
 		if (local_isizes_count_geq_i[0] == 0) continue;
 		for (int j = 0; j <= stats.max_is; j++) {
             if (isizes_count_geq_i[j].size() < local_isizes_count_geq_i[j]+1) isizes_count_geq_i[j].resize(local_isizes_count_geq_i[j]+1);
             isizes_count_geq_i[j][local_isizes_count_geq_i[j]]++;
+            if (isizes_count_leq_i[j].size() < local_isizes_count_leq_i[j]+1) isizes_count_leq_i[j].resize(local_isizes_count_leq_i[j]+1);
+            isizes_count_leq_i[j][local_isizes_count_leq_i[j]]++;
 		}
 
         rnd_positions_dist_between_end_and_rnd[i].resize(stats.max_is+1);
@@ -453,6 +461,7 @@ int main(int argc, char* argv[]) {
 
     isize_counts.resize(stats.max_is+1);
     isizes_count_geq_i.resize(stats.max_is+1);
+    isizes_count_leq_i.resize(stats.max_is+1);
     dist_between_end_and_rnd.resize(stats.max_is+1);
 
     // Categorize reads
@@ -554,6 +563,13 @@ int main(int argc, char* argv[]) {
         stats_out << "min_pairs_crossing_gap " << i << " " << min_pairs_crossing_gap << std::endl;
 		stats_out << "median_pairs_crossing_gap " << i << " " << median_pairs_crossing_gap << std::endl;
         stats_out << "max_pairs_crossing_gap " << i << " " << max_pairs_crossing_gap << std::endl;
+
+        uint32_t min_pairs_crossing_isize_leq = 0, max_pairs_crossing_isize_leq = 0;
+        find_1_perc(isizes_count_leq_i[i], min_pairs_crossing_isize_leq, max_pairs_crossing_isize_leq);
+        uint32_t median_pairs_crossing_isize_leq = find_median(isizes_count_leq_i[i]);
+        stats_out << "min_pairs_crossing_isize_leq " << i << " " << min_pairs_crossing_isize_leq << std::endl;
+        stats_out << "median_pairs_crossing_isize_leq " << i << " " << median_pairs_crossing_isize_leq << std::endl;
+        stats_out << "max_pairs_crossing_isize_leq " << i << " " << max_pairs_crossing_isize_leq << std::endl;
 	}
 	stats_out.close();
 }
