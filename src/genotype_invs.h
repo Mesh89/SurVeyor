@@ -7,6 +7,38 @@
 #include "genotype.h"
 #include "var_consensus_cache.h"
 
+struct ref_windows_t {
+    std::string seq;
+    std::vector<hts_pair_pos_t> windows;
+    int hp_len = 0;
+};
+
+std::vector<hts_pair_pos_t> merge_ref_windows(std::vector<hts_pair_pos_t> windows, hts_pos_t contig_len) {
+    for (auto& window : windows) {
+        window.beg = std::max<hts_pos_t>(0, window.beg);
+        window.end = std::min(contig_len, window.end);
+    }
+    windows.erase(std::remove_if(windows.begin(), windows.end(), [](const hts_pair_pos_t& window) { return window.beg >= window.end; }), windows.end());
+    std::sort(windows.begin(), windows.end(), [](const hts_pair_pos_t& a, const hts_pair_pos_t& b) { return a.beg < b.beg; });
+    std::vector<hts_pair_pos_t> merged;
+    for (const auto& window : windows) {
+        if (merged.empty() || merged.back().end < window.beg) merged.push_back(window);
+        else merged.back().end = std::max(merged.back().end, window.end);
+    }
+    return merged;
+}
+
+ref_windows_t build_ref_windows(std::vector<hts_pair_pos_t> windows, const char* contig_seq, hts_pos_t contig_len, int spacer_len) {
+    ref_windows_t result;
+    result.windows = merge_ref_windows(std::move(windows), contig_len);
+    for (const auto& window : result.windows) {
+        if (!result.seq.empty()) result.seq.append(spacer_len, 'N');
+        result.seq.append(contig_seq+window.beg, window.end-window.beg);
+        result.hp_len = std::max(result.hp_len, longest_homopolymer_len(contig_seq+window.beg, window.end-window.beg));
+    }
+    return result;
+}
+
 void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
                 ext_mate_map_t& mateseqs_w_mapq_chr, char* contig_seq, hts_pos_t contig_len,
                 stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner) {
@@ -44,21 +76,23 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     strncpy(alt_seq+alt_lf_len+inv_len, contig_seq+sv_end, alt_rf_len);
     alt_seq[alt_len] = 0;
 
-    hts_pos_t ref_start = std::max(hts_pos_t(0), sv_start-extend);
-    hts_pos_t ref_end = std::min(sv_end+extend, contig_len);
-    int ref_len = ref_end - ref_start;
-    char* ref_seq = new char[ref_len+1];
-    strncpy(ref_seq, contig_seq+ref_start, ref_len);
-    ref_seq[ref_len] = 0;
-    inv->ref1_hp_len = longest_homopolymer_len(ref_seq, ref_len);
+    std::vector<hts_pair_pos_t> ref_windows{{sv_start-extend, sv_start+extend}, {sv_end-extend, sv_end+extend}};
+    auto read_windows = merge_ref_windows(ref_windows, contig_len);
+    if (inv->ins_seq.empty()) ref_windows.push_back({inv->inv_start+1-extend, inv->inv_end+1+extend});
+    auto ref = build_ref_windows(ref_windows, contig_seq, contig_len, stats.read_len);
+    const std::string& ref_seq = ref.seq;
+    int ref_len = ref_seq.length();
+    inv->ref1_hp_len = ref.hp_len;
     inv->alt1_hp_len = longest_homopolymer_len(alt_seq, alt_len);
 
-    std::stringstream region;
-    region << inv->chr << ":" << ref_start << "-" << ref_end;
-    char* regions[1];
-    regions[0] = strdup(region.str().c_str());
+    std::vector<char*> regions;
+    for (const auto& window : read_windows) {
+        std::stringstream region;
+        region << inv->chr << ":" << window.beg << "-" << window.end;
+        regions.push_back(strdup(region.str().c_str()));
+    }
 
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions, 1);
+    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
 
     bam1_t* read = bam_init1();
 
@@ -86,7 +120,7 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         aligner.Align(seq.c_str(), alt_seq, alt_len, filter_with_score_only, &alt_aln, 0);
 
         // // align to REF
-        aligner.Align(seq.c_str(), ref_seq, ref_len, filter_with_score_only, &ref_aln, 0);
+        aligner.Align(seq.c_str(), ref_seq.c_str(), ref_len, filter_with_score_only, &ref_aln, 0);
 
         if (alt_aln.sw_score > ref_aln.sw_score) {
             alt_better_seqs.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
@@ -116,7 +150,7 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     double alt_avg_score, ref_avg_score;
     double alt_stddev_score, ref_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_is_exact_read;
-    sv_consensus_cache::session_t consensus_cache(inv, {{alt_seq, alt_better_seqs, sv_consensus_cache::BOTH_ANCHORS, alt_better_seqs_isrc}, {ref_seq, ref_better_seqs, sv_consensus_cache::NO_ANCHORS, ref_better_seqs_isrc}});
+    sv_consensus_cache::session_t consensus_cache(inv, {{alt_seq, alt_better_seqs, sv_consensus_cache::BOTH_ANCHORS, alt_better_seqs_isrc}, {ref_seq.c_str(), ref_better_seqs, sv_consensus_cache::NO_ANCHORS, ref_better_seqs_isrc}});
     auto alt_is_consistent_read = consensus_cache.build(0, alt_avg_score, alt_stddev_score, alt_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(alt_seq, alt_better_seqs, alt_better_seqs_isrc, alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, nullptr, &alt_untrimmed_consensus_seq); });
     auto ref_is_consistent_read = consensus_cache.build(1, ref_avg_score, ref_stddev_score, ref_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_seq, ref_better_seqs, ref_better_seqs_isrc, ref_consensus_seq, ref_avg_score, ref_stddev_score, ref_is_exact_read, nullptr); });
     auto score_inv_consensus = [&](const std::string& consensus_seq) {
@@ -135,18 +169,28 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         strncpy(targets.alt_seq+target_lf_len+inv_len, contig_seq+sv_end, target_rf_len);
         append_reference_mapping(targets.alt_ref_map, sv_end, target_rf_len);
         targets.alt_seq[targets.alt_len] = 0;
-        targets.ref_seqs.push_back(contig_seq+target_start);
-        targets.ref_lens.push_back(target_end-target_start);
-        targets.ref_starts.push_back(target_start);
+        std::vector<hts_pair_pos_t> ref_windows{{sv_start-GENOTYPE_CONSENSUS_EXTENSION, sv_start+GENOTYPE_CONSENSUS_EXTENSION}, {sv_end-GENOTYPE_CONSENSUS_EXTENSION, sv_end+GENOTYPE_CONSENSUS_EXTENSION}};
+        if (inv->ins_seq.empty()) ref_windows.push_back({inv->inv_start+1-GENOTYPE_CONSENSUS_EXTENSION, inv->inv_end+1+GENOTYPE_CONSENSUS_EXTENSION});
+        for (const auto& window : merge_ref_windows(ref_windows, contig_len)) {
+            targets.ref_seqs.push_back(contig_seq+window.beg);
+            targets.ref_lens.push_back(window.end-window.beg);
+            targets.ref_starts.push_back(window.beg);
+            targets.aux_ref_seqs.push_back(contig_seq+window.beg);
+            targets.aux_ref_lens.push_back(window.end-window.beg);
+            targets.aux_ref_maps.push_back({});
+            append_reference_mapping(targets.aux_ref_maps.back(), window.beg, window.end-window.beg);
+            if (window.beg <= sv_start && sv_start < window.end) {
+                targets.left_independent_ref_seq = contig_seq+window.beg;
+                targets.left_independent_ref_len = window.end-window.beg;
+            }
+            if (window.beg <= sv_end && sv_end < window.end) {
+                targets.right_independent_ref_seq = contig_seq+window.beg;
+                targets.right_independent_ref_len = window.end-window.beg;
+            }
+        }
         targets.edits.push_back({allele_edit_kind_t::INDEL, sv_start, sv_end, target_lf_len, target_lf_len+inv_len, int(sv_end-sv_start+inv_len), true});
         targets.left_flank_end = target_lf_len;
         targets.right_flank_start = target_lf_len+inv_len;
-        targets.left_independent_ref_seq = targets.right_independent_ref_seq = contig_seq+target_start;
-        targets.left_independent_ref_len = targets.right_independent_ref_len = target_end-target_start;
-        targets.aux_ref_seqs.push_back(contig_seq+target_start);
-        targets.aux_ref_lens.push_back(target_end-target_start);
-        targets.aux_ref_maps.push_back({});
-        append_reference_mapping(targets.aux_ref_maps.back(), target_start, target_end-target_start);
         consensus_alignment_metrics_t metrics = score_consensus_alignment(consensus_seq, targets, aligner);
         delete[] targets.alt_seq;
         return metrics;
@@ -191,10 +235,9 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     set_bp_consensus_info(inv->sample_info.ref_bp1.reads_info, ref_better_seqs, ref_is_consistent_read, ref_is_exact_read, ref_avg_score, ref_stddev_score);
 
     delete[] alt_seq;
-    delete[] ref_seq;
     delete[] inv_seq;
     
-    free(regions[0]);
+    for (char* region : regions) free(region);
     bam_destroy1(read);
     hts_itr_destroy(iter);
 }
@@ -252,10 +295,15 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
 
     hts_pos_t ref_bp1_start = std::max(hts_pos_t(0), sv_start-extend);
     hts_pos_t ref_bp1_end = std::min(sv_start+extend, contig_len);
-    hts_pos_t ref_bp1_len = ref_bp1_end-ref_bp1_start;
     hts_pos_t ref_bp2_start = std::max(hts_pos_t(0), sv_end-extend);
     hts_pos_t ref_bp2_end = std::min(sv_end+extend, contig_len);
-    hts_pos_t ref_bp2_len = ref_bp2_end-ref_bp2_start;
+    std::vector<hts_pair_pos_t> ref_bp1_windows{{sv_start-extend, sv_start+extend}}, ref_bp2_windows{{sv_end-extend, sv_end+extend}};
+    if (inv->inv_start != inv->start) ref_bp1_windows.push_back({inv->inv_start+1-extend, inv->inv_start+1+extend});
+    if (inv->inv_end != inv->end) ref_bp2_windows.push_back({inv->inv_end+1-extend, inv->inv_end+1+extend});
+    auto ref_bp1 = build_ref_windows(ref_bp1_windows, contig_seq, contig_len, stats.read_len);
+    auto ref_bp2 = build_ref_windows(ref_bp2_windows, contig_seq, contig_len, stats.read_len);
+    const std::string& ref_bp1_seq = ref_bp1.seq;
+    const std::string& ref_bp2_seq = ref_bp2.seq;
 
     char* regions[4];
     std::stringstream ss;
@@ -316,30 +364,30 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
             aligner.Align(seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_score_only, &alt2_aln, 0);
 
             // align to REF
-            aligner.Align(seq.c_str(), contig_seq+ref_bp1_start, ref_bp1_len, filter_with_score_only, &ref1_aln, 0);
-            aligner.Align(seq.c_str(), contig_seq+ref_bp2_start, ref_bp2_len, filter_with_score_only, &ref2_aln, 0);
+            aligner.Align(seq.c_str(), ref_bp1_seq.c_str(), ref_bp1_seq.length(), filter_with_score_only, &ref1_aln, 0);
+            aligner.Align(seq.c_str(), ref_bp2_seq.c_str(), ref_bp2_seq.length(), filter_with_score_only, &ref2_aln, 0);
         } else if (sv_start-10 <= read->core.mpos && get_mate_endpos(read) <= sv_end+10) { // if mate is inside the inversion
 
             // if read and mate point towards each other, it means that if the inversion is true, they were RC together
             // therefore, we need to align it as it is to REF but reverse-complemented to ALT
             if (is_proper_pair(read, stats.min_is, stats.max_is)) {
                 if (bam_is_mrev(read)) {
-                    aligner.Align(seq.c_str(), contig_seq+ref_bp1_start, ref_bp1_len, filter_with_score_only, &ref1_aln, 0);
+                    aligner.Align(seq.c_str(), ref_bp1_seq.c_str(), ref_bp1_seq.length(), filter_with_score_only, &ref1_aln, 0);
                     rc(seq);
                     aligner.Align(seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_score_only, &alt2_aln, 0);
                     alt_is_rc = true;
                 } else {
-                    aligner.Align(seq.c_str(), contig_seq+ref_bp2_start, ref_bp2_len, filter_with_score_only, &ref2_aln, 0);
+                    aligner.Align(seq.c_str(), ref_bp2_seq.c_str(), ref_bp2_seq.length(), filter_with_score_only, &ref2_aln, 0);
                     rc(seq);
                     aligner.Align(seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_score_only, &alt1_aln, 0);
                     alt_is_rc = true;
                 }
             } else if (is_samestr(read)) { // if both point in the same direction, the mate was RC by itself, and we can align the read as it is
                 if (bam_is_rev(read)) {
-                    aligner.Align(seq.c_str(), contig_seq+ref_bp2_start, ref_bp2_len, filter_with_score_only, &ref2_aln, 0);
+                    aligner.Align(seq.c_str(), ref_bp2_seq.c_str(), ref_bp2_seq.length(), filter_with_score_only, &ref2_aln, 0);
                     aligner.Align(seq.c_str(), alt_bp2_seq, alt_bp2_len, filter_with_score_only, &alt2_aln, 0);
                 } else {
-                    aligner.Align(seq.c_str(), contig_seq+ref_bp1_start, ref_bp1_len, filter_with_score_only, &ref1_aln, 0);
+                    aligner.Align(seq.c_str(), ref_bp1_seq.c_str(), ref_bp1_seq.length(), filter_with_score_only, &ref1_aln, 0);
                     aligner.Align(seq.c_str(), alt_bp1_seq, alt_bp1_len, filter_with_score_only, &alt1_aln, 0);
                 }
             }
@@ -391,13 +439,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     bam_destroy1(read);
     hts_itr_destroy(iter);
 
-    char* ref_bp1_seq = new char[ref_bp1_len+1];
-    strncpy(ref_bp1_seq, contig_seq+ref_bp1_start, ref_bp1_len);
-    ref_bp1_seq[ref_bp1_len] = 0;
-    char* ref_bp2_seq = new char[ref_bp2_len+1];
-    strncpy(ref_bp2_seq, contig_seq+ref_bp2_start, ref_bp2_len);
-    ref_bp2_seq[ref_bp2_len] = 0;
-    sv_consensus_cache::session_t consensus_cache(inv, {{alt_bp1_seq, alt_bp1_better_reads, sv_consensus_cache::LEFT_ANCHOR, alt_bp1_better_reads_isrc}, {alt_bp2_seq, alt_bp2_better_reads, sv_consensus_cache::RIGHT_ANCHOR, alt_bp2_better_reads_isrc}, {ref_bp1_seq, ref_bp1_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp1_better_reads_isrc}, {ref_bp2_seq, ref_bp2_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp2_better_reads_isrc}});
+    sv_consensus_cache::session_t consensus_cache(inv, {{alt_bp1_seq, alt_bp1_better_reads, sv_consensus_cache::LEFT_ANCHOR, alt_bp1_better_reads_isrc}, {alt_bp2_seq, alt_bp2_better_reads, sv_consensus_cache::RIGHT_ANCHOR, alt_bp2_better_reads_isrc}, {ref_bp1_seq.c_str(), ref_bp1_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp1_better_reads_isrc}, {ref_bp2_seq.c_str(), ref_bp2_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp2_better_reads_isrc}});
     std::string alt_bp1_consensus_seq, alt_bp2_consensus_seq, ref_bp1_consensus_seq, ref_bp2_consensus_seq;
     std::string alt_bp1_untrimmed_consensus_seq, alt_bp2_untrimmed_consensus_seq;
     double alt_bp1_avg_score, alt_bp2_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
@@ -408,8 +450,8 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
 
     auto ref_bp1_is_consistent_read = consensus_cache.build(2, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_reads, ref_bp1_better_reads_isrc, ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, nullptr); });
 
-    inv->ref1_hp_len = longest_homopolymer_len(ref_bp1_seq, ref_bp1_len);
-    inv->ref2_hp_len = longest_homopolymer_len(ref_bp2_seq, ref_bp2_len);
+    inv->ref1_hp_len = ref_bp1.hp_len;
+    inv->ref2_hp_len = ref_bp2.hp_len;
     inv->alt1_hp_len = longest_homopolymer_len(alt_bp1_seq, alt_bp1_len);
     inv->alt2_hp_len = longest_homopolymer_len(alt_bp2_seq, alt_bp2_len);
     auto ref_bp2_is_consistent_read = consensus_cache.build(3, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_reads, ref_bp2_better_reads_isrc, ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, nullptr); });
@@ -547,8 +589,6 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
 
     delete[] alt_bp1_seq;
     delete[] alt_bp2_seq;
-    delete[] ref_bp1_seq;
-    delete[] ref_bp2_seq;
 
     set_bp_consensus_info(inv->sample_info.alt_bp1.reads_info, alt_bp1_better_reads, alt_bp1_is_consistent_read, alt_bp1_is_exact_read, alt_bp1_avg_score, alt_bp1_stddev_score);
     set_bp_consensus_info(inv->sample_info.alt_bp2.reads_info, alt_bp2_better_reads, alt_bp2_is_consistent_read, alt_bp2_is_exact_read, alt_bp2_avg_score, alt_bp2_stddev_score);
