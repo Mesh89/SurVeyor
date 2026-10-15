@@ -395,45 +395,10 @@ def deduplicate_vcf(vcf_fname, deduped_vcf_fname):
     else:
         compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s -t %d > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.threads, cmd_args.workdir)
     run_cmd(compare_cmd)
-
-    with open(cmd_args.workdir + "/compare.txt") as compare_file:
-        epr_vals, imprecise_vals = {}, {}
-        with pysam.VariantFile(vcf_fname) as vcf:
-            for record in vcf:
-                epr_vals[record.id] = record.samples[0].get('EPR', 0)
-                imprecise_vals[record.id] = 'IMPRECISE' in record.info
-
-        removed_ids = set()
-        for line in compare_file:
-            id1, id2 = line.strip().split()[:2]
-            if id1 >= id2 or id2 == "NONE": # each pair will be output twice, e.g. A B and B A. Let us process it once
-                continue
-
-            if imprecise_vals[id1] and not imprecise_vals[id2]:
-                removed_ids.add(id1)
-            elif imprecise_vals[id2] and not imprecise_vals[id1]:
-                removed_ids.add(id2)
-            elif epr_vals[id1] > epr_vals[id2]:
-                removed_ids.add(id2)
-            elif epr_vals[id2] > epr_vals[id1]:
-                removed_ids.add(id1)
-
-        vcf_deduped = deduped_vcf_fname
-        with pysam.VariantFile(vcf_fname) as vcf, pysam.VariantFile(vcf_deduped, 'w', header=vcf.header) as out_vcf:
-            for record in vcf:
-                if record.id not in removed_ids:
-                    out_vcf.write(record)
+    run_cmd(SURVEYOR_PATH + "/bin/dedup_vcf %s %s %s/compare.txt %d" % (vcf_fname, deduped_vcf_fname, cmd_args.workdir, cmd_args.threads))
 
 def separate_ins_to_dup(in_vcf_fname, ins_to_dup_vcf_fname, remaining_vcf_fname):
-    with pysam.VariantFile(in_vcf_fname) as in_vcf, \
-         pysam.VariantFile(ins_to_dup_vcf_fname, 'w', header=in_vcf.header) as ins_to_dup_vcf, \
-         pysam.VariantFile(remaining_vcf_fname, 'w', header=in_vcf.header) as remaining_vcf:
-        for record in in_vcf:
-            if "INS_TO_DUP" in record.info:
-                record.id = record.id[:-4] # remove the _DUP suffix
-                ins_to_dup_vcf.write(record)
-            else:
-                remaining_vcf.write(record)
+    run_cmd(SURVEYOR_PATH + "/bin/split_ins_to_dup %s %s %s %d" % (in_vcf_fname, ins_to_dup_vcf_fname, remaining_vcf_fname, cmd_args.threads))
 
 
 def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):

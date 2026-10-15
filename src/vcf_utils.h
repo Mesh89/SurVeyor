@@ -2,6 +2,8 @@
 #define VCF_UTILS_H
 
 #include <cstddef>
+#include <cstring>
+#include <stdexcept>
 #include <iostream>
 #include <chrono>
 #include <ctime>
@@ -11,6 +13,22 @@
 #include "htslib/hts.h"
 #include "types.h"
 #include "utils.h"
+
+// Match pysam's END normalization on every record it writes.
+inline void normalize_vcf_end(bcf_hdr_t* hdr, bcf1_t* record) {
+    bool symbolic = false;
+    for (int i = 1; i < record->n_allele; i++) {
+        const char* allele = record->d.allele[i];
+        size_t len = strlen(allele);
+        if (len >= 2 && allele[0] == '<' && allele[len-1] == '>') symbolic = true;
+    }
+    if (!symbolic && record->rlen == strlen(record->d.allele[0])) {
+        if (bcf_get_info(hdr, record, "END") != NULL && bcf_update_info_int32(hdr, record, "END", NULL, 0) != 0) throw std::runtime_error("Failed to remove INFO/END.");
+    } else {
+        int32_t end = record->pos + record->rlen;
+        if (bcf_update_info_int32(hdr, record, "END", &end, 1) != 0) throw std::runtime_error("Failed to update INFO/END.");
+    }
+}
 
 bcf_hrec_t* generate_contig_hrec() {
 	bcf_hrec_t* contig_hrec = (bcf_hrec_t*) malloc(sizeof(bcf_hrec_t));

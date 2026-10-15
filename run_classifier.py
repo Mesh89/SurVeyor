@@ -69,6 +69,15 @@ class Classifier:
                 force_missing_ref = int(gt >= 1 and svid_to_model_name[variant_id] in ("DUP_LARGE", "DUP_LARGE_NOEXL", "INS_TO_DUP_LARGE"))
                 predictions_file.write(struct.pack("<Qbbfffb", svid_to_record_key[variant_id], int(gt), force_missing_ref, float(svid_to_epr[variant_id]), float(svid_to_hopr.get(variant_id, np.nan)), float(svid_to_expr.get(variant_id, np.nan)), int(svid_to_erefa.get(variant_id, -1))))
 
+    @staticmethod
+    def predict_with_proba(classifier, data):
+        if classifier.objective == "binary:logistic" and classifier.n_classes_ == 2:
+            probas = classifier.predict_proba(data)
+            predictions = np.zeros(probas.shape[0], dtype=int)
+            predictions[probas[:, 1] > 0.5] = 1
+            return (predictions, probas)
+        return (classifier.predict(data), classifier.predict_proba(data))
+
     def run_classifier(in_vcf, out_vcf, stats_fname, model_dir, threads=1):
         cmd = "Classifier.run_classifier %s %s %s %s --threads %d" % (in_vcf, out_vcf, stats_fname, model_dir, threads)
         print("Executing:", cmd)
@@ -92,8 +101,7 @@ class Classifier:
             model_file = os.path.join(model_dir, "yes_or_no", model_name+'.ubj')
             classifier = xgb.XGBClassifier(n_jobs=threads)
             classifier.load_model(model_file)
-            predictions = classifier.predict(test_data[model_name])
-            eprs = classifier.predict_proba(test_data[model_name])
+            predictions, eprs = Classifier.predict_with_proba(classifier, test_data[model_name])
             for i in range(len(predictions)):
                 svid_to_gt[test_variant_ids[model_name][i]] = predictions[i]
                 svid_to_epr[test_variant_ids[model_name][i]] = eprs[i][1]
@@ -106,8 +114,7 @@ class Classifier:
             if len(positive_data) == 0:
                 continue
             classifier.load_model(os.path.join(model_dir, "gts", model_name+'.ubj'))
-            predictions = classifier.predict(positive_data)
-            hoprs = classifier.predict_proba(positive_data)
+            predictions, hoprs = Classifier.predict_with_proba(classifier, positive_data)
             for i in range(len(predictions)):
                 svid_to_gt[positive_variant_ids[i]] = 2 if predictions[i] == 1 else 1
                 svid_to_hopr[positive_variant_ids[i]] = hoprs[i][1]
