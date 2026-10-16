@@ -59,7 +59,7 @@ struct strand_base_scores_t {
         quals[reverse][index] += qual;
     }
 
-    char best_base(char current_base) const {
+    char best_base(char current_base, char preferred_base = '\0') const {
         double scores[4] = {};
         for (int strand = 0; strand < 2; strand++) {
             if (coverage[strand] == 0) continue;
@@ -73,6 +73,12 @@ struct strand_base_scores_t {
             if (scores[base] > best_score) {
                 best_score = scores[base];
                 best = "ACGT"[base];
+            }
+        }
+        int preferred_index = base_to_index(preferred_base);
+        if (preferred_index >= 0 && best_score > 0 && scores[preferred_index] == best_score) {
+            for (int base = 0; base < 4; base++) {
+                if (base != preferred_index && scores[base] == best_score) return "ACGT"[preferred_index];
             }
         }
         return best;

@@ -37,7 +37,7 @@ struct build_graph_cache_value_t {
 	std::vector<std::vector<edge_t> > l_adj_added, l_adj_rev_added;
 };
 
-void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}) {
+void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}, const std::string& preferred_bases = {}) {
 
 	std::vector<ungapped_aln_t> ungapped_alns;
 	for (std::string& read : reads) {
@@ -87,7 +87,7 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 
 	for (int i = 0; i < contig.length(); i++) {
 		if (!read_is_reverse.empty()) {
-			contig[i] = strand_scores[i].best_base(contig[i]);
+			contig[i] = strand_scores[i].best_base(contig[i], i < preferred_bases.length() ? preferred_bases[i] : '\0');
 			continue;
 		}
 		if (As[i] + Cs[i] + Gs[i] + Ts[i] == 0) continue;
@@ -138,6 +138,7 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 		for (int j = i+1; j < n; j++) {
 			std::string& s1 = read_seqs[i];
 			std::string& s2 = read_seqs[j];
+			if (s1 == s2) continue;
 
 			int max_overlap = std::min(s1.length(), s2.length())-1;
 			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, 1.0, min_overlap, max_overlap, max_mismatches);
@@ -216,6 +217,11 @@ std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_rea
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
 	if (rev_topological_order.size() < n) {
+		std::fill(out_edges.begin(), out_edges.end(), 0);
+		for (int i = 0; i < n; i++) {
+			l_adj[i].clear();
+			l_adj_rev[i].clear();
+		}
 		build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, 0, config.min_clip_len);
 
 		int min_overlap = config.min_clip_len;

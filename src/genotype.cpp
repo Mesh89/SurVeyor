@@ -854,12 +854,21 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
 
     for (std::string& consensus_seq : consensus_seqs) {
         if (consensus_seq.empty() || consensus_seq == "HAS_CYCLE") continue;
+        StripedSmithWaterman::Filter filter;
+        auto template_aln = align_fast(aligner, consensus_seq.c_str(), ref_seq.c_str(), ref_seq.length(), filter);
+        // Only the query-to-template mapping is needed, without an HP interval.
+        auto template_mapping = summarize_hp_alignment(normalized_cigar(template_aln), template_aln.ref_begin, consensus_seq, {0, 0}, '\0');
+        std::string preferred_bases(consensus_seq.length(), '\0');
+        for (int i = 0; i < consensus_seq.length(); i++) {
+            hts_pos_t pos = template_mapping.qpos_to_rpos[i];
+            if (pos >= 0 && base_to_index(ref_seq[pos]) >= 0) preferred_bases[i] = ref_seq[pos];
+        }
         std::vector<consensus_hp_region_t> hp_regions = find_consensus_hp_regions(consensus_seq);
         auto accept_read = [&](int i, const ungapped_aln_t& aln) {
             return passes_consensus_mismatch_filter(seqs[i], read_is_reverse[i], consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config);
         };
         // Use ARC's placement scoring and acceptance policy before accumulating base-quality votes.
-        correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals, accept_read, 0, read_is_reverse);
+        correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals, accept_read, 0, read_is_reverse, preferred_bases);
     }
 
     return consensus_seqs;
