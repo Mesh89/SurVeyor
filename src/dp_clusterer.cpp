@@ -2,6 +2,9 @@
 #include <memory>
 #include <string>
 #include <mutex>
+#include <map>
+#include <set>
+#include <tuple>
 #include <htslib/sam.h>
 #include <htslib/tbx.h>
 
@@ -13,6 +16,7 @@
 #include "utils.h"
 #include "vcf_utils.h"
 #include "clustering_utils.h"
+#include "coarse_coverage.h"
 
 std::string workdir;
 
@@ -230,6 +234,150 @@ void merge_sr_dp_dups(int id, int contig_id, std::string contig_name) {
 	duplications.erase(std::remove(duplications.begin(), duplications.end(), nullptr), duplications.end());
 }
 
+void refine_dp_dels(std::vector<std::shared_ptr<deletion_t>>& deletions, std::string contig_name, open_samFile_t& bam_file, const coarse_coverage_track_t& coverage) {
+	char* contig_seq = chr_seqs.get_seq(contig_name);
+	hts_pos_t contig_len = chr_seqs.get_len(contig_name);
+	uint64_t max_depth = stats.get_max_depth(contig_name);
+	int tid = bam_name2id(bam_file.header, contig_name.c_str());
+	if (tid < 0) return;
+	StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
+	StripedSmithWaterman::Filter filter(false, false, 0, 0);
+	for (auto& del : deletions) {
+		if (!del->imprecise) continue;
+		hts_pos_t la_start = del->left_anchor_aln->start, la_end = del->start;
+		hts_pos_t ra_start = del->end, ra_end = del->right_anchor_aln->end;
+		hts_pos_t left_bp_start = std::max(hts_pos_t(0), la_end-stats.read_len/2);
+		hts_pos_t left_bp_end = std::min(contig_len-1, la_start+stats.max_is);
+		hts_pos_t right_bp_start = std::max(hts_pos_t(0), ra_end-stats.max_is);
+		hts_pos_t right_bp_end = std::min(contig_len-1, ra_start+stats.read_len/2);
+		if (left_bp_start > left_bp_end || right_bp_start > right_bp_end) continue;
+
+		hts_pos_t lh_start = std::max(hts_pos_t(0), left_bp_start-stats.read_len);
+		hts_pos_t lh_end = std::min(contig_len, left_bp_end+stats.read_len+1);
+		hts_pos_t rh_start = std::max(hts_pos_t(0), right_bp_start-stats.read_len);
+		hts_pos_t rh_end = std::min(contig_len, right_bp_end+stats.read_len);
+		// A 1 kb window above 4×max_depth indicates a collapsed repeat.
+		if (coverage.exceeds(lh_start, lh_end, 4*max_depth) || coverage.exceeds(rh_start, rh_end, 4*max_depth)) continue;
+
+		// Brace-quote contig names so colons are not parsed as coordinates.
+		std::string left_region = "{" + contig_name + "}:" + std::to_string(left_bp_start+1) + "-" + std::to_string(left_bp_end+1);
+		std::string right_region = "{" + contig_name + "}:" + std::to_string(right_bp_start+2) + "-" + std::to_string(right_bp_end+2);
+		char* regions[2] = {&left_region[0], &right_region[0]};
+		hts_itr_t* iter = sam_itr_regarray(bam_file.idx, bam_file.header, regions, 2);
+		if (!iter) throw std::runtime_error("Failed to create refinement iterator for " + contig_name);
+		std::vector<std::shared_ptr<bam1_t>> left_reads, right_reads;
+		bam1_t* read = bam_init1();
+		int ret;
+		while ((ret = sam_itr_next(bam_file.file, iter, read)) >= 0) {
+			if (!is_primary(read) || is_unmapped(read) || read->core.qual < config.min_stable_mapq) continue;
+			int left_clip = get_left_clip_size(read), right_clip = get_right_clip_size(read);
+			// At the left breakpoint, require a right clip and no substantial left clip.
+			if (left_clip < config.min_clip_len && right_clip >= config.min_clip_len) {
+				hts_pos_t bp = bam_endpos(read)-1;
+				if (bp < left_bp_start || bp > left_bp_end) continue;
+				left_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+			}
+			// At the right breakpoint, require a left clip and no substantial right clip.
+			if (left_clip >= config.min_clip_len && right_clip < config.min_clip_len) {
+				hts_pos_t bp = read->core.pos-1;
+				if (bp < right_bp_start || bp > right_bp_end) continue;
+				right_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+			}
+		}
+		bam_destroy1(read);
+		hts_itr_destroy(iter);
+		if (ret < -1) throw std::runtime_error("Failed to read refinement BAM for " + contig_name);
+
+		struct junction_read_t {
+			std::string name;
+			std::shared_ptr<deletion_t> del;
+		};
+		using junction_reads_t = std::vector<junction_read_t>;
+		std::map<std::tuple<hts_pos_t, hts_pos_t, std::string>, junction_reads_t> junctions;
+		for (const auto* reads : {&left_reads, &right_reads}) {
+			bool left_side = reads == &left_reads;
+			for (const auto& read : *reads) {
+				std::string seq = get_sequence(read.get());
+				std::string qual = get_qual_ascii(read.get());
+
+				// find best alignment score for the split read against the left and right haplotype sequences
+				StripedSmithWaterman::Alignment lh_aln, rh_aln;
+				aligner.Align(seq.c_str(), contig_seq+lh_start, lh_end-lh_start, filter, &lh_aln, 0);
+				aligner.Align(seq.c_str(), contig_seq+rh_start, rh_end-rh_start, filter, &rh_aln, 0);
+				int unsplit_score = std::max(lh_aln.sw_score, rh_aln.sw_score);
+
+				// find the best variant supported by the split read
+				hts_pair_pos_t split_lh = {lh_start, lh_end}, split_rh = {rh_start, rh_end};
+				if (left_side) split_lh = {read->core.pos, bam_endpos(read.get())};
+				else split_rh = {read->core.pos, bam_endpos(read.get())};
+				std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, seq, qual, split_lh.beg, split_lh.end, split_rh.beg, split_rh.end, 
+					aligner, 0, 0, stats, config, contig_len, stats.max_is, true);
+				if (svs.empty() || svs[0]->svtype() != "DEL") continue;
+				if (svs[0]->left_anchor_aln->best_score < config.min_clip_len || svs[0]->right_anchor_aln->best_score < config.min_clip_len) continue;
+				int split_score = svs[0]->left_anchor_aln->best_score + svs[0]->right_anchor_aln->best_score;
+				if (split_score - unsplit_score < config.min_clip_len) continue;
+
+				// left-align
+				auto candidate = std::make_shared<deletion_t>(*std::static_pointer_cast<deletion_t>(svs[0]));
+				// Temporarily writes AUX SNP bases into contig_seq; safe because refinement runs one task per contig after all other pools finish.
+				haplotype_normalization::left_align_del(candidate, contig_seq);
+				if (candidate->start < left_bp_start || candidate->start > left_bp_end) continue;
+				if (candidate->end < right_bp_start || candidate->end > right_bp_end) continue;
+				if (candidate->svsize() < config.min_sv_size) continue;
+
+				auto junction_key = std::make_tuple(candidate->start, candidate->end, candidate->ins_seq);
+				auto unshifted_del = std::static_pointer_cast<deletion_t>(svs[0]);
+				junctions[junction_key].push_back({bam_get_qname(read.get()), unshifted_del});
+			}
+		}
+
+		// A junction is resolvable if exactly one junction supports it
+		int supported_junctions = 0;
+		const junction_reads_t* supported_junction = nullptr;
+		for (const auto& junction : junctions) {
+			std::set<std::string> read_names;
+			for (const auto& support : junction.second) read_names.insert(support.name);
+			if (read_names.size() >= 2) {
+				supported_junctions++;
+				supported_junction = &junction.second;
+			}
+		}
+		if (supported_junctions != 1) continue;
+
+		const auto& representative = supported_junction->front().del;
+		auto refined = std::make_shared<deletion_t>(*del);
+		refined->start = representative->start;
+		refined->end = representative->end;
+		refined->ins_seq = representative->ins_seq;
+		refined->left_anchor_aln = representative->left_anchor_aln;
+		refined->right_anchor_aln = representative->right_anchor_aln;
+		refined->mh_len = representative->mh_len;
+		refined->junction_remap_ref_beg = representative->junction_remap_ref_beg;
+		refined->junction_remap_ref_end = representative->junction_remap_ref_end;
+		refined->aux_snps.clear();
+		refined->aux_indels.clear();
+		if (refined->original_range.empty()) refined->original_range = std::to_string(del->start) + "-" + std::to_string(del->end);
+		refined->imprecise = false;
+		refined->remapped = true;
+		del = refined;
+	}
+}
+
+void refine_dp_dels_task(int id, int contig_id, std::string contig_name) {
+	auto it = deletions_by_chr.find(contig_name);
+	if (it == deletions_by_chr.end()) return;
+	auto& deletions = it->second;
+	if (std::none_of(deletions.begin(), deletions.end(), [](const std::shared_ptr<deletion_t>& del) { return del->imprecise; })) return;
+
+	std::string sr_bam_fname = workdir + "/workspace/sr/" + std::to_string(contig_id) + ".bam";
+	if (!file_exists(sr_bam_fname)) return;
+	open_samFile_t bam_file(sr_bam_fname);
+	std::string coverage_fname = workdir + "/workspace/coverage/" + std::to_string(contig_id) + ".bin";
+	coarse_coverage_track_t coverage = read_coarse_coverage(coverage_fname, chr_seqs.get_len(contig_name), config.coverage_window_size);
+	if (coverage.maxima.empty()) throw std::runtime_error("Missing coarse coverage track " + coverage_fname);
+	refine_dp_dels(deletions, contig_name, bam_file, coverage);
+}
+
 int main(int argc, char* argv[]) {
 
     std::string bam_fname = argv[1];
@@ -291,6 +439,18 @@ int main(int argc, char* argv[]) {
 		futures.push_back(std::move(future));
 	}
 	thread_pool2.stop(true);
+	for (int i = 0; i < futures.size(); i++) {
+		futures[i].get();
+	}
+	futures.clear();
+
+	ctpl::thread_pool thread_pool3(config.threads);
+	for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
+		std::string contig_name = contig_map.get_name(contig_id);
+		std::future<void> future = thread_pool3.push(refine_dp_dels_task, contig_id, contig_name);
+		futures.push_back(std::move(future));
+	}
+	thread_pool3.stop(true);
 	for (int i = 0; i < futures.size(); i++) {
 		futures[i].get();
 	}

@@ -36,108 +36,6 @@ void simplify_and_realign_svs(int id, std::vector<std::shared_ptr<sv_t>>& svs, i
 	}
 }
 
-void left_align_del(std::shared_ptr<sv_t> sv) {
-
-	if (!sv->ins_seq.empty()) return;
-
-	char* chr_seq = chr_seqs.get_seq(sv->chr);
-
-	for (snp_t& snp : sv->aux_snps) {
-		std::swap(chr_seq[snp.pos], snp.alt_base);
-	}
-
-	hts_pos_t limit = 0; // we cannot left-align past this position
-	for (std::shared_ptr<sv_t> indel : sv->aux_indels) {
-		if (indel->end <= sv->start) {
-			limit = std::max(limit, indel->end);
-		}
-	}
-
-	while (sv->start > limit && toupper(chr_seq[sv->start]) == toupper(chr_seq[sv->end])) {
-		sv->start--;
-		sv->end--;
-	}
-
-	for (snp_t& snp : sv->aux_snps) {
-		std::swap(chr_seq[snp.pos], snp.alt_base);
-	}
-
-	// delete snps that fall within the deleted region
-	sv->aux_snps.erase(std::remove_if(sv->aux_snps.begin(), sv->aux_snps.end(),
-		[sv](const snp_t& snp) { return snp.pos > sv->start && snp.pos <= sv->end; }), sv->aux_snps.end());
-}
-
-void left_align_dup(std::shared_ptr<sv_t> sv) {
-
-	if (!sv->ins_seq.empty()) return;
-	if (!sv->aux_indels.empty()) return; // this may be complicated, let us skip for now
-
-	char* chr_seq = chr_seqs.get_seq(sv->chr);
-
-	hts_pos_t limit = 0;
-	for (snp_t& snp : sv->aux_snps) {
-		if (snp.pos <= sv->start) {
-			limit = snp.pos; // note that snps are sorted by position
-		}
-	}
-
-	for (snp_t& snp : sv->aux_snps) {
-		std::swap(chr_seq[snp.pos], snp.alt_base);
-	}
-
-	while (sv->start > limit && toupper(chr_seq[sv->start]) == toupper(chr_seq[sv->end])) {
-		sv->start--;
-		sv->end--;
-	}
-
-	for (snp_t& snp : sv->aux_snps) {
-		std::swap(chr_seq[snp.pos], snp.alt_base);
-	}
-}
-
-void left_align_ins(std::shared_ptr<sv_t> sv) {
-
-	if (sv->ins_seq.empty()) return;
-	if (!sv->aux_indels.empty()) return; // this may be complicated, let us skip for now
-
-	char* chr_seq = chr_seqs.get_seq(sv->chr);
-
-	for (snp_t& snp : sv->aux_snps) {
-		std::swap(chr_seq[snp.pos], snp.alt_base);
-	}
-
-	if (sv->start == sv->end) {
-		while (sv->start > 0 && toupper(chr_seq[sv->start]) == toupper(sv->ins_seq[sv->ins_seq.length()-1])) {
-			for (int i = sv->ins_seq.length()-1; i >= 1; i--) {
-				sv->ins_seq[i] = sv->ins_seq[i-1];
-			}
-			sv->ins_seq[0] = toupper(chr_seq[sv->start]);
-			sv->start--;
-			sv->end--;
-		}
-	}
-
-	for (snp_t& snp : sv->aux_snps) {
-		std::swap(chr_seq[snp.pos], snp.alt_base);
-	}
-
-	// delete snps that fall within the deleted region
-	sv->aux_snps.erase(std::remove_if(sv->aux_snps.begin(), sv->aux_snps.end(),
-		[sv](const snp_t& snp) { return snp.pos > sv->start && snp.pos <= sv->end; }), sv->aux_snps.end());
-}
-
-
-void left_align(std::shared_ptr<sv_t> sv) {
-	std::string svtype = sv->svtype();
-	if (svtype == "DEL") {
-		left_align_del(sv);
-	} else if (svtype == "DUP") {
-		left_align_dup(sv);
-	} else if (svtype == "INS") {
-		left_align_ins(sv);
-	}
-}
-
 void canonicalize_aux(std::shared_ptr<sv_t> sv) {
 	std::sort(sv->aux_snps.begin(), sv->aux_snps.end(),
 		[](const snp_t& a, const snp_t& b) {
@@ -204,7 +102,7 @@ int main(int argc, char* argv[]) {
 		if ((sv->svtype() == "DEL" || sv->svtype() == "INS") && max_indel_size(sv) < min_indel_size) continue;
 
 		// TODO: Handle left alignment moving variants outside JUNCTION_REMAP_REF_RANGE.
-		left_align(sv);
+		haplotype_normalization::left_align(sv, chr_seqs.get_seq(sv->chr));
 		canonicalize_aux(sv);
 		svs.push_back(sv);
 	}

@@ -609,7 +609,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_name, char* contig_seq, std::string junction_seq, std::string junction_qual,
 		hts_pos_t ref_remap_lh_start, hts_pos_t ref_remap_lh_end, hts_pos_t ref_remap_rh_start, hts_pos_t ref_remap_rh_end, 
 		StripedSmithWaterman::Aligner& aligner, int lowq_junction_prefix, int lowq_junction_suffix,
-	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000) {
+	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000, bool split_only = false) {
 		// do not find aux SNPs in low-quality regions of the junction sequence
 
 	const int MAX_REF_REMAP_LEN = 100000;
@@ -670,7 +670,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
     }
 
 	// Extract full alignments independently so their AUX contexts are not shared with other candidates.
-	bool remap_windows_overlap = overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) > 0;
+	bool remap_windows_overlap = !split_only && overlap(ref_remap_lh_start, ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end) > 0;
 	StripedSmithWaterman::Alignment full_aln;
 	std::vector<std::shared_ptr<sv_t>> full_svs;
 	auto remap_full_junction = [&](hts_pos_t remap_start, hts_pos_t remap_end) {
@@ -685,7 +685,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	};
 	if (remap_windows_overlap) {
 		remap_full_junction(std::min(ref_remap_lh_start, ref_remap_rh_start), std::max(ref_remap_lh_end, ref_remap_rh_end));
-	} else {
+	} else if (!split_only) {
 		remap_full_junction(ref_remap_lh_start, ref_remap_lh_end);
 		remap_full_junction(ref_remap_rh_start, ref_remap_rh_end);
 	}
