@@ -204,11 +204,6 @@ void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* conse
 	mutex_per_chr[contig_id].unlock();
 }
 
-void remove_marked_consensuses(std::vector<std::shared_ptr<consensus_t>>& consensuses, std::vector<bool>& used) {
-	for (int i = 0; i < consensuses.size(); i++) if (used[i]) consensuses[i] = nullptr;
-	consensuses.erase(std::remove(consensuses.begin(), consensuses.end(), nullptr), consensuses.end());
-}
-
 auto min_overlap_f = [](consensus_t* c1, consensus_t* c2) {
 	return c1->is_hsr && c2->is_hsr ? 50 : 2*config.min_clip_len;
 };
@@ -409,7 +404,6 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 			});
 
 	std::vector<std::shared_ptr<breakend_t>> bnds_lf, bnds_rf;
-	std::vector<bool> used_consensus_rc(rc_consensuses.size(), false), used_consensus_lc(lc_consensuses.size(), false);
 	std::unordered_set<cluster_t*> used_ss_clusters;
 
 	const int block_size = 50;
@@ -431,15 +425,6 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 
 		local_svs.insert(local_svs.end(), svs_by_pair[i].begin(), svs_by_pair[i].end());
 
-		auto mark_consensus_used = [&](bool is_lc, int consensus_idx) {
-			std::shared_ptr<consensus_t> consensus = is_lc ? lc_consensuses[consensus_idx] : rc_consensuses[consensus_idx];
-			// HSR consensuses are always also evaluated by one-sided discovery.
-			if (consensus->is_hsr) return;
-			if (is_lc) used_consensus_lc[consensus_idx] = true;
-			else used_consensus_rc[consensus_idx] = true;
-		};
-		mark_consensus_used(ps.c1_lc, ps.c1_idx);
-		mark_consensus_used(ps.c2_lc, ps.c2_idx);
 		if (ps.dp_cluster != nullptr) used_ss_clusters.insert(ps.dp_cluster.get());
 	}
 
@@ -645,12 +630,9 @@ void find_indels_from_rc_lc_pairs(std::string contig_name,
 		}
 	}
 
+	// Keep every original SR/HSR consensus for standalone discovery, excluding temporary DP consensuses.
 	rc_consensuses.resize(initial_rc_consensus_size);
 	lc_consensuses.resize(initial_lc_consensus_size);
-	used_consensus_rc.resize(initial_rc_consensus_size);
-	used_consensus_lc.resize(initial_lc_consensus_size);
-	remove_marked_consensuses(rc_consensuses, used_consensus_rc);
-	remove_marked_consensuses(lc_consensuses, used_consensus_lc);
 
 	mtx.lock();
 	std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
@@ -705,7 +687,7 @@ void find_indels_from_paired_consensuses(int contig_id, std::string contig_name,
 	/* == Find indels from paired consensuses == */
 	find_indels_from_rc_lc_pairs(contig_name, rc_consensuses, lc_consensuses, thread_pool);
 
-    /* == Deal with unpaired consensuses == */
+	/* == Queue each original consensus once for standalone extension and remapping == */
 	mtx.lock();
 	std::vector<std::shared_ptr<consensus_t>>& unpaired_consensuses = unpaired_consensuses_by_chr[contig_name];
 	unpaired_consensuses.insert(unpaired_consensuses.end(), rc_consensuses.begin(), rc_consensuses.end());
