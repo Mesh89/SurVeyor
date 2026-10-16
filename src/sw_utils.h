@@ -880,6 +880,87 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
     return svs;
 }
 
+// Require SR consensus, high MAPQ, and clip len >= read_len/3
+bool is_eligible_for_lone_consensus_deletion(const consensus_t& consensus, const char* contig_seq, hts_pos_t contig_len, const stats_t& stats, const config_t& config) {
+	if (consensus.is_hsr || consensus.max_mapq < config.high_confidence_mapq) return false;
+	if (consensus.other_bp_lower_boundary == consensus_t::LOWER_BOUNDARY_NON_CALCULATED ||
+		consensus.other_bp_upper_boundary == consensus_t::UPPER_BOUNDARY_NON_CALCULATED ||
+		consensus.other_bp_lower_boundary >= consensus.other_bp_upper_boundary) return false;
+	if (consensus.clip_len < (stats.read_len+2)/3) return false;
+	if (!is_genomic_string(consensus.clip_sequence())) return false;
+	return true;
+}
+
+hts_pos_t find_unique_clip_placement(consensus_t& consensus, const char* contig_seq, hts_pos_t contig_len) {
+	const int MAX_SEARCH_LEN = 10000;
+	// Window 0 is beside the mate boundary; window 1 is beside the known breakpoint.
+	hts_pos_t search_start[2], search_end[2];
+	if (consensus.left_clipped) {
+		search_start[0] = std::max(hts_pos_t(0), consensus.other_bp_lower_boundary-consensus.clip_len);
+		search_end[0] = std::min(consensus.breakpoint, search_start[0]+MAX_SEARCH_LEN);
+		search_start[1] = std::max(search_start[0], consensus.breakpoint-MAX_SEARCH_LEN);
+		search_end[1] = consensus.breakpoint;
+	} else {
+		search_end[0] = std::min(contig_len, consensus.other_bp_upper_boundary+consensus.clip_len);
+		search_start[0] = std::max(consensus.breakpoint, search_end[0]-MAX_SEARCH_LEN);
+		search_start[1] = consensus.breakpoint;
+		search_end[1] = std::min(search_end[0], consensus.breakpoint+MAX_SEARCH_LEN);
+	}
+	// Merge overlapping or touching windows into one continuous search.
+	if (std::max(search_start[0], search_start[1]) <= std::min(search_end[0], search_end[1])) {
+		search_start[0] = std::min(search_start[0], search_start[1]);
+		search_end[0] = std::max(search_end[0], search_end[1]);
+		search_start[1] = search_end[1] = 0;
+	}
+	std::string clip = consensus.clip_sequence();
+	to_uppercase(&clip[0]);
+	// Require one perfect placement across the remaining windows.
+	hts_pos_t placement = -1;
+	for (int i = 0; i < 2; i++) {
+		if (search_end[i]-search_start[i] < consensus.clip_len) continue;
+		const char* end = contig_seq+search_end[i];
+		const char* pos = std::search(contig_seq+search_start[i], end, clip.begin(), clip.end());
+		if (pos == end) continue;
+		const char* next = std::search(pos+1, end, clip.begin(), clip.end());
+		if (next != end) return -1;
+		if (placement >= 0) return -1;
+		placement = pos-contig_seq;
+	}
+	return placement;
+}
+
+std::shared_ptr<sv_t> detect_lone_consensus_deletion(std::string& contig_name, char* contig_seq, hts_pos_t contig_len, consensus_t& consensus, stats_t& stats, config_t& config) {
+	if (!is_eligible_for_lone_consensus_deletion(consensus, contig_seq, contig_len, stats, config)) return nullptr;
+	hts_pos_t pos = find_unique_clip_placement(consensus, contig_seq, contig_len);
+	if (pos < 0) return nullptr;
+	// Derive the deletion interval and require the inferred breakpoint beyond the mate bounds.
+	hts_pos_t start, end;
+	int mapped_len = consensus.sequence.length()-consensus.clip_len, left_len, right_len;
+	if (consensus.left_clipped) {
+		start = pos+consensus.clip_len;
+		end = consensus.breakpoint;
+		if (start <= consensus.other_bp_upper_boundary) return nullptr;
+		left_len = consensus.clip_len;
+		right_len = mapped_len;
+	} else {
+		start = consensus.breakpoint;
+		end = pos;
+		if (end >= consensus.other_bp_lower_boundary) return nullptr;
+		left_len = mapped_len;
+		right_len = consensus.clip_len;
+	}
+	if (end-start < config.min_sv_size) return nullptr;
+	// Convert [start,end) to the anchored SV coordinates.
+	auto left_anchor = std::make_shared<sv_t::anchor_aln_t>(start-left_len, start-1, left_len, left_len);
+	auto right_anchor = std::make_shared<sv_t::anchor_aln_t>(end, end+right_len-1, right_len, right_len);
+	auto sv = std::make_shared<deletion_t>(contig_name, start-1, end-1, "", nullptr, nullptr, left_anchor, right_anchor);
+	// Limit the remap annotation to the high-quality portions of both anchors.
+	if (consensus.lowq_prefix < left_len && consensus.lowq_suffix < right_len) {
+		set_junction_remap_ref_range(sv, start-left_len+consensus.lowq_prefix, end+right_len-consensus.lowq_suffix, stats, config);
+	}
+	return sv;
+}
+
 std::vector<std::shared_ptr<sv_t>> detect_svs(std::string& contig_name, char* contig_seq, hts_pos_t contig_len, 
 					std::shared_ptr<consensus_t> rc_consensus, std::shared_ptr<consensus_t> lc_consensus,
 					StripedSmithWaterman::Aligner& aligner, int min_overlap,
@@ -995,6 +1076,15 @@ std::vector<std::shared_ptr<sv_t>> detect_svs(std::string& contig_name, char* co
 	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, consensus_junction_seq, consensus_junction_qual, ref_remap_lh_start, 
 		ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end, aligner, lowq_junction_prefix, lowq_junction_suffix,
 		stats, config, contig_len, stats.max_is);
+
+	// This is meant to rescue an edge case where two deletions are separated by a small island.
+	// The clip is supposed to align to the island, but the mate window may contradict that, due to mates aligning past both deletions.
+	if (svs.empty() && (rc_consensus == nullptr || lc_consensus == nullptr)) {
+		auto consensus = rc_consensus ? rc_consensus : lc_consensus;
+		auto sv = detect_lone_consensus_deletion(contig_name, contig_seq, contig_len, *consensus, stats, config);
+		if (sv != nullptr) svs.push_back(sv);
+	}
+
 	for (const auto& sv : svs) {
 		sv->rc_consensus = rc_consensus;
 		sv->lc_consensus = lc_consensus;

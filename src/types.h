@@ -163,7 +163,7 @@ struct consensus_t {
         }
     }
 
-    std::string clip_sequence() {
+    std::string clip_sequence() const {
         if (left_clipped) {
             return sequence.substr(0, clip_len);
         } else {
