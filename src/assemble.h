@@ -422,37 +422,6 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 
 		if (!svs1.empty() && chosen_ins == svs1[0]) full_assembled_seq = assembled_sequence + "-" + assembled_sequences[1];
 		else if (!svs2.empty() && chosen_ins == svs2[0]) full_assembled_seq = assembled_sequences[1] + "-" + assembled_sequence;
-	} else if (assembled_sequences.size() > 1) { // can identify an insertion, but check if we can get a better one as incomplete assembly
-		chosen_ins = svs[0];
-		full_assembled_seq = assembled_sequence;
-
-		double laa_score_ratio = double(chosen_ins->left_anchor_aln->best_score)/chosen_ins->left_anchor_aln->seq_len;
-		double raa_score_ratio = double(chosen_ins->right_anchor_aln->best_score)/chosen_ins->right_anchor_aln->seq_len;
-		if (laa_score_ratio >= raa_score_ratio) {
-			std::vector<std::shared_ptr<sv_t>> new_svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence + "-" + assembled_sequences[1], std::string(assembled_sequence.length() + 1 + assembled_sequences[1].length(), 'I'),
-				remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
-			if (!new_svs.empty() && new_svs[0]->svtype() == "INS") {
-				std::shared_ptr<sv_t> new_ins = new_svs[0];
-				int sep = new_ins->ins_seq.find("-");
-				if (sep != std::string::npos && sep >= config.min_clip_len && new_ins->ins_seq.length()-sep-1 >= config.min_clip_len &&
-					raa_score_ratio < double(new_ins->right_anchor_aln->best_score)/new_ins->right_anchor_aln->seq_len && new_ins->svsize() >= config.min_assembled_ins_size) {
-						chosen_ins = new_ins;
-						full_assembled_seq = assembled_sequence + "-" + assembled_sequences[1];
-					}
-			}
-		} else {
-			std::vector<std::shared_ptr<sv_t>> new_svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1] + "-" + assembled_sequence, std::string(assembled_sequences[1].length() + 1 + assembled_sequence.length(), 'I'),
-				remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
-			if (!new_svs.empty() && new_svs[0]->svtype() == "INS") {
-				std::shared_ptr<sv_t> new_ins = new_svs[0];
-				int sep = new_ins->ins_seq.find("-");
-				if (sep != std::string::npos && sep >= config.min_clip_len && new_ins->ins_seq.length()-sep-1 >= config.min_clip_len &&
-					laa_score_ratio < double(new_ins->left_anchor_aln->best_score)/new_ins->left_anchor_aln->seq_len && new_ins->svsize() >= config.min_assembled_ins_size) {
-						chosen_ins = new_ins;
-						full_assembled_seq = assembled_sequences[1] + "-" + assembled_sequence;
-					}
-			}
-		}
 	} else {
 		chosen_ins = svs[0];
 		full_assembled_seq = assembled_sequence;
