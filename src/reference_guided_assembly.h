@@ -449,22 +449,27 @@ std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t
 		}
 	
 		std::vector<std::pair<std::string, StripedSmithWaterman::Alignment> > contigs_sorted_by_pos;
+		StripedSmithWaterman::Filter filter;
 		for (int i = 0; i < consensus_contigs.size(); i++) {
-			contigs_sorted_by_pos.push_back({consensus_contigs[i], consensus_contigs_alns[i]});
+			StripedSmithWaterman::Alignment aln;
+			aligner.Align(consensus_contigs[i].c_str(), full_junction_sequence.c_str(), full_junction_sequence.length(), filter, &aln, 0);
+			contigs_sorted_by_pos.push_back({consensus_contigs[i], aln});
 		}
 		std::sort(contigs_sorted_by_pos.begin(), contigs_sorted_by_pos.end(),
 				[](std::pair<std::string, StripedSmithWaterman::Alignment>& p1, std::pair<std::string, StripedSmithWaterman::Alignment>& p2) {
-			return p1.second.ref_begin < p2.second.ref_begin;
+			return p1.second.ref_begin-p1.second.query_begin < p2.second.ref_begin-p2.second.query_begin;
 		});
 	
 		// complement holes in contigs with reference
-		corrected_junction_seq = full_junction_sequence.substr(0, contigs_sorted_by_pos[0].second.ref_begin);
-		corrected_junction_seq += contigs_sorted_by_pos[0].first;
-		for (int i = 1; i < contigs_sorted_by_pos.size(); i++) {
-			corrected_junction_seq += full_junction_sequence.substr(contigs_sorted_by_pos[i-1].second.ref_end+1, contigs_sorted_by_pos[i].second.ref_begin-contigs_sorted_by_pos[i-1].second.ref_end-1);
-			corrected_junction_seq += contigs_sorted_by_pos[i].first;
+		int cur = 0;
+		for (auto& p : contigs_sorted_by_pos) {
+			int span_begin = std::max(0, p.second.ref_begin-p.second.query_begin);
+			int span_end = std::min(int(full_junction_sequence.length())-1, p.second.ref_end+int(p.first.length())-1-p.second.query_end);
+			if (span_begin > cur) corrected_junction_seq += full_junction_sequence.substr(cur, span_begin-cur);
+			corrected_junction_seq += p.first;
+			cur = std::max(cur, span_end+1);
 		}
-		corrected_junction_seq += full_junction_sequence.substr(contigs_sorted_by_pos[contigs_sorted_by_pos.size()-1].second.ref_end+1);
+		corrected_junction_seq += full_junction_sequence.substr(cur);
 	}
 
 	StripedSmithWaterman::Alignment aln;
