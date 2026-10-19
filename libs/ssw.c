@@ -1183,3 +1183,6 @@ int32_t mark_mismatch (int32_t ref_begin1,
 	(*cigar) = new_cigar;
 	return mismatch_length;
 }
+
+#include "ssw_semiglobal_impl.h"
+#include "ssw_clip_impl.h"

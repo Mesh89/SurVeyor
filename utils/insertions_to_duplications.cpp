@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
                 bool aln_alter_lc = get_left_clip_size(aln_after) >= config.min_clip_len;
                 bool aln_before_rc = get_right_clip_size(aln_before) >= config.min_clip_len;
                 int aln_len = 0;
-                if (!aln_alter_lc) aln_len += aln_after.query_end+aln_after.query_begin+1;
+                if (!aln_alter_lc) aln_len += aln_after.query_end-aln_after.query_begin+1;
                 if (!aln_before_rc) aln_len += aln_before.query_end-aln_before.query_begin+1;
                 if (aln_len >= ins_seq.length()) {
                     auto anchor_aln = std::make_shared<sv_t::anchor_aln_t>(sv->start-ins_seq.length()+best_i, sv->start+best_i, ins_seq.length(), 0);

@@ -820,8 +820,8 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
             ref_allele_hp_range, has_no_left_indel, has_no_right_indel, 10, config.max_seq_error);
 
         if (hp_read_info.tail_3p_len < config.min_clip_len || hp_read_info.tail_5p_len < config.min_clip_len) {
-            // Even if we are discarding this reads because the tails are too short, we still want to prevent it from being used as evidence for non-HP indels
-            // when they are aligned better to one of the HP indels
+            // Skip reads with short tails during HP genotyping.
+            // Their ALT association checks are handled by write_aligned_hp_indels_group_read_evidence().
             continue;
         }
         if (assigned_outside_group) {

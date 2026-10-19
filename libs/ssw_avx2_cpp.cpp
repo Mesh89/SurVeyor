@@ -59,9 +59,10 @@ void BuildSwScoreMatrix(const uint8_t& match_score,
 
 }
 
-void ConvertAlignment(const s_align& s_al,
+template<typename CAlignment, typename AlignmentType>
+void ConvertAlignment(const CAlignment& s_al,
                       const int& query_len,
-                      StripedSmithWatermanAVX2::Alignment* al) {
+                      AlignmentType* al) {
   al->sw_score           = s_al.score1;
   al->sw_score_next_best = s_al.score2;
   if (s_al.prefix_scores) al->prefix_scores.assign(s_al.prefix_scores, s_al.prefix_scores + query_len);
@@ -133,8 +134,9 @@ void CleanPreviousMOperator(
 //         differentiate matches (M) and mismatches(X).
 // @Return:
 //     The number of mismatches.
+template<typename AlignmentType>
 int CalculateNumberMismatch(
-    StripedSmithWatermanAVX2::Alignment* al,
+    AlignmentType* al,
     int8_t const *ref,
     int8_t const *query,
     const int& query_len) {
@@ -219,7 +221,8 @@ int CalculateNumberMismatch(
   return mismatch_length;
 }
 
-void SetFlag(const StripedSmithWatermanAVX2::Filter& filter, uint8_t* flag) {
+template<typename FilterType>
+void SetFlag(const FilterType& filter, uint8_t* flag) {
   if (filter.report_begin_position) *flag |= 0x08;
   if (filter.report_cigar) *flag |= 0x0f;
   if (filter.report_prefix_scores) *flag |= SSW_REPORT_PREFIX_SCORES;
@@ -442,6 +445,219 @@ bool Aligner::Align(const char* query, const char* ref, const int& ref_len,
   delete [] translated_query;
   delete [] translated_ref;
   align_destroy(s_al);
+  init_destroy(profile);
+
+  cache.store(std::move(cache_key), *alignment);
+
+  return true;
+}
+
+bool Aligner::AlignWithClipPenalty(const char* query, const uint8_t clip_penalty, const Filter& filter,
+                    Alignment* alignment, const int32_t maskLen) const
+{
+  if (!translation_matrix_) return false;
+  if (reference_length_ == 0) return false;
+
+  int query_len = strlen(query);
+  if (query_len == 0) return false;
+  int8_t* translated_query = new int8_t[query_len];
+  TranslateBase(query, query_len, translated_query);
+
+  const int8_t score_size = 2;
+  s_profile* profile = ssw_init(translated_query, query_len, score_matrix_,
+                                score_matrix_size_, score_size);
+
+  uint8_t flag = 0;
+  SetFlag(filter, &flag);
+  s_align* s_al = ssw_align_clip(profile, translated_reference_, reference_length_,
+                                 static_cast<int>(gap_opening_penalty_),
+				 static_cast<int>(gap_extending_penalty_),
+				 clip_penalty, flag, filter.score_filter, filter.distance_filter, maskLen);
+
+  alignment->Clear();
+  if (!s_al) { delete [] translated_query; init_destroy(profile); return false; }
+  ConvertAlignment(*s_al, query_len, alignment);
+  alignment->mismatches = alignment->ref_begin < 0 ? 0 : CalculateNumberMismatch(&*alignment, translated_reference_, translated_query, query_len);
+
+
+  // Free memory
+  delete [] translated_query;
+  align_destroy(s_al);
+  init_destroy(profile);
+
+  return true;
+}
+
+
+bool Aligner::AlignWithClipPenalty(const char* query, const char* ref, const int& ref_len, const uint8_t clip_penalty,
+                    const Filter& filter, Alignment* alignment, const int32_t maskLen) const
+{
+  if (!translation_matrix_) return false;
+  if (ref_len <= 0) return false;
+
+  int query_len = strlen(query);
+  if (query_len == 0) return false;
+
+  surveyor_cache::key_builder_t key_builder;
+  key_builder.add_bytes(query, query_len);
+  key_builder.add(ref_len);
+  key_builder.add_bytes(ref, ref_len > 0 ? ref_len : 0);
+  key_builder.add(filter.report_begin_position);
+  key_builder.add(filter.report_cigar);
+  key_builder.add(filter.report_prefix_scores);
+  key_builder.add(filter.score_filter);
+  key_builder.add(filter.distance_filter);
+  key_builder.add(maskLen);
+  key_builder.add(clip_penalty);
+  key_builder.add(gap_opening_penalty_);
+  key_builder.add(gap_extending_penalty_);
+  key_builder.add(score_matrix_size_);
+  key_builder.add_bytes(reinterpret_cast<const char*>(score_matrix_), score_matrix_size_ * score_matrix_size_);
+  key_builder.add(translation_matrix_size_);
+  key_builder.add_bytes(reinterpret_cast<const char*>(translation_matrix_), translation_matrix_size_);
+  std::string cache_key = key_builder.take();
+  static thread_local surveyor_cache::exact_cache_t<Alignment> cache("SURVEYOR_SSW_CACHE_LIMIT", 4096);
+  const Alignment* cached_alignment = cache.find(cache_key);
+  if (cached_alignment) {
+    *alignment = *cached_alignment;
+    return true;
+  }
+
+  int8_t* translated_query = new int8_t[query_len];
+  TranslateBase(query, query_len, translated_query);
+
+  // calculate the valid length
+  int valid_ref_len = ref_len;
+  int8_t* translated_ref = new int8_t[valid_ref_len];
+  TranslateBase(ref, valid_ref_len, translated_ref);
+
+
+  const int8_t score_size = 2;
+  s_profile* profile = ssw_init(translated_query, query_len, score_matrix_,
+                                score_matrix_size_, score_size);
+
+  uint8_t flag = 0;
+  SetFlag(filter, &flag);
+  s_align* s_al = ssw_align_clip(profile, translated_ref, valid_ref_len,
+                                 static_cast<int>(gap_opening_penalty_),
+				 static_cast<int>(gap_extending_penalty_),
+				 clip_penalty, flag, filter.score_filter, filter.distance_filter, maskLen);
+
+  alignment->Clear();
+  if (!s_al) { delete [] translated_query; delete [] translated_ref; init_destroy(profile); return false; }
+  ConvertAlignment(*s_al, query_len, alignment);
+  alignment->mismatches = alignment->ref_begin < 0 ? 0 : CalculateNumberMismatch(&*alignment, translated_ref, translated_query, query_len);
+
+  // Free memory
+  delete [] translated_query;
+  delete [] translated_ref;
+  align_destroy(s_al);
+  init_destroy(profile);
+
+  cache.store(std::move(cache_key), *alignment);
+
+  return true;
+}
+
+bool Aligner::AlignSemiGlobal(const char* query, const SemiGlobalFilter& filter,
+                    SemiGlobalAlignment* alignment, const int32_t maskLen) const
+{
+  if (!translation_matrix_) return false;
+  if (reference_length_ == 0) return false;
+
+  int query_len = strlen(query);
+  if (query_len == 0) return false;
+  int8_t* translated_query = new int8_t[query_len];
+  TranslateBase(query, query_len, translated_query);
+
+  const int8_t score_size = 2;
+  s_profile* profile = ssw_init(translated_query, query_len, score_matrix_,
+                                score_matrix_size_, score_size);
+
+  uint8_t flag = 0;
+  SetFlag(filter, &flag);
+  s_align_semiglobal* s_al = ssw_align_semiglobal(profile, translated_reference_, reference_length_,
+                                 static_cast<int>(gap_opening_penalty_),
+				 static_cast<int>(gap_extending_penalty_),
+				 flag, filter.score_filter, filter.distance_filter, maskLen);
+
+  alignment->Clear();
+  if (!s_al) { delete [] translated_query; init_destroy(profile); return false; }
+  ConvertAlignment(*s_al, query_len, alignment);
+  alignment->mismatches = alignment->ref_begin < 0 ? 0 : CalculateNumberMismatch(&*alignment, translated_reference_, translated_query, query_len);
+
+
+  // Free memory
+  delete [] translated_query;
+  align_destroy_semiglobal(s_al);
+  init_destroy(profile);
+
+  return true;
+}
+
+
+bool Aligner::AlignSemiGlobal(const char* query, const char* ref, const int& ref_len,
+                    const SemiGlobalFilter& filter, SemiGlobalAlignment* alignment, const int32_t maskLen) const
+{
+  if (!translation_matrix_) return false;
+  if (ref_len <= 0) return false;
+
+  int query_len = strlen(query);
+  if (query_len == 0) return false;
+
+  surveyor_cache::key_builder_t key_builder;
+  key_builder.add_bytes(query, query_len);
+  key_builder.add(ref_len);
+  key_builder.add_bytes(ref, ref_len > 0 ? ref_len : 0);
+  key_builder.add(filter.report_begin_position);
+  key_builder.add(filter.report_cigar);
+  key_builder.add(filter.report_prefix_scores);
+  key_builder.add(filter.score_filter);
+  key_builder.add(filter.distance_filter);
+  key_builder.add(maskLen);
+  key_builder.add(gap_opening_penalty_);
+  key_builder.add(gap_extending_penalty_);
+  key_builder.add(score_matrix_size_);
+  key_builder.add_bytes(reinterpret_cast<const char*>(score_matrix_), score_matrix_size_ * score_matrix_size_);
+  key_builder.add(translation_matrix_size_);
+  key_builder.add_bytes(reinterpret_cast<const char*>(translation_matrix_), translation_matrix_size_);
+  std::string cache_key = key_builder.take();
+  static thread_local surveyor_cache::exact_cache_t<SemiGlobalAlignment> cache("SURVEYOR_SSW_CACHE_LIMIT", 4096);
+  const SemiGlobalAlignment* cached_alignment = cache.find(cache_key);
+  if (cached_alignment) {
+    *alignment = *cached_alignment;
+    return true;
+  }
+
+  int8_t* translated_query = new int8_t[query_len];
+  TranslateBase(query, query_len, translated_query);
+
+  // calculate the valid length
+  int valid_ref_len = ref_len;
+  int8_t* translated_ref = new int8_t[valid_ref_len];
+  TranslateBase(ref, valid_ref_len, translated_ref);
+
+
+  const int8_t score_size = 2;
+  s_profile* profile = ssw_init(translated_query, query_len, score_matrix_,
+                                score_matrix_size_, score_size);
+
+  uint8_t flag = 0;
+  SetFlag(filter, &flag);
+  s_align_semiglobal* s_al = ssw_align_semiglobal(profile, translated_ref, valid_ref_len,
+                                 static_cast<int>(gap_opening_penalty_),
+				 static_cast<int>(gap_extending_penalty_),
+				 flag, filter.score_filter, filter.distance_filter, maskLen);
+
+  alignment->Clear();
+  if (!s_al) { delete [] translated_query; delete [] translated_ref; init_destroy(profile); return false; }
+  ConvertAlignment(*s_al, query_len, alignment);
+  alignment->mismatches = alignment->ref_begin < 0 ? 0 : CalculateNumberMismatch(&*alignment, translated_ref, translated_query, query_len);
+
+  // Free memory
+  delete [] translated_query;
+  delete [] translated_ref;
+  align_destroy_semiglobal(s_al);
   init_destroy(profile);
 
   cache.store(std::move(cache_key), *alignment);

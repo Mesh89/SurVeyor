@@ -74,6 +74,71 @@ struct Filter {
     {};
 };
 
+// Signed results and filters for full-query alignment. Local result types
+// retain their original layout and API.
+struct SemiGlobalAlignment {
+  int32_t sw_score;           // The best alignment score
+  int32_t sw_score_next_best; // The next best alignment score
+  // Query-length scores ending at each base, with no terminal gap; empty unless requested.
+  std::vector<int32_t> prefix_scores;
+  int32_t  ref_begin;          // Reference begin position of the best alignment
+  int32_t  ref_end;            // Reference end position of the best alignment
+  int32_t  query_begin;        // Query begin position of the best alignment
+  int32_t  query_end;          // Query end position of the best alignment
+  int32_t  ref_end_next_best;  // Reference end position of the next best alignment
+  int32_t  mismatches;         // Number of mismatches of the alignment
+  std::string cigar_string;    // Cigar string of the best alignment
+  std::vector<uint32_t> cigar; // Cigar stored in the BAM format
+                               //   high 28 bits: length
+			       //   low 4 bits: M/I/D/S/X (0/1/2/4/8);
+  void Clear() {
+    sw_score           = 0;
+    sw_score_next_best = INT32_MIN;
+    prefix_scores.clear();
+    ref_begin          = 0;
+    ref_end            = 0;
+    query_begin        = 0;
+    query_end          = 0;
+    ref_end_next_best  = -1;
+    mismatches         = 0;
+    cigar_string.clear();
+    cigar.clear();
+  };
+};
+
+struct SemiGlobalFilter {
+  // NOTE: No matter the filter, those five fields of SemiGlobalAlignment will be given anyway.
+  //       sw_score; sw_score_next_best; ref_end; query_end; ref_end_next_best.
+  // NOTE: Only need score of alignments, please set 'report_begin_position'
+  //       and 'report_cigar' false.
+
+  bool report_begin_position;    // Give ref_begin and query_begin.
+                                 //   If it is not set, ref_begin and query_begin are -1.
+  bool report_cigar;             // Give cigar_string and cigar.
+                                 //   report_begin_position is automatically TRUE.
+  bool report_prefix_scores = false; // Give SemiGlobalAlignment::prefix_scores.
+
+  // When *report_cigar* is true and alignment passes these two filters,
+  //   cigar_string and cigar will be given.
+  int32_t score_filter;         // score >= score_filter
+  uint16_t distance_filter;      // ((ref_end - ref_begin) < distance_filter) &&
+                                 // ((query_end - read_begin) < distance_filter)
+
+  SemiGlobalFilter()
+    : report_begin_position(true)
+    , report_cigar(true)
+    , score_filter(INT32_MIN)
+    , distance_filter(32767)
+  {};
+
+  SemiGlobalFilter(const bool& pos, const bool& cigar, const int32_t& score, const uint16_t& dis)
+    : report_begin_position(pos)
+    , report_cigar(cigar)
+    , score_filter(score)
+    , distance_filter(dis)
+    {};
+};
+
 class Aligner {
  public:
   // =========
@@ -161,6 +226,20 @@ class Aligner {
   // =========
   bool Align(const char* query, const char* ref, const int& ref_len,
              const Filter& filter, Alignment* alignment, const int32_t maskLen) const;
+
+  // Local alignment with a fixed penalty for each nonempty clipped query end.
+  // Scores/filters include the penalties; nonpositive scores give an empty result.
+  // Prefix scores include clipping relative to the full query, floored at zero.
+  // A zero penalty reproduces Align. This mode has a separate cache.
+  bool AlignWithClipPenalty(const char* query, const uint8_t clip_penalty, const Filter& filter, Alignment* alignment, const int32_t maskLen) const;
+  bool AlignWithClipPenalty(const char* query, const char* ref, const int& ref_len, const uint8_t clip_penalty, const Filter& filter, Alignment* alignment, const int32_t maskLen) const;
+
+  // Align every query base with free reference flanks and penalized query ends.
+  // Uses signed scores; the default filter also returns negative-score CIGARs.
+  // Prefix scores consume the full prefix and end in a paired base. An absent
+  // second-best score is INT32_MIN. Local and semi-global caches are separate.
+  bool AlignSemiGlobal(const char* query, const SemiGlobalFilter& filter, SemiGlobalAlignment* alignment, const int32_t maskLen) const;
+  bool AlignSemiGlobal(const char* query, const char* ref, const int& ref_len, const SemiGlobalFilter& filter, SemiGlobalAlignment* alignment, const int32_t maskLen) const;
 
   // @function Clear up all containers and thus the aligner is disabled.
   //             To rebuild the aligner please use Build functions.

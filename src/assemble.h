@@ -434,7 +434,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 			if (!new_svs.empty() && new_svs[0]->svtype() == "INS") {
 				std::shared_ptr<sv_t> new_ins = new_svs[0];
 				int sep = new_ins->ins_seq.find("-");
-				if (sep != std::string::npos && sep >= config.min_clip_len && new_ins->ins_seq.length()-sep >= config.min_clip_len &&
+				if (sep != std::string::npos && sep >= config.min_clip_len && new_ins->ins_seq.length()-sep-1 >= config.min_clip_len &&
 					raa_score_ratio < double(new_ins->right_anchor_aln->best_score)/new_ins->right_anchor_aln->seq_len && new_ins->svsize() >= config.min_assembled_ins_size) {
 						chosen_ins = new_ins;
 						full_assembled_seq = assembled_sequence + "-" + assembled_sequences[1];
@@ -446,7 +446,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 			if (!new_svs.empty() && new_svs[0]->svtype() == "INS") {
 				std::shared_ptr<sv_t> new_ins = new_svs[0];
 				int sep = new_ins->ins_seq.find("-");
-				if (sep != std::string::npos && sep >= config.min_clip_len && new_ins->ins_seq.length()-sep >= config.min_clip_len &&
+				if (sep != std::string::npos && sep >= config.min_clip_len && new_ins->ins_seq.length()-sep-1 >= config.min_clip_len &&
 					laa_score_ratio < double(new_ins->left_anchor_aln->best_score)/new_ins->left_anchor_aln->seq_len && new_ins->svsize() >= config.min_assembled_ins_size) {
 						chosen_ins = new_ins;
 						full_assembled_seq = assembled_sequences[1] + "-" + assembled_sequence;
@@ -461,7 +461,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 	if (chosen_ins == NULL) return NULL;
 
 	int sep = chosen_ins->ins_seq.find("-");
-	if (sep != std::string::npos && (sep < config.min_clip_len || chosen_ins->ins_seq.length()-sep < config.min_clip_len)) return NULL; // "-" is too close to the edge
+	if (sep != std::string::npos && (sep < config.min_clip_len || chosen_ins->ins_seq.length()-sep-1 < config.min_clip_len)) return NULL; // "-" is too close to the edge
 
 	int assembled_reads_count = 0;
 

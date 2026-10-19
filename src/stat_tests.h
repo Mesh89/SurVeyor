@@ -835,13 +835,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 					int idx = insertion_to_idx[ins];
 
 					ungapped_aln_t aln = best_ungapped_aln(mate_seq.c_str(), mate_seq_len, ins->ins_seq.c_str(), ins->ins_seq.length(), mate_seq_len/2, 1, -4);
-					int lc_size = aln.query_begin;
-					int rc_size = mate_seq_len - aln.query_end;
 					int aligned_len = aln.query_end - aln.query_begin;
 
-					if (aligned_len >= min_aligned_len && aln.mismatch_rate() <= config.max_seq_error &&
-						(lc_size < config.min_clip_len || aln.ref_begin == 0) &&
-						(rc_size < config.min_clip_len || aln.ref_end >= ins->ins_seq.length())) {
+					if (aligned_len >= min_aligned_len && aln.mismatch_rate() <= config.max_seq_error) {
 						if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) continue;
 						add_read(alt_bp1_pairs_data[idx], read, aln.mismatches);
 					} else {
@@ -854,13 +850,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 					int idx = insertion_to_idx[ins];
 
 					ungapped_aln_t aln = best_ungapped_aln(mate_seq.c_str(), mate_seq_len, ins->ins_seq.c_str(), ins->ins_seq.length(), mate_seq_len/2, 1, -4);
-					int lc_size = aln.query_begin;
-					int rc_size = mate_seq_len - aln.query_end;
 					int aligned_len = aln.query_end - aln.query_begin;
 
-					if (aligned_len >= min_aligned_len && aln.mismatch_rate() <= config.max_seq_error &&
-						(lc_size < config.min_clip_len || aln.ref_begin == 0) &&
-						(rc_size < config.min_clip_len || aln.ref_end >= ins->ins_seq.length())) {
+					if (aligned_len >= min_aligned_len && aln.mismatch_rate() <= config.max_seq_error) {
 						if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, ins)) continue;
 						add_read(alt_bp2_pairs_data[idx], read, aln.mismatches);
 					} else {

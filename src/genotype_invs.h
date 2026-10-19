@@ -597,7 +597,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
 }
 
 bool is_small_inv(inversion_t* inv, stats_t& stats, config_t& config) {
-    return inv->end-inv->start+inv->svlen() < stats.read_len-2*config.min_clip_len;
+    return inv->end-inv->start+inv->svlen() <= stats.read_len-2*config.min_clip_len;
 }
 
 void genotype_invs(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<inversion_t*> invs,

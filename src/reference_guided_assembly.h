@@ -48,26 +48,6 @@ void build_aln_guided_graph(std::vector<std::pair<std::string, StripedSmithWater
 	// 2 - in regular assembly, we only report contigs made of at last 2 reads. Here we report even single reads
 }
 
-int calculate_score(std::vector<std::string> contigs, std::vector<std::string> read_seqs) {
-	StripedSmithWaterman::Aligner aligner;
-	StripedSmithWaterman::Filter filter;
-	StripedSmithWaterman::Alignment aln;
-	int score = 0;
-	for (std::string& read : read_seqs) {
-		int best_score = 0;
-		for (std::string& contig : contigs) {
-			aligner.Align(read.c_str(), contig.c_str(), contig.length(), filter, &aln, 0);
-			if (accept(aln, 0) && aln.sw_score > best_score) {
-				best_score = aln.sw_score;
-			}
-		}
-		score += best_score;
-	}
-	return score;
-}
-
-
-
 struct seq_pair_overlap_t {
 	int i1, i2;
 	int overlap, score;
@@ -269,6 +249,8 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		consensus_contigs_alns.push_back(p.second);
 	}
 
+	if (!scaffold || retained_assembled_seqs.empty()) return retained_assembled_seqs;
+
 	// we assembled as much as possible using guidance from the reference
 	// however, reads may be misaligned for in the case of an incomplete or rearranged reference
 	// we can try to "scaffold" the contigs using the reads that were rejected during the assembly
@@ -278,8 +260,6 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		seqs_w_pp.push_back({seq, true, true});
 	}
 	std::vector<std::string> scaffolding_sequences = assemble_reads(temp1, seqs_w_pp, temp2, config, stats);
-
-	if (!scaffold || retained_assembled_seqs.empty()) return retained_assembled_seqs;
 	
 	std::vector<int> linked(retained_assembled_seqs.size()-1, -1);
 	std::vector<std::pair<int, int> > link_overlaps(retained_assembled_seqs.size()-1);

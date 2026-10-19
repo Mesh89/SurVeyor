@@ -69,6 +69,19 @@ typedef struct {
 	uint16_t* prefix_scores;
 } s_align;
 
+/* Full-query alignment with free reference flanks. Scores are signed; an
+ * insertion-only alignment has ref_begin1 = 0, ref_end1 = -1. An unavailable
+ * second score is INT32_MIN, with ref_end2 = -1. Prefix scores consume the
+ * entire query prefix and end in a paired base (no terminal gap). */
+typedef struct {
+	int32_t score1, score2;
+	int32_t ref_begin1, ref_end1, read_begin1, read_end1, ref_end2;
+	uint32_t* cigar;
+	int32_t cigarLen;
+	uint16_t flag;
+	int32_t* prefix_scores;
+} s_align_semiglobal;
+
 /*!	@function	Create the query profile using the query sequence.
 	@param	read	pointer to the query sequence; the query sequence needs to be numbers
 	@param	readLen	length of the query sequence
@@ -142,6 +155,24 @@ s_align* ssw_align (const s_profile* prof,
 	@param	a	pointer to the alignment result structure
 */
 void align_destroy (s_align* a);
+
+/* Local alignment minus clip_penalty for each nonempty clipped QUERY end.
+ * Reference flanks remain free. Scores, secondary scores and score filters
+ * include the penalties; nonpositive optima return an empty alignment.
+ * Prefix scores end in a paired base and include both end penalties relative
+ * to the full query, floored at zero. A zero penalty calls ssw_align unchanged.
+ * For a positive penalty, secondary endpoints lie strictly outside end +/- maskLen.
+ * Byte/word SIMD and scalar overflow/unusual-gap fallbacks match local SSW.
+ * Release the result with align_destroy. */
+s_align* ssw_align_clip(const s_profile* prof, const int8_t* ref, int32_t refLen, uint8_t weight_gapO, uint8_t weight_gapE, uint8_t clip_penalty, uint8_t flag, uint16_t filters, int32_t filterd, int32_t maskLen);
+
+/* Uses the same query profile, scoring matrix, flags and gap convention as
+ * ssw_align. Query ends are penalized; reference flanks are free. Equal scores
+ * select the earliest reference end. Use INT32_MIN to disable the score filter.
+ * Byte/word SIMD retries are based on alignment loss, not absolute score.
+ * gap_open < gap_extend and exhausted word precision use scalar affine DP. */
+s_align_semiglobal* ssw_align_semiglobal(const s_profile* prof, const int8_t* ref, int32_t refLen, uint8_t weight_gapO, uint8_t weight_gapE, uint8_t flag, int32_t filters, int32_t filterd, int32_t maskLen);
+void align_destroy_semiglobal(s_align_semiglobal* a);
 
 /*! @function:
      1. Calculate the number of mismatches.

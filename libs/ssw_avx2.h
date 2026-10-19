@@ -21,6 +21,9 @@ void ssw_avx2_init_destroy(ssw_avx2_profile*);
 s_align* ssw_avx2_align(const ssw_avx2_profile*, const int8_t*, int32_t,
                       uint8_t, uint8_t, uint8_t, uint16_t, int32_t, int32_t);
 void ssw_avx2_align_destroy(s_align*);
+s_align* ssw_avx2_align_clip(const ssw_avx2_profile*, const int8_t*, int32_t, uint8_t, uint8_t, uint8_t, uint8_t, uint16_t, int32_t, int32_t);
+s_align_semiglobal* ssw_avx2_align_semiglobal(const ssw_avx2_profile*, const int8_t*, int32_t, uint8_t, uint8_t, uint8_t, int32_t, int32_t, int32_t);
+void ssw_avx2_align_destroy_semiglobal(s_align_semiglobal*);
 int32_t ssw_avx2_mark_mismatch(int32_t, int32_t, int32_t, const int8_t*,
                              const int8_t*, int32_t, uint32_t**, int32_t*);
 static inline uint32_t ssw_avx2_to_cigar_int(uint32_t len, unsigned char op) {
@@ -33,6 +36,9 @@ static inline uint32_t ssw_avx2_to_cigar_int(uint32_t len, unsigned char op) {
 #define s_profile ssw_avx2_profile
 #define ssw_init ssw_avx2_init
 #define ssw_align ssw_avx2_align
+#define ssw_align_clip ssw_avx2_align_clip
+#define ssw_align_semiglobal ssw_avx2_align_semiglobal
+#define align_destroy_semiglobal ssw_avx2_align_destroy_semiglobal
 #define init_destroy ssw_avx2_init_destroy
 #define align_destroy ssw_avx2_align_destroy
 #define mark_mismatch ssw_avx2_mark_mismatch

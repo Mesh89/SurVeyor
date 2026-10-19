@@ -115,7 +115,7 @@ remap_info_t remap_seq(char* region, int region_len, std::string& seq, StripedSm
 
     StripedSmithWaterman::Alignment alignment;
     aligner.Align(seq.c_str(), region, region_len, filter, &alignment, 0);
-    bool accepted = 2*alignment.sw_score >= seq.length() && alignment.query_end-alignment.query_begin >= min_clip_len; 
+    bool accepted = 2*alignment.sw_score >= seq.length() && alignment.query_end-alignment.query_begin+1 >= min_clip_len; 
 
     return remap_info_t(alignment, accepted, min_clip_len);
 }

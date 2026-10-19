@@ -1315,12 +1315,12 @@ bool accept(StripedSmithWaterman::Alignment& aln, int min_clip_len, double max_s
 
 	bool lc_is_noise = false, rc_is_noise = false;
 	if (!qual_ascii.empty()) {
-		if (lc_size > min_clip_len && lc_size < qual_ascii.length()/2) {
+		if (lc_size >= min_clip_len && lc_size < qual_ascii.length()/2) {
 			std::string lc_qual = qual_ascii.substr(0, lc_size);
 			std::string not_lc_qual = qual_ascii.substr(lc_size);
 			lc_is_noise = avg_qual(lc_qual) < min_avg_base_qual && avg_qual(not_lc_qual) >= min_avg_base_qual;
 		}
-		if (rc_size > min_clip_len && rc_size < qual_ascii.length()/2) {
+		if (rc_size >= min_clip_len && rc_size < qual_ascii.length()/2) {
 			std::string not_rc_qual = qual_ascii.substr(0, qual_ascii.length()-rc_size);
 			std::string rc_qual = qual_ascii.substr(qual_ascii.length()-rc_size);
 			rc_is_noise = avg_qual(rc_qual) < min_avg_base_qual && avg_qual(not_rc_qual) >= min_avg_base_qual;
@@ -1328,7 +1328,7 @@ bool accept(StripedSmithWaterman::Alignment& aln, int min_clip_len, double max_s
 	}
 
 	double mismatch_rate = double(aln.mismatches)/(aln.query_end-aln.query_begin);
-	return (lc_size <= min_clip_len || lc_is_noise) && (rc_size <= min_clip_len || rc_is_noise) && mismatch_rate <= max_seq_error;
+	return (lc_size < min_clip_len || lc_is_noise) && (rc_size < min_clip_len || rc_is_noise) && mismatch_rate <= max_seq_error;
 }
 
 std::pair<int, int> get_dels_ins_in_first_n_chars(StripedSmithWaterman::Alignment& aln, int n) {

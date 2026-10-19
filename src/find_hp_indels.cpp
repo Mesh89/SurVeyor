@@ -31,6 +31,7 @@
 #include "consensus.h"
 
 const int MIN_SUPPORTING_READS = 3;
+const int HP_CONSENSUS_CLIP_PENALTY = 6;
 const int MIN_READS_FOR_HP_MM_THRESHOLD = 100;
 const double HP_MM_OUTLIER_MAD_MULTIPLIER = 4.0;
 const double MAX_HP_MM_THRESHOLD = 0.75;
@@ -354,7 +355,9 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
     int alt_hp_end = alt_hp_beg + alt_hp_len;
 
     StripedSmithWaterman::Alignment aln;
-    if (!aligner.Align(consensus.seq.c_str(), alt_reference.c_str(), alt_reference.size(), filter, &aln, 0) ||
+    // A clipped query end costs the same as opening a gap, so a short tail holding one SNP is aligned as a mismatch instead of being soft-clipped, 
+    // while a divergent tail is still clipped; the penalty must not exceed the gap-open penalty, otherwise tails would be absorbed as terminal insertions.
+    if (!aligner.AlignWithClipPenalty(consensus.seq.c_str(), alt_reference.c_str(), alt_reference.size(), HP_CONSENSUS_CLIP_PENALTY, filter, &aln, 0) ||
         aln.cigar.empty() || aln.ref_begin < 0) {
         return;
     }

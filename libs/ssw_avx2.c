@@ -1092,3 +1092,11 @@ int32_t mark_mismatch (int32_t ref_begin1,
 	(*cigar) = new_cigar;
 	return mismatch_length;
 }
+
+#define SG_AVX2
+#include "ssw_semiglobal_impl.h"
+#undef SG_AVX2
+
+#define CP_AVX2
+#include "ssw_clip_impl.h"
+#undef CP_AVX2
