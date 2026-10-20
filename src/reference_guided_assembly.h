@@ -1,6 +1,7 @@
 #ifndef GUIDED_REFERENCE_ASSEMBLE_H
 #define GUIDED_REFERENCE_ASSEMBLE_H
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <queue>
@@ -14,16 +15,20 @@
 #include "assemble.h"
 #include "remapping.h"
 
-struct aln_guided_read_t {
+struct guided_contig_t {
 	std::string seq;
-	StripedSmithWaterman::Alignment aln;
-	const uint8_t* qual;
+	std::vector<std::array<int, 8> > votes; // A/C/G/T quality sums, then A/C/G/T counts.
 };
 
-void build_aln_guided_graph(std::vector<aln_guided_read_t>& alns, std::vector<int>& out_edges,
+struct aln_guided_contig_t {
+	guided_contig_t* contig;
+	StripedSmithWaterman::Alignment aln;
+};
+
+void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<int>& out_edges,
 		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev, config_t& config) {
 	std::sort(alns.begin(), alns.end(),
-			[](aln_guided_read_t& aln1, aln_guided_read_t& aln2) {
+			[](aln_guided_contig_t& aln1, aln_guided_contig_t& aln2) {
 		return get_unclipped_start(aln1.aln) < get_unclipped_start(aln2.aln);
 	});
 
@@ -38,9 +43,9 @@ void build_aln_guided_graph(std::vector<aln_guided_read_t>& alns, std::vector<in
 				int unclipped_j_start = get_unclipped_start(alns[j].aln);
 				min_overlap = std::max(min_overlap, unclipped_i_end - unclipped_j_start);
 			}
-			suffix_prefix_aln_t spa = aln_suffix_prefix(alns[i].seq, alns[j].seq, 1, -4, config.max_seq_error, min_overlap);
-			bool spa_i_homopolymer = is_homopolymer(alns[i].seq.c_str()+alns[i].seq.length()-spa.overlap, spa.overlap);
-			bool spa_j_homopolymer = is_homopolymer(alns[j].seq.c_str(), spa.overlap);
+			suffix_prefix_aln_t spa = aln_suffix_prefix(alns[i].contig->seq, alns[j].contig->seq, 1, -4, config.max_seq_error, min_overlap);
+			bool spa_i_homopolymer = is_homopolymer(alns[i].contig->seq.c_str()+alns[i].contig->seq.length()-spa.overlap, spa.overlap);
+			bool spa_j_homopolymer = is_homopolymer(alns[j].contig->seq.c_str(), spa.overlap);
 			if (spa.overlap && !spa_i_homopolymer && !spa_j_homopolymer) {
 				out_edges[i]++;
 				l_adj[i].push_back({j, spa.score, spa.overlap});
@@ -62,26 +67,26 @@ struct seq_pair_overlap_t {
 };
 
 // remove contigs that are fully contained within another contig
-void remove_fully_contained(std::vector<std::string>& assembled_sequences, std::string& reference, StripedSmithWaterman::Aligner& aligner) {
+void remove_fully_contained(std::vector<guided_contig_t>& assembled_contigs, std::string& reference, StripedSmithWaterman::Aligner& aligner) {
 	StripedSmithWaterman::Filter filter;
 	StripedSmithWaterman::Alignment aln;
-	std::vector<std::pair<std::string, StripedSmithWaterman::Alignment> > assembled_seqs_w_alns;
-	for (std::string& assembled_sequence : assembled_sequences) {
-		aligner.Align(assembled_sequence.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
-		assembled_seqs_w_alns.push_back({assembled_sequence, aln});
+	std::vector<std::pair<guided_contig_t, StripedSmithWaterman::Alignment> > assembled_seqs_w_alns;
+	for (guided_contig_t& contig : assembled_contigs) {
+		aligner.Align(contig.seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
+		assembled_seqs_w_alns.push_back({std::move(contig), aln});
 	}
 	std::sort(assembled_seqs_w_alns.begin(), assembled_seqs_w_alns.end(),
-			[](const std::pair<std::string, StripedSmithWaterman::Alignment>& p1, const std::pair<std::string, StripedSmithWaterman::Alignment>& p2) {
+			[](const std::pair<guided_contig_t, StripedSmithWaterman::Alignment>& p1, const std::pair<guided_contig_t, StripedSmithWaterman::Alignment>& p2) {
 		if (p1.second.ref_begin != p2.second.ref_begin) {
             return p1.second.ref_begin < p2.second.ref_begin;
         }
         return p1.second.ref_end > p2.second.ref_end;
 	});
 	int max_end = 0;
-	assembled_sequences.clear();
+	assembled_contigs.clear();
 	for (auto& p : assembled_seqs_w_alns) {
 		if (max_end < p.second.ref_end) {
-			assembled_sequences.push_back(p.first);
+			assembled_contigs.push_back(std::move(p.first));
 			max_end = p.second.ref_end;
 		}
 	}
@@ -121,46 +126,24 @@ std::vector<std::pair<std::string, StripedSmithWaterman::Alignment> > retain_non
 	return retained;
 }
 
-void correct_contig_by_layout(std::string& contig, const std::vector<std::string>& reads, const std::vector<const uint8_t*>& quals, const std::vector<int>& offsets) {
-	std::vector<int> As(contig.length()), Cs(contig.length()), Gs(contig.length()), Ts(contig.length());
-	std::vector<int> A_quals(contig.length()), C_quals(contig.length()), G_quals(contig.length()), T_quals(contig.length());
-	for (int i = 0; i < reads.size(); i++) {
-		for (int j = 0; j < reads[i].length(); j++) {
-			int pos = offsets[i]+j;
-			char c = reads[i][j];
-			int qual = quals.empty() ? 0 : quals[i][j];
-			if (c == 'A') { As[pos]++; A_quals[pos] += qual; }
-			else if (c == 'C') { Cs[pos]++; C_quals[pos] += qual; }
-			else if (c == 'G') { Gs[pos]++; G_quals[pos] += qual; }
-			else if (c == 'T') { Ts[pos]++; T_quals[pos] += qual; }
-		}
-	}
-	for (int i = 0; i < contig.length(); i++) {
-		if (As[i] + Cs[i] + Gs[i] + Ts[i] == 0) continue;
-		auto best_base_score = std::max({std::make_tuple(A_quals[i], As[i], 'A'), std::make_tuple(C_quals[i], Cs[i], 'C'), std::make_tuple(G_quals[i], Gs[i], 'G'), std::make_tuple(T_quals[i], Ts[i], 'T')});
-		contig[i] = std::get<2>(best_base_score);
-	}
-}
-
-std::vector<std::string> generate_reference_guided_contigs(std::string reference, std::vector<std::string>& read_seqs, const std::vector<const uint8_t*>& quals,
-	std::vector<std::string>& discarded_seqs, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config) {
+std::vector<guided_contig_t> generate_reference_guided_contigs(std::string reference, std::vector<guided_contig_t>& read_contigs,
+	std::vector<guided_contig_t>& discarded_contigs, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config) {
 	StripedSmithWaterman::Filter filter;
 	StripedSmithWaterman::Alignment aln;
 
-	std::vector<aln_guided_read_t> alns;
-	int n = read_seqs.size();
+	std::vector<aln_guided_contig_t> alns;
+	int n = read_contigs.size();
 	std::vector<int> out_edges(n);
 	std::vector<std::vector<edge_t> > l_adj(n), l_adj_rev(n);
-	for (int i = 0; i < read_seqs.size(); i++) {
-		std::string& seq = read_seqs[i];
-		harsh_aligner.Align(seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
-		alns.push_back({seq, aln, quals.empty() ? nullptr : quals[i]});
+	for (guided_contig_t& contig : read_contigs) {
+		harsh_aligner.Align(contig.seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
+		alns.push_back({&contig, aln});
 	}
 	build_aln_guided_graph(alns, out_edges, l_adj, l_adj_rev, config);
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
-	std::vector<std::string> assembled_sequences;
+	std::vector<guided_contig_t> assembled_contigs;
 	std::vector<bool> used(n);
 	while (true) {
 		// compute longest paths
@@ -185,31 +168,33 @@ std::vector<std::string> generate_reference_guided_contigs(std::string reference
 		}
 		if (best_score == 0) break;
 
-		std::string assembled_sequence = alns[curr_vertex].seq;
-		std::vector<std::string> used_reads; // track reads used to build this contig, so that we can use them for correction
-		std::vector<const uint8_t*> used_quals;
-		std::vector<int> used_offsets{0};
-		used_reads.push_back(alns[curr_vertex].seq);
-		if (!quals.empty()) used_quals.push_back(alns[curr_vertex].qual);
+		guided_contig_t assembled_contig = *alns[curr_vertex].contig;
 		while (best_edges[curr_vertex].overlap) {
 			used[curr_vertex] = true;
 			int overlap = best_edges[curr_vertex].overlap;
 			curr_vertex = best_edges[curr_vertex].next;
-			used_offsets.push_back(assembled_sequence.length()-overlap);
-			assembled_sequence += alns[curr_vertex].seq.substr(overlap);
-			used_reads.push_back(alns[curr_vertex].seq);
-			if (!quals.empty()) used_quals.push_back(alns[curr_vertex].qual);
+			const guided_contig_t& next_contig = *alns[curr_vertex].contig;
+			int offset = assembled_contig.seq.length()-overlap;
+			assembled_contig.seq += next_contig.seq.substr(overlap);
+			assembled_contig.votes.resize(assembled_contig.seq.length());
+			for (int i = 0; i < next_contig.votes.size(); i++) {
+				for (int j = 0; j < 8; j++) assembled_contig.votes[offset+i][j] += next_contig.votes[i][j];
+			}
 		}
 		used[curr_vertex] = true;
 
-		std::string corrected_assembled_sequence = assembled_sequence;
-		correct_contig_by_layout(corrected_assembled_sequence, used_reads, used_quals, used_offsets);
-		assembled_sequences.push_back(corrected_assembled_sequence);
+		for (int i = 0; i < assembled_contig.seq.length(); i++) {
+			const std::array<int, 8>& votes = assembled_contig.votes[i];
+			if (votes[4] + votes[5] + votes[6] + votes[7] == 0) continue;
+			auto best_base_score = std::max({std::make_tuple(votes[0], votes[4], 'A'), std::make_tuple(votes[1], votes[5], 'C'), std::make_tuple(votes[2], votes[6], 'G'), std::make_tuple(votes[3], votes[7], 'T')});
+			assembled_contig.seq[i] = std::get<2>(best_base_score);
+		}
+		assembled_contigs.push_back(std::move(assembled_contig));
 	}
 	for (int i = 0; i < n; i++) {
-		if (!used[i]) discarded_seqs.push_back(alns[i].seq);
+		if (!used[i]) discarded_contigs.push_back(*alns[i].contig);
 	}
-	return assembled_sequences;
+	return assembled_contigs;
 }
 
 std::vector<std::string> generate_reference_guided_consensus(std::string reference, 
@@ -233,18 +218,34 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	read_quals.insert(read_quals.end(), quals_is.begin(), quals_is.end());
 	read_quals.insert(read_quals.end(), quals_rf.begin(), quals_rf.end());
 
-	std::vector<std::string> discarded_reads;
-	std::vector<std::string> assembled_sequences = generate_reference_guided_contigs(reference, read_seqs, read_quals, discarded_reads, harsh_aligner, config);
+	std::vector<guided_contig_t> read_contigs;
+	for (int i = 0; i < read_seqs.size(); i++) {
+		guided_contig_t contig{read_seqs[i], std::vector<std::array<int, 8> >(read_seqs[i].length())};
+		for (int j = 0; j < contig.seq.length(); j++) {
+			char c = contig.seq[j];
+			int qual = read_quals.empty() ? 0 : read_quals[i][j];
+			if (c == 'A') { contig.votes[j][0] = qual; contig.votes[j][4] = 1; }
+			else if (c == 'C') { contig.votes[j][1] = qual; contig.votes[j][5] = 1; }
+			else if (c == 'G') { contig.votes[j][2] = qual; contig.votes[j][6] = 1; }
+			else if (c == 'T') { contig.votes[j][3] = qual; contig.votes[j][7] = 1; }
+		}
+		read_contigs.push_back(std::move(contig));
+	}
+	std::vector<guided_contig_t> discarded_contigs;
+	std::vector<guided_contig_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config);
 
 	// try and join contigs
 	while (true) {
-		remove_fully_contained(assembled_sequences, reference, aligner);
-		std::vector<std::string> temp;
-		int prev_ass_seqs = assembled_sequences.size();
-		assembled_sequences = generate_reference_guided_contigs(reference, assembled_sequences, {}, temp, harsh_aligner, config);
-		assembled_sequences.insert(assembled_sequences.end(), temp.begin(), temp.end());
-		if (prev_ass_seqs <= assembled_sequences.size()) break;
+		remove_fully_contained(assembled_contigs, reference, aligner);
+		std::vector<guided_contig_t> temp;
+		int prev_ass_seqs = assembled_contigs.size();
+		assembled_contigs = generate_reference_guided_contigs(reference, assembled_contigs, temp, harsh_aligner, config);
+		assembled_contigs.insert(assembled_contigs.end(), temp.begin(), temp.end());
+		if (prev_ass_seqs <= assembled_contigs.size()) break;
 	}
+	std::vector<std::string> assembled_sequences, discarded_reads;
+	for (guided_contig_t& contig : assembled_contigs) assembled_sequences.push_back(std::move(contig.seq));
+	for (guided_contig_t& contig : discarded_contigs) discarded_reads.push_back(std::move(contig.seq));
 
 	// score the retained contigs
 	StripedSmithWaterman::Filter filter;
