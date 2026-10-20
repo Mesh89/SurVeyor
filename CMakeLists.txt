@@ -23,6 +23,7 @@ include_directories("${HTSLIB_DIR}/include")
 # C and C++ target flags must agree; selection lives in the SSW adapter files.
 set(SSW_SOURCES libs/ssw_selected.c libs/ssw_selected.cpp)
 
+# src
 add_executable(reads_categorizer src/reads_categorizer.cpp)
 add_executable(clip_consensus_builder ${SSW_SOURCES} src/clip_consensus_builder.cpp)
 add_executable(find_svs_from_sr_consensuses ${SSW_SOURCES} src/find_svs_from_sr_consensuses.cpp)
@@ -39,6 +40,7 @@ add_executable(write_classifier_vcf src/write_classifier_vcf.cpp)
 add_executable(resolve_incompatible_gts src/resolve_incompatible_gts.cpp)
 add_executable(find_hp_indels ${SSW_SOURCES} src/find_hp_indels.cpp)
 
+# utils
 add_executable(compare ${SSW_SOURCES} utils/compare.cpp)
 add_executable(normalise ${SSW_SOURCES} utils/normalise.cpp)
 add_executable(cluster ${SSW_SOURCES} utils/cluster.cpp)
@@ -48,6 +50,9 @@ add_executable(dedup_vcf utils/dedup_vcf.cpp)
 add_executable(split_ins_to_dup utils/split_ins_to_dup.cpp)
 add_executable(expand_aux_haplotypes src/expand_aux_haplotypes.cpp)
 
+# benchmark
+add_executable(set_gt benchmark/set_gt.cpp)
+
 # Refresh cached paths when upgrading the bundled HTSlib.
 unset(HTS_LIB CACHE)
 find_library(HTS_LIB hts PATHS "${HTSLIB_DIR}/lib" NO_DEFAULT_PATH)
@@ -55,6 +60,7 @@ if (NOT HTS_LIB)
     message(FATAL_ERROR "HTSlib 1.24 is not built. Run ./build_htslib.sh first.")
 endif()
 
+# src
 target_link_libraries(reads_categorizer "${HTS_LIB}")
 target_link_libraries(clip_consensus_builder "${HTS_LIB}")
 target_link_libraries(find_svs_from_sr_consensuses "${HTS_LIB}")
@@ -71,6 +77,7 @@ target_link_libraries(write_classifier_vcf "${HTS_LIB}")
 target_link_libraries(resolve_incompatible_gts "${HTS_LIB}")
 target_link_libraries(find_hp_indels "${HTS_LIB}")
 
+# utils
 target_link_libraries(compare "${HTS_LIB}")
 target_link_libraries(normalise "${HTS_LIB}")
 target_link_libraries(cluster "${HTS_LIB}")
@@ -79,3 +86,6 @@ target_link_libraries(check_duplicate_ids "${HTS_LIB}")
 target_link_libraries(dedup_vcf "${HTS_LIB}")
 target_link_libraries(split_ins_to_dup "${HTS_LIB}")
 target_link_libraries(expand_aux_haplotypes "${HTS_LIB}")
+
+# benchmark
+target_link_libraries(set_gt "${HTS_LIB}")
