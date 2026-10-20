@@ -79,20 +79,24 @@ void generate_read_evidence_block(int id, int contig_id, const std::string& chr,
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
     std::unordered_map<std::string, std::vector<sv_t*>> hp_indels_by_range;
 
-    for (sv_t* sv : svs) {
-        if (USE_HP_SPECIFIC_PATH && should_genotype_as_hp_indel(sv, contig_seq, contig_len)) {
-            hts_pair_pos_t ref_hp_range = find_ref_hp_range_for_indel(sv, contig_seq, contig_len);
-            hp_indels_by_range[std::to_string(ref_hp_range.beg) + ":" + std::to_string(ref_hp_range.end)].push_back(sv);
-        } else if (sv->svtype() == "DEL") {
-            deletion_t* del = static_cast<deletion_t*>(sv);
-            write_aligned_del_read_evidence(del, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
-        } else if (sv->svtype() == "DUP") {
-            duplication_t* dup = static_cast<duplication_t*>(sv);
-            if (dup->svlen() <= stats.read_len-2*config.min_clip_len) write_aligned_small_dup_read_evidence(dup, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
-            else write_aligned_large_dup_read_evidence(dup, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
-        } else if (sv->svtype() == "INS") {
-            insertion_t* ins = static_cast<insertion_t*>(sv);
-            write_aligned_ins_read_evidence(ins, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
+    {
+        cram_required_fields_guard_t required_fields(bam_file->file, INT_MAX & ~SAM_QUAL);
+        // DEL/DUP/INS evidence never reads base qualities; SAM_SEQ must stay in the mask because htslib mishandles the reference count when one reader mixes SEQ and non-SEQ decodes.
+        for (sv_t* sv : svs) {
+            if (USE_HP_SPECIFIC_PATH && should_genotype_as_hp_indel(sv, contig_seq, contig_len)) {
+                hts_pair_pos_t ref_hp_range = find_ref_hp_range_for_indel(sv, contig_seq, contig_len);
+                hp_indels_by_range[std::to_string(ref_hp_range.beg) + ":" + std::to_string(ref_hp_range.end)].push_back(sv);
+            } else if (sv->svtype() == "DEL") {
+                deletion_t* del = static_cast<deletion_t*>(sv);
+                write_aligned_del_read_evidence(del, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
+            } else if (sv->svtype() == "DUP") {
+                duplication_t* dup = static_cast<duplication_t*>(sv);
+                if (dup->svlen() <= stats.read_len-2*config.min_clip_len) write_aligned_small_dup_read_evidence(dup, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
+                else write_aligned_large_dup_read_evidence(dup, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
+            } else if (sv->svtype() == "INS") {
+                insertion_t* ins = static_cast<insertion_t*>(sv);
+                write_aligned_ins_read_evidence(ins, bam_file, contig_seq, contig_len, stats, config, aligner, *evidence_logger);
+            }
         }
     }
 

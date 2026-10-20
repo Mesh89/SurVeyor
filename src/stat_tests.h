@@ -22,7 +22,7 @@ struct cram_required_fields_guard_t {
     htsFile* file;
 
     cram_required_fields_guard_t(htsFile* file, int fields) : file(hts_get_format(file)->format == cram ? file : nullptr) {
-        if (this->file && hts_set_opt(this->file, CRAM_OPT_REQUIRED_FIELDS, fields) != 0) throw std::runtime_error("Failed to set CRAM required fields for stat tests.");
+        if (this->file && hts_set_opt(this->file, CRAM_OPT_REQUIRED_FIELDS, fields) != 0) throw std::runtime_error("Failed to set CRAM required fields.");
     }
     ~cram_required_fields_guard_t() {
         if (file) hts_set_opt(file, CRAM_OPT_REQUIRED_FIELDS, INT_MAX);
