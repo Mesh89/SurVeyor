@@ -609,7 +609,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_name, char* contig_seq, std::string junction_seq, std::string junction_qual,
 		hts_pos_t ref_remap_lh_start, hts_pos_t ref_remap_lh_end, hts_pos_t ref_remap_rh_start, hts_pos_t ref_remap_rh_end, 
 		StripedSmithWaterman::Aligner& aligner, int lowq_junction_prefix, int lowq_junction_suffix,
-	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000, bool split_only = false) {
+	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000, bool split_only = false, const std::set<int>* cigar_indel_lengths = nullptr) {
 		// do not find aux SNPs in low-quality regions of the junction sequence
 
 	const int MAX_REF_REMAP_LEN = 100000;
@@ -798,7 +798,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 			// since the inserted sequence is also aligned to the sequence. This can lead to suboptimal duplications being called instead of correct insertions
 			// Furthermore, for complex small insertions (i.e., left bp < right bp), we can sometimes obtain a simpler representation this way
 			if ((prefix_mh_len > 0 || left_bp < right_bp) && remap_windows_overlap && middle_part.length() <= 50) {
-				if (!is_clipped(full_aln, config.min_clip_len)) return full_svs;
+				hts_pos_t net_len = alt_span_len - ref_span_len;
+				bool supported_split = full_svs.empty() && cigar_indel_lengths != nullptr && (cigar_indel_lengths->count(net_len) || cigar_indel_lengths->count(-net_len));
+				if (!is_clipped(full_aln, config.min_clip_len) && !supported_split) return full_svs;
 			}
 
 			std::shared_ptr<sv_t> sv = std::make_shared<insertion_t>(contig_name, left_bp, right_bp, middle_part, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
@@ -1073,9 +1075,12 @@ std::vector<std::shared_ptr<sv_t>> detect_svs(std::string& contig_name, char* co
 		return std::vector<std::shared_ptr<sv_t>>();
 	}
 
+	std::set<int> cigar_indel_lengths;
+	if (rc_consensus != nullptr) cigar_indel_lengths.insert(rc_consensus->cigar_indel_lengths.begin(), rc_consensus->cigar_indel_lengths.end());
+	if (lc_consensus != nullptr) cigar_indel_lengths.insert(lc_consensus->cigar_indel_lengths.begin(), lc_consensus->cigar_indel_lengths.end());
 	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, consensus_junction_seq, consensus_junction_qual, ref_remap_lh_start, 
 		ref_remap_lh_end, ref_remap_rh_start, ref_remap_rh_end, aligner, lowq_junction_prefix, lowq_junction_suffix,
-		stats, config, contig_len, stats.max_is);
+		stats, config, contig_len, stats.max_is, false, &cigar_indel_lengths);
 
 	// This is meant to rescue an edge case where two deletions are separated by a small island.
 	// The clip is supposed to align to the island, but the mate window may contradict that, due to mates aligning past both deletions.

@@ -586,7 +586,7 @@ bool realign_haplotype_atoms(std::shared_ptr<sv_t> sv, std::vector<std::shared_p
 }
 
 std::shared_ptr<sv_t> update_main_var_from_realigned_vars(std::shared_ptr<sv_t> var, std::vector<std::shared_ptr<sv_t>>& vars, std::vector<snp_t>& snps) {
-	if (vars.empty()) return nullptr;
+	if (vars.empty()) return !snps.empty() && !var->aux_indels.empty() ? var : nullptr;
 
 	std::shared_ptr<sv_t> primary = vars.front();
 	std::string aligned_chr = primary->chr;
