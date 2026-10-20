@@ -433,7 +433,7 @@ bcf_srs_t* open_region_reader(const std::string& vcf_fname, const std::string& c
 }
 
 void process_variants(int, const std::string& in_vcf_fname, const std::string& chrom, char* chr_seq, bcf_hdr_t* in_vcf_hdr,
-                      chrom_variants_t& variants) {
+                      chrom_variants_t& variants, bool write_aux_snp) {
     bcf_srs_t* input_reader = open_region_reader(in_vcf_fname, chrom);
     while (bcf_sr_next_line(input_reader)) {
         bcf1_t* record = bcf_dup(bcf_sr_get_line(input_reader, 0));
@@ -462,7 +462,7 @@ void process_variants(int, const std::string& in_vcf_fname, const std::string& c
             std::istringstream ss(s_data);
             std::string snp_str;
             int i = 0;
-            while (std::getline(ss, snp_str, ',')) {
+            while (write_aux_snp && std::getline(ss, snp_str, ',')) {
                 snp_t snp(snp_str);
                 std::string id = std::string(b->d.id) + ".SNP." + std::to_string(i++);
                 std::vector<int> gt = get_bcf_gt(in_vcf_hdr, b);
@@ -558,6 +558,7 @@ int main(int argc, char* argv[]) {
     std::string out_stvars_prefix = argv[3];
     std::string reference_fname = argv[4];
     std::string workdir = argv[5];
+    bool write_aux_snp = argc > 6 && std::string(argv[6]) == "--write-aux-snp";
     config.parse(workdir + "/config.txt");
     std::ifstream par_bed(config.par_regions_bed);
     for (std::string line; std::getline(par_bed, line);) {
@@ -589,7 +590,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::future<void>> futures;
     for (int rid = 0; rid < n_chroms; rid++) {
         std::string chrom = chrom_names[rid];
-        std::future<void> future = thread_pool.push(process_variants, in_vcf_fname, chrom, chr_seqs.get_seq(chrom), in_vcf_hdr, std::ref(variants_by_chrom[rid]));
+        std::future<void> future = thread_pool.push(process_variants, in_vcf_fname, chrom, chr_seqs.get_seq(chrom), in_vcf_hdr, std::ref(variants_by_chrom[rid]), write_aux_snp);
         futures.push_back(std::move(future));
     }
     thread_pool.stop(true);

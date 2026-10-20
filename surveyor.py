@@ -53,6 +53,7 @@ call_genotype_shared_options_parser.add_argument('--per-contig-stats', action='s
                         help='Depth statistics are computed separately for each contig. Useful when one or more of the target contigs are expected to have '
                         'dramatically different depth than others. Otherwise, it is not recommended to use this option.')
 call_genotype_shared_options_parser.add_argument('--two-pass', action='store_true', help='Activate two-pass genotyping.')
+call_genotype_shared_options_parser.add_argument('--write-aux-snp', action='store_true', help='Write auxiliary SNPs to the final result VCF.')
 call_genotype_shared_options_parser.add_argument('--min-diff-hsr', type=int, default=3, help='Minimum number of differences with the reference \
                         (considered as number of insertions, deletions and mismatches) for a read to be considered a hidden split read.')
 call_genotype_shared_options_parser.add_argument('--tr-bed', help='BED file with tandem repetitive regions. If provided, it will be used for a more aggrestive duplicate removal.')
@@ -472,7 +473,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
         run_cmd(reconcile_vcf_gt_cmd)
 
         write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s/intermediate_results/calls-with-gt.reconciled.vcf.gz %s/calls-genotyped.smvars %s/calls-genotyped.stvars %s %s" % (workdir, workdir, workdir, reference_fname, workdir)
-        run_cmd(write_aux_snps_cmd)
+        run_cmd(write_aux_snps_cmd + (" --write-aux-snp" if cmd_args.write_aux_snp else ""))
     else:
         for i in range(n_iters, n_iters+1):
             prev_iter_gt_file = workdir + "/intermediate_results/calls-with-gt.iter%d.vcf.gz" % (i-1)
@@ -493,7 +494,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
         run_cmd(reconcile_vcf_gt_cmd)
 
         write_aux_snps_cmd = SURVEYOR_PATH + "/bin/write_aux_snps %s %s/calls-genotyped.reassigned.smvars %s/calls-genotyped.reassigned.stvars %s %s" % (reconciled_file, workdir, workdir, reference_fname, workdir)
-        run_cmd(write_aux_snps_cmd)
+        run_cmd(write_aux_snps_cmd + (" --write-aux-snp" if cmd_args.write_aux_snp else ""))
 
 
 
