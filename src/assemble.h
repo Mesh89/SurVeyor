@@ -102,11 +102,11 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 
 void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, std::vector<int>& out_edges,
 		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev,
-		int max_mismatches, int min_overlap) {
+		double max_seq_error, int min_overlap) {
 
 	int n = read_seqs.size();
 	surveyor_cache::key_builder_t key_builder;
-	key_builder.add(max_mismatches);
+	key_builder.add(max_seq_error);
 	key_builder.add(min_overlap);
 	uint64_t order_size = order.size();
 	key_builder.add(order_size);
@@ -141,9 +141,9 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 			if (s1 == s2) continue;
 
 			int max_overlap = std::min(s1.length(), s2.length())-1;
-			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, 1.0, min_overlap, max_overlap, max_mismatches);
+			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, max_seq_error, min_overlap, max_overlap);
 			bool spa1_homopolymer = is_homopolymer(s2.c_str(), spa1.overlap);
-			suffix_prefix_aln_t spa2 = aln_suffix_prefix(s2, s1, 1, -4, 1.0, min_overlap, max_overlap, max_mismatches);
+			suffix_prefix_aln_t spa2 = aln_suffix_prefix(s2, s1, 1, -4, max_seq_error, min_overlap, max_overlap);
 			bool spa2_homopolymer = is_homopolymer(s1.c_str(), spa2.overlap);
 
 			if (spa1.overlap && spa2.overlap) {
@@ -212,7 +212,7 @@ std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_rea
 	std::vector<int> out_edges(n);
 	std::vector<std::vector<edge_t> > l_adj(n), l_adj_rev(n);
 
-	build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, 1, config.min_clip_len);
+	build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, config.max_seq_error, config.min_clip_len);
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
@@ -222,7 +222,7 @@ std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_rea
 			l_adj[i].clear();
 			l_adj_rev[i].clear();
 		}
-		build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, 0, config.min_clip_len);
+		build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, 0.0, config.min_clip_len);
 
 		int min_overlap = config.min_clip_len;
 		for (; min_overlap <= stats.read_len/2; min_overlap += 10) {
