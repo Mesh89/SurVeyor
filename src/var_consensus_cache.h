@@ -1,11 +1,13 @@
 #ifndef VAR_CONSENSUS_CACHE_H
 #define VAR_CONSENSUS_CACHE_H
 
+#include <dirent.h>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include "types.h"
 #include "sam_utils.h"
 
@@ -100,9 +102,18 @@ class cache_t {
     std::string directory;
     bool reading = false;
     std::unordered_map<std::string, contig_cache_t> records;
+    std::unordered_set<std::string> existing_files; // when reading: the file names in directory.
 public:
     bool active() const { return !directory.empty(); }
-    void initialize(const std::string& path, bool read) { directory = path; reading = read; records.clear(); }
+    void initialize(const std::string& path, bool read) {
+        directory = path; reading = read; records.clear(); existing_files.clear();
+        if (reading && active()) {
+            if (DIR* dir = opendir(directory.c_str())) {
+                while (struct dirent* entry = readdir(dir)) existing_files.insert(entry->d_name);
+                closedir(dir);
+            }
+        }
+    }
 
     // Called before any workers start. Map keys stay fixed while workers run;
     // each SV is processed by one worker, so separate records need no locking.
@@ -112,7 +123,9 @@ public:
         cache.id = contig_id;
         auto& by_id = cache.by_id;
         if (reading) {
-            std::ifstream in(directory+"/"+std::to_string(contig_id)+".tsv");
+            std::string fname = std::to_string(contig_id) + ".tsv";
+            if (!existing_files.count(fname)) return;
+            std::ifstream in(directory+"/"+fname);
             std::string line;
             while (std::getline(in, line)) {
                 std::istringstream row(line);
