@@ -421,10 +421,19 @@ std::tuple<base_frequencies_t, base_frequencies_t, base_frequencies_t> get_right
     return std::make_tuple(bf50, bf100, bf500);
 }
 
-bool is_homopolymer(const char* seq, int len, double threshold = 0.8) {
-    return get_base_frequencies(seq, len).max_freq() >= threshold;
+// Return the dominant canonical base, or '\0' when the threshold is not met.
+char is_homopolymer(const char* seq, int len, double threshold = 0.8) {
+    base_frequencies_t frequencies = get_base_frequencies(seq, len);
+    if (frequencies.max_freq() >= threshold) {
+        int max_count = frequencies.max();
+        if (frequencies.a == max_count) return 'A';
+        if (frequencies.c == max_count) return 'C';
+        if (frequencies.g == max_count) return 'G';
+        return 'T';
+    }
+    return '\0';
 }
-bool is_homopolymer(std::string seq, double threshold = 0.8) {
+char is_homopolymer(std::string seq, double threshold = 0.8) {
 	return is_homopolymer(seq.data(), seq.length(), threshold);
 }
 

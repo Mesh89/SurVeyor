@@ -15,6 +15,22 @@
 #include "htslib/hts.h"
 #include "consensus.h"
 #include "ungapped_alignment.h"
+#include "utils.h"
+
+bool reject_assembly_overlap(const std::string& left, const std::string& right, int overlap) {
+	char hp_base = is_homopolymer(right.data(), overlap);
+	if (hp_base == 'C' || hp_base == 'G') return true;
+	hp_base = is_homopolymer(left.data()+left.length()-overlap, overlap);
+	if (hp_base == 'C' || hp_base == 'G') return true;
+
+	size_t first_non_acgt = right.find_first_not_of("ACGT");
+	for (int displacement = 1; displacement <= 6 && displacement < overlap; displacement++) {
+		int shorter = overlap-displacement;
+		const char* suffix = left.data()+left.length()-shorter;
+		if (shorter <= first_non_acgt && number_of_mismatches_fast(suffix, right.data(), shorter, 0) == 0) return true;
+	}
+	return false;
+}
 
 struct path_permission_t {
 	bool can_start_path, can_end_path;

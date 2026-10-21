@@ -45,9 +45,8 @@ void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<
 				min_overlap = std::max(min_overlap, unclipped_i_end - unclipped_j_start);
 			}
 			suffix_prefix_aln_t spa = aln_suffix_prefix(alns[i].contig->seq, alns[j].contig->seq, 1, -4, config.max_seq_error, min_overlap);
-			bool spa_i_homopolymer = is_homopolymer(alns[i].contig->seq.c_str()+alns[i].contig->seq.length()-spa.overlap, spa.overlap);
-			bool spa_j_homopolymer = is_homopolymer(alns[j].contig->seq.c_str(), spa.overlap);
-			if (spa.overlap && !spa_i_homopolymer && !spa_j_homopolymer) {
+			bool rejected = reject_assembly_overlap(alns[i].contig->seq, alns[j].contig->seq, spa.overlap);
+			if (spa.overlap && !rejected) {
 				out_edges[i]++;
 				l_adj[i].push_back({j, spa.score, spa.overlap});
 				l_adj_rev[j].push_back({i, spa.score, spa.overlap});
@@ -274,6 +273,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 			suffix_prefix_aln_t spa1 = aln_suffix_prefix(retained_assembled_seqs[j], scaffold, 1, -4, config.max_seq_error, config.min_clip_len);
 			suffix_prefix_aln_t spa2 = aln_suffix_prefix(scaffold, retained_assembled_seqs[j+1], 1, -4, config.max_seq_error, config.min_clip_len);
 			if (spa1.overlap && spa2.overlap && best_link_w < spa1.score+spa2.score) {
+				if (reject_assembly_overlap(retained_assembled_seqs[j], scaffold, spa1.overlap) || reject_assembly_overlap(scaffold, retained_assembled_seqs[j+1], spa2.overlap)) continue;
 				best_link = j, best_link_w = spa1.score+spa2.score;
 				best_link_overlap = {spa1.overlap, spa2.overlap};
 			}

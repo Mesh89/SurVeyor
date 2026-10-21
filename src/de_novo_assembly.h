@@ -64,32 +64,32 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 
 			int max_overlap = std::min(s1.length(), s2.length())-1;
 			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, max_seq_error, min_overlap, max_overlap);
-			bool spa1_homopolymer = is_homopolymer(s2.c_str(), spa1.overlap);
+			bool spa1_rejected = reject_assembly_overlap(s1, s2, spa1.overlap);
 			suffix_prefix_aln_t spa2 = aln_suffix_prefix(s2, s1, 1, -4, max_seq_error, min_overlap, max_overlap);
-			bool spa2_homopolymer = is_homopolymer(s1.c_str(), spa2.overlap);
+			bool spa2_rejected = reject_assembly_overlap(s2, s1, spa2.overlap);
 
 			if (spa1.overlap && spa2.overlap) {
 				if (spa1.score >= spa2.score && order[i] <= order[j]) {
-					if (!spa1_homopolymer) {
+					if (!spa1_rejected) {
 						out_edges[i]++;
 						l_adj[i].push_back({j, spa1.score, spa1.overlap});
 						l_adj_rev[j].push_back({i, spa1.score, spa1.overlap});
 					}
 				} else if (spa1.score < spa2.score && order[j] <= order[i]) {
-					if (!spa2_homopolymer) {
+					if (!spa2_rejected) {
 						out_edges[j]++;
 						l_adj[j].push_back({i, spa2.score, spa2.overlap});
 						l_adj_rev[i].push_back({j, spa2.score, spa2.overlap});
 					}
 				}
 			} else if (spa1.overlap && order[i] <= order[j]) {
-				if (!spa1_homopolymer) {
+				if (!spa1_rejected) {
 					out_edges[i]++;
 					l_adj[i].push_back({j, spa1.score, spa1.overlap});
 					l_adj_rev[j].push_back({i, spa1.score, spa1.overlap});
 				}
 			} else if (spa2.overlap && order[j] <= order[i]) {
-				if (!spa2_homopolymer) {
+				if (!spa2_rejected) {
 					out_edges[j]++;
 					l_adj[j].push_back({i, spa2.score, spa2.overlap});
 					l_adj_rev[i].push_back({j, spa2.score, spa2.overlap});
