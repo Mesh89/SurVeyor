@@ -333,61 +333,6 @@ struct sync_hts_reader_t {
     }
 };
 
-std::pair<int, int> get_dels_ins_in_first_n_chars(std::vector<uint32_t>& cigar, int n) {
-
-    if (n < 0) return {0, 0};
-
-    int dels = 0, inss = 0;
-    int offset = 0;
-    for (uint32_t c : cigar) {
-        int len = bam_cigar_oplen(c);
-        char op = bam_cigar_opchr(c);
-
-        // since we are "unrolling" soft-clipped bases, they must be accounted for
-        bool consumes_ref = bam_cigar_type(bam_cigar_op(c)) & 2 || op == 'S';
-        if (consumes_ref && offset + len > n) {
-            len = n-offset;
-        }
-
-        if (op == 'D') {
-            dels += len;
-        } else if (op == 'I') {
-            inss += len;
-        }
-
-        if (consumes_ref) {
-            offset += len;
-            if (offset == n) break;
-        }
-    }
-    return {dels, inss};
-}
-
-hts_pos_t get_start_offset(bam1_t* r1, bam1_t* r2) {
-    hts_pos_t offset = get_unclipped_start(r2) - get_unclipped_start(r1);
-    /* suppose the difference in starting position between R1 and R2 is N, we may be tempted to align the start
-     * of R2 to position N+1 of R1
-     * However, if R1 has insertions or deletions in the first N bps, the difference in starting positions
-     * is no longer accurate to decide where the start of R2 aligns on R1.
-     * If R1 has I bps inserted in the first N bps, then R2 will align to position N+1+I.
-     * Conversely, if D bps are deleted, R2 will align to position N+1-D
-     */
-    std::vector<uint32_t> cigar(bam_get_cigar(r1), bam_get_cigar(r1)+r1->core.n_cigar);
-    std::pair<int, int> del_ins = get_dels_ins_in_first_n_chars(cigar, offset);
-    return offset + del_ins.second - del_ins.first;
-}
-
-hts_pos_t get_end_offset(bam1_t* r1, bam1_t* r2) {
-    hts_pos_t offset = get_unclipped_end(r2) - get_unclipped_end(r1);
-    uint32_t* cigar_array = bam_get_cigar(r2);
-    std::vector<uint32_t> rev_cigar;
-    for (int i = r2->core.n_cigar-1; i >= 0; i--) {
-        rev_cigar.push_back(cigar_array[i]);
-    }
-    std::pair<int, int> del_ins = get_dels_ins_in_first_n_chars(rev_cigar, offset);
-    return offset + del_ins.second - del_ins.first;
-}
-
 std::vector<hts_pos_t> get_read_start_offsets(std::deque<bam1_t*>& reads, clip_read_cache_t& read_cache) {
     std::vector<hts_pos_t> read_start_offsets;
     if (reads.empty()) return read_start_offsets;

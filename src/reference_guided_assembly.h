@@ -60,13 +60,6 @@ void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<
 	// 2 - in regular assembly, we only report contigs made of at last 2 reads. Here we report even single reads
 }
 
-struct seq_pair_overlap_t {
-	int i1, i2;
-	int overlap, score;
-
-	seq_pair_overlap_t(int i1, int i2, int overlap, int score) : i1(i1), i2(i2), overlap(overlap), score(score) {}
-};
-
 // remove contigs that are fully contained within another contig
 void remove_fully_contained(std::vector<guided_contig_t>& assembled_contigs, std::string& reference, StripedSmithWaterman::Aligner& aligner) {
 	StripedSmithWaterman::Filter filter;

@@ -167,29 +167,6 @@ static void filter_reads_fully_contained_in_seed(std::vector<std::string>& read_
 	read_starts.swap(filtered_read_starts);
 }
 
-bool is_vertex_in_cycle(std::vector<std::vector<edge_t> >& l_adj, int i) {
-	std::stack<int> s;
-	for (edge_t& e : l_adj[i]) {
-		s.push(e.next);
-	}
-
-	// check if node i can reach itself - i.e., it is part of a cycle
-	std::vector<bool> visited(l_adj.size(), false);
-	bool i_in_cycle = false;
-	while (!s.empty()) {
-		int curr = s.top();
-		s.pop();
-		if (visited[curr]) continue;
-		visited[curr] = true;
-
-		if (curr == i) return true;
-		for (edge_t& e : l_adj[curr]) {
-			s.push(e.next);
-		}
-	}
-	return false;
-}
-
 struct extension_graph_cache_value_t {
 	std::vector<int> out_edges;
 	std::vector<std::vector<edge_t> > l_adj, l_adj_rev;
