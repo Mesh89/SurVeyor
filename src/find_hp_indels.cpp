@@ -26,6 +26,7 @@
 #include "../libs/ssw_selected.h"
 #include "utils.h"
 #include "sam_utils.h"
+#include "ungapped_alignment.h"
 #include "hp_mismatch_rate_thresholds.h"
 #include "vcf_utils.h"
 #include "consensus.h"

@@ -10,6 +10,7 @@
 #include "htslib/sam.h"
 #include "assembly_utils.h"
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 #include "utils.h"
 #include "sam_utils.h"
 #include "dc_remapper.h"

@@ -11,6 +11,7 @@
 #include "../libs/exact_cache.h"
 #include "assembly_utils.h"
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 #include "types.h"
 #include "dc_remapper.h"
 

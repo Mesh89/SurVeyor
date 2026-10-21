@@ -20,6 +20,7 @@
 #include "assembly_utils.h"
 #include "sam_utils.h"
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 #include "hsr_utils.h"
 #include "vcf_utils.h"
 #include "utils.h"

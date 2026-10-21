@@ -6,6 +6,7 @@
 #include "htslib/sam.h"
 #include "types.h"
 #include "sam_utils.h"
+#include "ungapped_alignment.h"
 #include "utils.h"
 #include "stat_tests.h"
 #include "../libs/ssw_selected.h"

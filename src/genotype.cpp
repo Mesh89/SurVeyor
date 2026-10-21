@@ -20,6 +20,7 @@
 #include "htslib/tbx.h"
 
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 #include "types.h"
 #include "utils.h"
 #include "sam_utils.h"

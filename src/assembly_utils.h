@@ -14,7 +14,7 @@
 
 #include "htslib/hts.h"
 #include "consensus.h"
-#include "sw_utils.h"
+#include "ungapped_alignment.h"
 
 struct path_permission_t {
 	bool can_start_path, can_end_path;

@@ -17,6 +17,7 @@
 #include "utils.h"
 #include "sam_utils.h"
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 
 struct cram_required_fields_guard_t {
     htsFile* file;

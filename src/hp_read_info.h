@@ -11,6 +11,7 @@
 #include "../libs/ssw_selected.h"
 #include "genotype.h"
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 
 constexpr int UNDEFINED_HP_LEN = -1;
 

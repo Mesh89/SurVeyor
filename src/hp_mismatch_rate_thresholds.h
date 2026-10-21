@@ -16,6 +16,7 @@
 #include "hp_read_info.h"
 #include "consensus.h"
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 
 static const char HP_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "hp_3p_mismatch_rate_thresholds.tsv";
 static const char DNR_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "dnr_3p_mismatch_rate_thresholds.tsv";

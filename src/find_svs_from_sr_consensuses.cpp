@@ -23,6 +23,7 @@
 #include "sam_utils.h"
 #include "extend_1sr_consensus.h"
 #include "sw_utils.h"
+#include "ungapped_alignment.h"
 #include "types.h"
 #include "vcf_utils.h"
 #include "clustering_utils.h"
