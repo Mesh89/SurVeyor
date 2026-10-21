@@ -1,7 +1,6 @@
 #ifndef GUIDED_REFERENCE_ASSEMBLE_H
 #define GUIDED_REFERENCE_ASSEMBLE_H
 
-#include <array>
 #include <functional>
 #include <memory>
 #include <queue>
@@ -19,7 +18,7 @@
 
 struct guided_contig_t {
 	std::string seq;
-	std::vector<std::array<int, 8> > votes; // A/C/G/T quality sums, then A/C/G/T counts.
+	std::vector<base_votes_t> votes;
 };
 
 struct aln_guided_contig_t {
@@ -140,49 +139,24 @@ std::vector<guided_contig_t> generate_reference_guided_contigs(std::string refer
 
 	std::vector<guided_contig_t> assembled_contigs;
 	std::vector<bool> used(n);
+	std::vector<path_permission_t> path_permissions(n, {true, true});
 	while (true) {
-		// compute longest paths
-		std::vector<int> best_scores(n);
-		std::vector<edge_t> best_edges(n);
-		for (int i : rev_topological_order) {
-			if (used[i]) continue;
-			for (edge_t& e : l_adj_rev[i]) {
-				if (best_scores[e.next] < e.score + best_scores[i]) {
-					best_scores[e.next] = e.score + best_scores[i];
-					best_edges[e.next] = {i, e.score, e.overlap};
-				}
-			}
-		}
+		assembly_path_t path = select_assembly_path(l_adj_rev, rev_topological_order, path_permissions, used);
+		if (path.vertices.empty()) break;
 
-		int best_score = 0, curr_vertex = 0;
-		for (int i = 0; i < best_scores.size(); i++) {
-			if (best_score < best_scores[i]) {
-				best_score = best_scores[i];
-				curr_vertex = i;
-			}
-		}
-		if (best_score == 0) break;
-
-		guided_contig_t assembled_contig = *alns[curr_vertex].contig;
-		while (best_edges[curr_vertex].overlap) {
-			used[curr_vertex] = true;
-			int overlap = best_edges[curr_vertex].overlap;
-			curr_vertex = best_edges[curr_vertex].next;
-			const guided_contig_t& next_contig = *alns[curr_vertex].contig;
-			int offset = assembled_contig.seq.length()-overlap;
-			assembled_contig.seq += next_contig.seq.substr(overlap);
-			assembled_contig.votes.resize(assembled_contig.seq.length());
+		assembly_sequence_t assembly = reconstruct_assembly_path(path, [&alns](int vertex) -> const std::string& { return alns[vertex].contig->seq; });
+		guided_contig_t assembled_contig{std::move(assembly.seq), alns[path.vertices[0]].contig->votes};
+		assembled_contig.votes.resize(assembled_contig.seq.length());
+		for (int v = 1; v < path.vertices.size(); v++) {
+			const guided_contig_t& next_contig = *alns[path.vertices[v]].contig;
+			int offset = assembly.offsets[v];
 			for (int i = 0; i < next_contig.votes.size(); i++) {
-				for (int j = 0; j < 8; j++) assembled_contig.votes[offset+i][j] += next_contig.votes[i][j];
+				assembled_contig.votes[offset+i].merge(next_contig.votes[i]);
 			}
 		}
-		used[curr_vertex] = true;
 
 		for (int i = 0; i < assembled_contig.seq.length(); i++) {
-			const std::array<int, 8>& votes = assembled_contig.votes[i];
-			if (votes[4] + votes[5] + votes[6] + votes[7] == 0) continue;
-			auto best_base_score = std::max({std::make_tuple(votes[0], votes[4], 'A'), std::make_tuple(votes[1], votes[5], 'C'), std::make_tuple(votes[2], votes[6], 'G'), std::make_tuple(votes[3], votes[7], 'T')});
-			assembled_contig.seq[i] = std::get<2>(best_base_score);
+			assembled_contig.seq[i] = assembled_contig.votes[i].best_base(assembled_contig.seq[i]);
 		}
 		assembled_contigs.push_back(std::move(assembled_contig));
 	}
@@ -215,14 +189,11 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 
 	std::vector<guided_contig_t> read_contigs;
 	for (int i = 0; i < read_seqs.size(); i++) {
-		guided_contig_t contig{read_seqs[i], std::vector<std::array<int, 8> >(read_seqs[i].length())};
+		guided_contig_t contig{read_seqs[i], std::vector<base_votes_t>(read_seqs[i].length())};
 		for (int j = 0; j < contig.seq.length(); j++) {
 			char c = contig.seq[j];
 			int qual = read_quals.empty() ? 0 : read_quals[i][j];
-			if (c == 'A') { contig.votes[j][0] = qual; contig.votes[j][4] = 1; }
-			else if (c == 'C') { contig.votes[j][1] = qual; contig.votes[j][5] = 1; }
-			else if (c == 'G') { contig.votes[j][2] = qual; contig.votes[j][6] = 1; }
-			else if (c == 'T') { contig.votes[j][3] = qual; contig.votes[j][7] = 1; }
+			contig.votes[j].add(c, qual);
 		}
 		read_contigs.push_back(std::move(contig));
 	}

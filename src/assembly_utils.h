@@ -38,6 +38,70 @@ struct edge_t {
 	edge_t(int next, int score, int overlap) : next(next), score(score), overlap(overlap) {}
 };
 
+struct assembly_path_t {
+	std::vector<int> vertices;
+	std::vector<int> overlaps; // overlaps[i] joins vertices[i] to vertices[i+1].
+};
+
+assembly_path_t select_assembly_path(const std::vector<std::vector<edge_t> >& l_adj_rev, const std::vector<int>& rev_topological_order,
+		const std::vector<path_permission_t>& path_permissions, std::vector<bool>& used) {
+	int n = l_adj_rev.size();
+	// compute longest paths
+	std::vector<int> best_scores(n);
+	std::vector<edge_t> best_edges(n);
+	for (int i : rev_topological_order) {
+		if (used[i]) continue;
+		if (best_scores[i] == 0 && !path_permissions[i].can_end_path) continue;
+		for (const edge_t& e : l_adj_rev[i]) {
+			if (best_scores[e.next] < e.score + best_scores[i]) {
+				best_scores[e.next] = e.score + best_scores[i];
+				best_edges[e.next] = {i, e.score, e.overlap};
+			}
+		}
+	}
+
+	// Used vertices skip propagation above, but may still be selected as starts.
+	int best_score = 0, curr_vertex = 0;
+	for (int i = 0; i < best_scores.size(); i++) {
+		if (path_permissions[i].can_start_path && best_score < best_scores[i]) {
+			best_score = best_scores[i];
+			curr_vertex = i;
+		}
+	}
+	assembly_path_t path;
+	if (best_score == 0) return path;
+
+	path.vertices.push_back(curr_vertex);
+	while (best_edges[curr_vertex].overlap) {
+		used[curr_vertex] = true;
+		path.overlaps.push_back(best_edges[curr_vertex].overlap);
+		curr_vertex = best_edges[curr_vertex].next;
+		path.vertices.push_back(curr_vertex);
+	}
+	used[curr_vertex] = true;
+	return path;
+}
+
+struct assembly_sequence_t {
+	std::string seq;
+	std::vector<int> offsets; // One start offset per vertex in path order.
+};
+
+template<typename SequenceAccessor>
+assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const SequenceAccessor& sequence) {
+	assembly_sequence_t assembly;
+	if (path.vertices.empty()) return assembly;
+
+	assembly.seq = sequence(path.vertices[0]);
+	assembly.offsets.push_back(0);
+	for (int i = 0; i < path.overlaps.size(); i++) {
+		int overlap = path.overlaps[i];
+		assembly.offsets.push_back(assembly.seq.length()-overlap);
+		assembly.seq += sequence(path.vertices[i+1]).substr(overlap);
+	}
+	return assembly;
+}
+
 std::vector<int> find_rev_topological_order(int n, std::vector<int> out_edges, std::vector<std::vector<edge_t> >& l_adj_rev) {
 
 	std::queue<int> sinks;
@@ -147,8 +211,7 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 	for (std::string& read : reads) {
 		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, mismatch_score));
 	}
-	std::vector<int> As(contig.length()), Cs(contig.length()), Gs(contig.length()), Ts(contig.length());
-	std::vector<int> A_quals(contig.length()), C_quals(contig.length()), G_quals(contig.length()), T_quals(contig.length());
+	std::vector<base_votes_t> votes(contig.length());
 	std::vector<strand_base_scores_t> strand_scores(read_is_reverse.empty() ? 0 : contig.length());
 	for (int i = 0; i < reads.size(); i++) {
 		ungapped_aln_t& ungapped_aln = ungapped_alns[i];
@@ -159,48 +222,27 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 			for (int j = ungapped_aln.query_begin; j < ungapped_aln.query_end; j++) {
 				int ref_pos = j - ungapped_aln.query_begin + ungapped_aln.ref_begin;
 
-				if (ref_pos >= As.size()) {
-					// extend As, Cs, Gs, Ts
-					int old_size = As.size();
-					As.resize(ref_pos+1);
-					Cs.resize(ref_pos+1);
-					Gs.resize(ref_pos+1);
-					Ts.resize(ref_pos+1);
-					A_quals.resize(ref_pos+1);
-					C_quals.resize(ref_pos+1);
-					G_quals.resize(ref_pos+1);
-					T_quals.resize(ref_pos+1);
+				if (ref_pos >= votes.size()) {
+					votes.resize(ref_pos+1);
 					if (!read_is_reverse.empty()) strand_scores.resize(ref_pos+1);
-					for (int k = old_size; k < As.size(); k++) {
-						As[k] = Cs[k] = Gs[k] = Ts[k] = A_quals[k] = C_quals[k] = G_quals[k] = T_quals[k] = 0;
-					}
 				}
 
 				char c = reads[i][j];
 				int qual = quals.empty() ? 0 : quals[i][j];
 				if (!read_is_reverse.empty()) strand_scores[ref_pos].add(c, qual, read_is_reverse[i]);
-				if (c == 'A') { As[ref_pos]++; A_quals[ref_pos] += qual; }
-				else if (c == 'C') { Cs[ref_pos]++; C_quals[ref_pos] += qual; }
-				else if (c == 'G') { Gs[ref_pos]++; G_quals[ref_pos] += qual; }
-				else if (c == 'T') { Ts[ref_pos]++; T_quals[ref_pos] += qual; }
+				votes[ref_pos].add(c, qual);
 			}
 		}
 	}
 
-	contig.resize(As.size());
+	contig.resize(votes.size());
 
 	for (int i = 0; i < contig.length(); i++) {
 		if (!read_is_reverse.empty()) {
 			contig[i] = strand_scores[i].best_base(contig[i], i < preferred_bases.length() ? preferred_bases[i] : '\0');
 			continue;
 		}
-		if (As[i] + Cs[i] + Gs[i] + Ts[i] == 0) continue;
-
-		auto best_base_score = std::max({
-			std::make_tuple(A_quals[i], As[i], 'A'), std::make_tuple(C_quals[i], Cs[i], 'C'),
-			std::make_tuple(G_quals[i], Gs[i], 'G'), std::make_tuple(T_quals[i], Ts[i], 'T')
-		});
-		contig[i] = std::get<2>(best_base_score);
+		contig[i] = votes[i].best_base(contig[i]);
 	}
 }
 

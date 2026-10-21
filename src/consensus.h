@@ -48,6 +48,37 @@ inline int base_to_index(char base) {
     return indices[(unsigned char) base];
 }
 
+struct base_votes_t {
+    int quals[4] = {}, counts[4] = {}; // A/C/G/T quality sums and observation counts.
+
+    void add(char base, int qual) {
+        int index;
+        if (base == 'A') index = 0;
+        else if (base == 'C') index = 1;
+        else if (base == 'G') index = 2;
+        else if (base == 'T') index = 3;
+        else return;
+        quals[index] += qual;
+        counts[index]++;
+    }
+
+    void merge(const base_votes_t& votes) {
+        for (int base = 0; base < 4; base++) {
+            quals[base] += votes.quals[base];
+            counts[base] += votes.counts[base];
+        }
+    }
+
+    char best_base(char current_base) const {
+        if (counts[0] + counts[1] + counts[2] + counts[3] == 0) return current_base;
+        int best = 0;
+        for (int base = 1; base < 4; base++) {
+            if (quals[base] > quals[best] || (quals[base] == quals[best] && counts[base] >= counts[best])) best = base;
+        }
+        return "ACGT"[best];
+    }
+};
+
 struct strand_base_scores_t {
     double quals[2][4] = {};
     int coverage[2] = {};

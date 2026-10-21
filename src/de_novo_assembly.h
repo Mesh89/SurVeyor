@@ -174,46 +174,19 @@ std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_rea
 	std::vector<std::string> assembled_sequences;
 	std::vector<bool> used(n);
 	while (true) {
-		// compute longest paths
-		std::vector<int> best_scores(n);
-		std::vector<edge_t> best_edges(n);
-		for (int i : rev_topological_order) {
-			if (used[i]) continue;
-			if (best_scores[i] == 0 && !path_permissions[i].can_end_path) continue; // sink and cannot end path => discard
-			for (edge_t& e : l_adj_rev[i]) {
-				if (best_scores[e.next] < e.score + best_scores[i]) {
-					best_scores[e.next] = e.score + best_scores[i];
-					best_edges[e.next] = {i, e.score, e.overlap};
-				}
-			}
-		}
+		assembly_path_t path = select_assembly_path(l_adj_rev, rev_topological_order, path_permissions, used);
+		if (path.vertices.empty()) break;
 
-		int best_score = 0, curr_vertex = 0;
-		for (int i = 0; i < best_scores.size(); i++) {
-			if (path_permissions[i].can_start_path && best_score < best_scores[i]) {
-				best_score = best_scores[i];
-				curr_vertex = i;
-			}
-		}
-		if (best_score == 0) break;
-
-		std::string assembled_sequence = read_seqs[curr_vertex];
+		assembly_sequence_t assembly = reconstruct_assembly_path(path, [&read_seqs](int vertex) -> const std::string& { return read_seqs[vertex]; });
 		std::vector<std::string> used_reads; // track reads used to build this contig, so that we can use them for correction
 		std::vector<const uint8_t*> used_quals;
-		used_reads.push_back(read_seqs[curr_vertex]);
-		used_quals.push_back(read_quals[curr_vertex]);
-		while (best_edges[curr_vertex].overlap) {
-			used[curr_vertex] = true;
-			int overlap = best_edges[curr_vertex].overlap;
-			curr_vertex = best_edges[curr_vertex].next;
-			assembled_sequence += read_seqs[curr_vertex].substr(overlap);
-			used_reads.push_back(read_seqs[curr_vertex]);
-			used_quals.push_back(read_quals[curr_vertex]);
+		for (int vertex : path.vertices) {
+			used_reads.push_back(read_seqs[vertex]);
+			used_quals.push_back(read_quals[vertex]);
 		}
-		used[curr_vertex] = true;
 		if (std::find(used_quals.begin(), used_quals.end(), nullptr) != used_quals.end()) used_quals.clear();
-		correct_contig(assembled_sequence, used_reads, config.max_seq_error, config.min_clip_len, used_quals);
-		assembled_sequences.push_back(assembled_sequence);
+		correct_contig(assembly.seq, used_reads, config.max_seq_error, config.min_clip_len, used_quals);
+		assembled_sequences.push_back(assembly.seq);
 	}
 
 	return assembled_sequences;
