@@ -8,6 +8,7 @@
 
 #include "../libs/ssw_selected.h"
 #include "htslib/sam.h"
+#include "assembly_utils.h"
 #include "sw_utils.h"
 #include "utils.h"
 #include "sam_utils.h"

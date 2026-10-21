@@ -17,6 +17,7 @@
 #include <unordered_set>
 
 #include "htslib/sam.h"
+#include "assembly_utils.h"
 #include "sam_utils.h"
 #include "sw_utils.h"
 #include "hsr_utils.h"
@@ -385,18 +386,6 @@ hts_pos_t get_end_offset(bam1_t* r1, bam1_t* r2) {
     }
     std::pair<int, int> del_ins = get_dels_ins_in_first_n_chars(rev_cigar, offset);
     return offset + del_ins.second - del_ins.first;
-}
-
-void make_offsets_nonnegative(std::vector<hts_pos_t>& read_start_offsets) {
-    hts_pos_t min_offset = 0;
-    for (hts_pos_t offset : read_start_offsets) {
-        if (offset < min_offset) min_offset = offset;
-    }
-    if (min_offset < 0) {
-        for (hts_pos_t& offset : read_start_offsets) {
-            offset -= min_offset;
-        }
-    }
 }
 
 std::vector<hts_pos_t> get_read_start_offsets(std::deque<bam1_t*>& reads, clip_read_cache_t& read_cache) {

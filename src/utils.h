@@ -495,33 +495,6 @@ T bring_within_range(T val, T min_val, T max_val) {
     return val;
 }
 
-struct edge_t {
-	int next, score, overlap;
-
-	edge_t() : next(0), score(0), overlap(0) {}
-	edge_t(int next, int score, int overlap) : next(next), score(score), overlap(overlap) {}
-};
-
-std::vector<int> find_rev_topological_order(int n, std::vector<int> out_edges, std::vector<std::vector<edge_t> >& l_adj_rev) {
-
-	std::queue<int> sinks;
-	for (int i = 0; i < n; i++) {
-		if (!out_edges[i]) sinks.push(i);
-	}
-
-	std::vector<int> rev_topological_order;
-	while (!sinks.empty()) {
-		int s = sinks.front();
-		sinks.pop();
-		rev_topological_order.push_back(s);
-		for (edge_t& e : l_adj_rev[s]) {
-			out_edges[e.next]--;
-			if (out_edges[e.next] == 0) sinks.push(e.next);
-		}
-	}
-	return rev_topological_order;
-}
-
 struct random_pos_generator_t {
 
     const int NO_SAMPLING_PADDING = 1000;

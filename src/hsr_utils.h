@@ -7,6 +7,7 @@
 
 #include "../libs/ssw_selected.h"
 #include "../libs/IntervalTree.h"
+#include "assembly_utils.h"
 #include "utils.h"
 #include "sw_utils.h"
 #include "SegTree.h"
@@ -203,14 +204,6 @@ void filter_poly_g_tail_consensuses(std::vector<consensus_t*>& consensuses, char
 		delete consensus;
 		return true;
 	}), consensuses.end());
-}
-
-// Check an ungapped placement, rejecting mismatches only when both bases have Phred Q >= 40.
-bool consensus_placement_compatible(const std::string& seq1, const std::string& qual1, size_t start1, const std::string& seq2, const std::string& qual2, size_t length) {
-	for (size_t i = 0; i < length; i++) {
-		if (seq1[start1+i] != seq2[i] && qual1[start1+i] >= 40+33 && qual2[i] >= 40+33) return false;
-	}
-	return true;
 }
 
 // Remove geometrically contained consensuses when an ungapped placement has no confident mismatches.

@@ -3,114 +3,23 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <tuple>
 #include <unordered_set>
 #include <mutex>
 #include <htslib/sam.h>
 
 #include "../libs/exact_cache.h"
+#include "assembly_utils.h"
 #include "sw_utils.h"
-#include "consensus.h"
 #include "types.h"
 #include "dc_remapper.h"
 
 std::mutex failed_assembly_mtx;
 
-struct path_permission_t {
-	bool can_start_path, can_end_path;
-};
-struct seq_w_pp_t {
-	std::string seq;
-	std::vector<uint8_t> qual;
-	path_permission_t clip_pair;
-
-	seq_w_pp_t() : seq(), clip_pair() {}
-	seq_w_pp_t(std::string& seq, bool can_start_path, bool can_end_path, std::vector<uint8_t> qual = {}) : seq(seq), qual(std::move(qual)) {
-		clip_pair.can_start_path = can_start_path;
-		clip_pair.can_end_path = can_end_path;
-	}
-};
-
 struct build_graph_cache_value_t {
 	std::vector<int> out_edges_added;
 	std::vector<std::vector<edge_t> > l_adj_added, l_adj_rev_added;
 };
-
-void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, 
-	const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}, const std::string& preferred_bases = {}) {
-
-	std::vector<ungapped_aln_t> ungapped_alns;
-	for (std::string& read : reads) {
-		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, mismatch_score));
-	}
-	std::vector<int> As(contig.length()), Cs(contig.length()), Gs(contig.length()), Ts(contig.length());
-	std::vector<int> A_quals(contig.length()), C_quals(contig.length()), G_quals(contig.length()), T_quals(contig.length());
-	std::vector<strand_base_scores_t> strand_scores(read_is_reverse.empty() ? 0 : contig.length());
-	for (int i = 0; i < reads.size(); i++) {
-		ungapped_aln_t& ungapped_aln = ungapped_alns[i];
-		if (ungapped_aln.query_end <= ungapped_aln.query_begin) continue;
-
-		double mismatch_rate = double(ungapped_aln.mismatches)/(ungapped_aln.query_end-ungapped_aln.query_begin);
-		if (accept_read ? accept_read(i, ungapped_aln) : mismatch_rate <= max_acceptable_error_rate) {
-			for (int j = ungapped_aln.query_begin; j < ungapped_aln.query_end; j++) {
-				int ref_pos = j - ungapped_aln.query_begin + ungapped_aln.ref_begin;
-
-				if (ref_pos >= As.size()) {
-					// extend As, Cs, Gs, Ts
-					int old_size = As.size();
-					As.resize(ref_pos+1);
-					Cs.resize(ref_pos+1);
-					Gs.resize(ref_pos+1);
-					Ts.resize(ref_pos+1);
-					A_quals.resize(ref_pos+1);
-					C_quals.resize(ref_pos+1);
-					G_quals.resize(ref_pos+1);
-					T_quals.resize(ref_pos+1);
-					if (!read_is_reverse.empty()) strand_scores.resize(ref_pos+1);
-					for (int k = old_size; k < As.size(); k++) {
-						As[k] = Cs[k] = Gs[k] = Ts[k] = A_quals[k] = C_quals[k] = G_quals[k] = T_quals[k] = 0;
-					}
-				}
-
-				char c = reads[i][j];
-				int qual = quals.empty() ? 0 : quals[i][j];
-				if (!read_is_reverse.empty()) strand_scores[ref_pos].add(c, qual, read_is_reverse[i]);
-				if (c == 'A') { As[ref_pos]++; A_quals[ref_pos] += qual; }
-				else if (c == 'C') { Cs[ref_pos]++; C_quals[ref_pos] += qual; }
-				else if (c == 'G') { Gs[ref_pos]++; G_quals[ref_pos] += qual; }
-				else if (c == 'T') { Ts[ref_pos]++; T_quals[ref_pos] += qual; }
-			}
-		}
-	}
-
-	contig.resize(As.size());
-
-	for (int i = 0; i < contig.length(); i++) {
-		if (!read_is_reverse.empty()) {
-			contig[i] = strand_scores[i].best_base(contig[i], i < preferred_bases.length() ? preferred_bases[i] : '\0');
-			continue;
-		}
-		if (As[i] + Cs[i] + Gs[i] + Ts[i] == 0) continue;
-
-		auto best_base_score = std::max({
-			std::make_tuple(A_quals[i], As[i], 'A'), std::make_tuple(C_quals[i], Cs[i], 'C'),
-			std::make_tuple(G_quals[i], Gs[i], 'G'), std::make_tuple(T_quals[i], Ts[i], 'T')
-		});
-		contig[i] = std::get<2>(best_base_score);
-	}
-}
-
-bool is_contained(const std::string& s1, const std::string& s2, double max_seq_error) {
-	const std::string& shorter = s1.length() <= s2.length() ? s1 : s2;
-	const std::string& longer = s1.length() <= s2.length() ? s2 : s1;
-	int cap = (int) (shorter.length()*max_seq_error);
-	for (int offset = 0; offset <= longer.length()-shorter.length(); offset++) {
-		if (number_of_mismatches_fast(shorter.data(), longer.data()+offset, shorter.length(), cap) <= cap) return true;
-	}
-	return false;
-}
 
 void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, std::vector<int>& out_edges,
 		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev,

@@ -12,6 +12,7 @@
 #include "../libs/IntervalTree.h"
 #include "../libs/exact_cache.h"
 #include "htslib/sam.h"
+#include "assembly_utils.h"
 #include "utils.h"
 #include "sw_utils.h"
 #include "sam_utils.h"
@@ -187,80 +188,6 @@ bool is_vertex_in_cycle(std::vector<std::vector<edge_t> >& l_adj, int i) {
 		}
 	}
 	return false;
-}
-
-bool break_cycle_at_vertex(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >& l_adj,
-		std::vector<std::vector<edge_t> >& l_adj_rev, int i) {
-
-	struct cycle_edge_t {
-		int from;
-		edge_t edge;
-	};
-
-	int n = l_adj.size();
-	if (i < 0 || i >= n) return false;
-
-	std::stack<int> s;
-	std::vector<bool> visited(n, false);
-	std::vector<int> parent(n, -1);
-	std::vector<edge_t> parent_edge(n);
-	std::vector<cycle_edge_t> cycle;
-
-	parent[i] = i;
-	s.push(i);
-
-	while (cycle.empty() && !s.empty()) {
-		int curr = s.top();
-		s.pop();
-		if (visited[curr]) continue;
-		visited[curr] = true;
-
-		for (edge_t& e : l_adj[curr]) {
-			if (e.next == i) {
-				cycle.push_back({curr, e});
-				int node = curr;
-				while (node != i) {
-					cycle.push_back({parent[node], parent_edge[node]});
-					node = parent[node];
-				}
-				break;
-			}
-			if (!visited[e.next] && parent[e.next] == -1) {
-				parent[e.next] = curr;
-				parent_edge[e.next] = e;
-				s.push(e.next);
-			}
-		}
-	}
-
-	if (cycle.empty()) return false;
-
-	cycle_edge_t weakest = cycle[0];
-	for (cycle_edge_t& ce : cycle) {
-		if (ce.edge.overlap < weakest.edge.overlap ||
-				(ce.edge.overlap == weakest.edge.overlap && ce.edge.score < weakest.edge.score)) {
-			weakest = ce;
-		}
-	}
-
-	std::vector<edge_t>& fwd_edges = l_adj[weakest.from];
-	auto fwd_it = std::find_if(fwd_edges.begin(), fwd_edges.end(), [&weakest](edge_t& e) {
-		return e.next == weakest.edge.next && e.score == weakest.edge.score && e.overlap == weakest.edge.overlap;
-	});
-	if (fwd_it != fwd_edges.end()) {
-		fwd_edges.erase(fwd_it);
-		out_edges[weakest.from]--;
-	}
-
-	std::vector<edge_t>& rev_edges = l_adj_rev[weakest.edge.next];
-	auto rev_it = std::find_if(rev_edges.begin(), rev_edges.end(), [&weakest](edge_t& e) {
-		return e.next == weakest.from && e.score == weakest.edge.score && e.overlap == weakest.edge.overlap;
-	});
-	if (rev_it != rev_edges.end()) {
-		rev_edges.erase(rev_it);
-	}
-
-	return true;
 }
 
 struct extension_graph_cache_value_t {
@@ -720,14 +647,6 @@ std::vector<ext_read_t*> get_extension_reads_from_consensuses(std::vector<std::s
 		target_ivals.push_back(target_ival);
 	}
 	return get_extension_reads(contig_name, target_ivals, contig_len, config, stats, bam_file);
-}
-
-void break_cycles(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev) {
-
-	int n = l_adj.size();
-	for (int i = 0; i < n; i++) {
-		while (break_cycle_at_vertex(out_edges, l_adj, l_adj_rev, i));
-	}
 }
 
 void extend_consensus_to_right(std::shared_ptr<consensus_t> consensus, IntervalTree<ext_read_t*>& candidate_reads_itree,
