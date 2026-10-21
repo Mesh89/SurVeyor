@@ -22,7 +22,6 @@
 #include "hsr_utils.h"
 #include "vcf_utils.h"
 #include "utils.h"
-#include "assemble.h"
 #include "consensus.h"
 #include "hp_mismatch_rate_thresholds.h"
 #include "coarse_coverage.h"
@@ -798,6 +797,9 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
 
     std::unordered_set<bam1_t*> used_reads; // reads used to build a consensus
 
+    char* contig_seq = contigs.get_seq(contig_name);
+    hts_pos_t contig_len = contigs.get_len(contig_name);
+
     std::vector<consensus_t*> consensuses;
     while (clipped.size() >= 3) {
         std::vector<bool> accepted;
@@ -809,7 +811,6 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
         if (accepted_reads_n < 3) {
             consensus_seq = build_full_consensus_seq(clipped, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, read_cache, hp_mismatch_rate_thresholds);
         }
-        accepted_reads_n = std::count(accepted.begin(), accepted.end(), true);
 
         std::deque<bam1_t*> accepted_reads, rejected_reads;
         for (size_t i = 0; i < clipped.size(); i++) {
@@ -831,112 +832,110 @@ std::vector<consensus_t*> build_full_consensus(std::string contig_name, std::deq
             }
         }
 
-        if (accepted_reads.size() >= 3) {
-            for (bam1_t* r : accepted_reads) used_reads.insert(r);
+        // accepted reads >= 3
+        for (bam1_t* r : accepted_reads) used_reads.insert(r);
 
-            // rebuild consensus sequence using only accepted reads
-            consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, read_cache, hp_mismatch_rate_thresholds);
+        // rebuild consensus sequence using only accepted reads
+        consensus_seq = build_full_consensus_seq(accepted_reads, false, accepted, lowq_prefix, lowq_suffix, consensus_qual, read_cache, hp_mismatch_rate_thresholds);
 
-            hts_pos_t start = get_unclipped_start(accepted_reads[0]), end = 0;
-            for (bam1_t* r : accepted_reads) end = std::max(end, get_unclipped_end(r));
-            std::string highq_consensus_seq = consensus_seq.substr(lowq_prefix, consensus_seq.length()-lowq_prefix-lowq_suffix);
-            consensus_ref_classification_t ref_classification = classify_consensus_against_ref(
-                contigs.get_seq(contig_name), contigs.get_len(contig_name), start, end, highq_consensus_seq, config);
-            if (ref_classification == consensus_ref_classification_t::ALIGNS_WELL) {
-                clipped.swap(rejected_reads);
-                continue;
-            }
-            bool left_clipped = ref_classification == consensus_ref_classification_t::LEFT;
-
-            hts_pos_t breakpoint = left_clipped ? INT32_MAX : 0; // the current HTS_POS_MAX does not compile on some compilers
-            auto mate_window = choose_mate_window_bounds(accepted_reads, left_clipped, start, end);
-            hts_pos_t other_bp_lower_boundary = mate_window.first;
-            hts_pos_t other_bp_upper_boundary = mate_window.second;
-            int fwd_clipped = 0, rev_clipped = 0;
-            uint8_t max_mapq = 0;
-            for (bam1_t* r : accepted_reads) {
-                if (bam_is_rev(r)) rev_clipped++;
-                else fwd_clipped++;
-
-                max_mapq = std::max(max_mapq, r->core.qual);
-            }
-
-            if (other_bp_lower_boundary >= other_bp_upper_boundary) {
-                clipped.swap(rejected_reads);
-                continue;
-            }
-
-            // Calculate breakpoint as the most supported clipped position among accepted reads
-            // if ties, choose smallest for left-clipped, largest for right-clipped
-            // if no support, set breakpoint to start (left-clipped) or end (right-clipped)
-            std::unordered_map<hts_pos_t, int> start_counts, end_counts;
-            for (bam1_t* r : accepted_reads) {
-                if (get_left_clip_size(r) >= config.min_clip_len) start_counts[r->core.pos]++;
-                if (get_right_clip_size(r) >= config.min_clip_len) end_counts[bam_endpos(r)]++;
-            }
-            bool is_hsr = true;
-            if (left_clipped) {
-                // breakpoint is the most common r->start among accepted reads. If ties, choose the smallest
-                int max_count = 0;
-                for (auto& p : start_counts) {
-                    if (p.second > max_count || (p.second == max_count && p.first < breakpoint)) {
-                        max_count = p.second;
-                        breakpoint = p.first;
-                    }
-                }
-                if (!max_count) {
-                    breakpoint = start;
-                } else if (max_count >= 3) {
-                    is_hsr = false;
-                }
-            } else {
-                // breakpoint is the most common r->end among accepted reads. If ties, choose the largest
-                int max_count = 0;
-                for (auto& p : end_counts) {
-                    if (p.second > max_count || (p.second == max_count && p.first > breakpoint)) {
-                        max_count = p.second;
-                        breakpoint = p.first;
-                    }
-                }
-                if (!max_count) {
-                    breakpoint = end;
-                } else if (max_count >= 3) {
-                    is_hsr = false;
-                }
-            }
-            
-            int seq_bp_idx = -1, clip_len = 0;
-            if (!is_hsr) {
-                // Use the same sequence placements as the final accepted-read consensus.
-                std::vector<hts_pos_t> read_start_offsets = get_read_start_offsets(accepted_reads, read_cache);
-                std::unordered_map<int, int> seq_bp_counts;
-                for (size_t i = 0; i < accepted_reads.size(); i++) {
-                    bam1_t* r = accepted_reads[i];
-                    if (left_clipped && is_left_clipped(r, config.min_clip_len) && r->core.pos == breakpoint) {
-                        seq_bp_counts[read_start_offsets[i] + get_left_clip_size(r)]++;
-                    } else if (!left_clipped && is_right_clipped(r, config.min_clip_len) && bam_endpos(r) == breakpoint) {
-                        seq_bp_counts[read_start_offsets[i] + r->core.l_qseq - get_right_clip_size(r)]++;
-                    }
-                }
-                int max_count = 0;
-                for (auto& p : seq_bp_counts) {
-                    if (p.second > max_count || (p.second == max_count && (left_clipped ? p.first < seq_bp_idx : p.first > seq_bp_idx))) {
-                        max_count = p.second;
-                        seq_bp_idx = p.first;
-                    }
-                }
-                clip_len = left_clipped ? seq_bp_idx : (int) consensus_seq.length() - seq_bp_idx;
-            }
-
-            consensus_t* consensus = new consensus_t(left_clipped, start, breakpoint, end, consensus_seq,
-                consensus_qual, fwd_clipped, rev_clipped, clip_len, max_mapq, lowq_prefix, lowq_suffix);
-            consensus->other_bp_lower_boundary = other_bp_lower_boundary;
-            consensus->other_bp_upper_boundary = other_bp_upper_boundary;
-            consensus->is_hsr = is_hsr;
-            consensus->seq_bp_idx = seq_bp_idx;
-            consensus->cigar_indel_lengths = construction_read_indel_lengths(accepted_reads);
-            consensuses.push_back(consensus);
+        hts_pos_t start = get_unclipped_start(accepted_reads[0]), end = 0;
+        for (bam1_t* r : accepted_reads) end = std::max(end, get_unclipped_end(r));
+        std::string highq_consensus_seq = consensus_seq.substr(lowq_prefix, consensus_seq.length()-lowq_prefix-lowq_suffix);
+        consensus_ref_classification_t ref_classification = classify_consensus_against_ref(contig_seq, contig_len, start, end, highq_consensus_seq, config);
+        if (ref_classification == consensus_ref_classification_t::ALIGNS_WELL) {
+            clipped.swap(rejected_reads);
+            continue;
         }
+        bool left_clipped = ref_classification == consensus_ref_classification_t::LEFT;
+
+        hts_pos_t breakpoint = left_clipped ? INT32_MAX : 0; // the current HTS_POS_MAX does not compile on some compilers
+        auto mate_window = choose_mate_window_bounds(accepted_reads, left_clipped, start, end);
+        hts_pos_t other_bp_lower_boundary = mate_window.first;
+        hts_pos_t other_bp_upper_boundary = mate_window.second;
+        int fwd_clipped = 0, rev_clipped = 0;
+        uint8_t max_mapq = 0;
+        for (bam1_t* r : accepted_reads) {
+            if (bam_is_rev(r)) rev_clipped++;
+            else fwd_clipped++;
+
+            max_mapq = std::max(max_mapq, r->core.qual);
+        }
+
+        if (other_bp_lower_boundary >= other_bp_upper_boundary) {
+            clipped.swap(rejected_reads);
+            continue;
+        }
+
+        // Calculate breakpoint as the most supported clipped position among accepted reads
+        // if ties, choose smallest for left-clipped, largest for right-clipped
+        // if no support, set breakpoint to start (left-clipped) or end (right-clipped)
+        std::unordered_map<hts_pos_t, int> start_counts, end_counts;
+        for (bam1_t* r : accepted_reads) {
+            if (get_left_clip_size(r) >= config.min_clip_len) start_counts[r->core.pos]++;
+            if (get_right_clip_size(r) >= config.min_clip_len) end_counts[bam_endpos(r)]++;
+        }
+        bool is_hsr = true;
+        if (left_clipped) {
+            // breakpoint is the most common r->start among accepted reads. If ties, choose the smallest
+            int max_count = 0;
+            for (auto& p : start_counts) {
+                if (p.second > max_count || (p.second == max_count && p.first < breakpoint)) {
+                    max_count = p.second;
+                    breakpoint = p.first;
+                }
+            }
+            if (!max_count) {
+                breakpoint = start;
+            } else if (max_count >= 3) {
+                is_hsr = false;
+            }
+        } else {
+            // breakpoint is the most common r->end among accepted reads. If ties, choose the largest
+            int max_count = 0;
+            for (auto& p : end_counts) {
+                if (p.second > max_count || (p.second == max_count && p.first > breakpoint)) {
+                    max_count = p.second;
+                    breakpoint = p.first;
+                }
+            }
+            if (!max_count) {
+                breakpoint = end;
+            } else if (max_count >= 3) {
+                is_hsr = false;
+            }
+        }
+        
+        int seq_bp_idx = -1, clip_len = 0;
+        if (!is_hsr) {
+            // Use the same sequence placements as the final accepted-read consensus.
+            std::vector<hts_pos_t> read_start_offsets = get_read_start_offsets(accepted_reads, read_cache);
+            std::unordered_map<int, int> seq_bp_counts;
+            for (size_t i = 0; i < accepted_reads.size(); i++) {
+                bam1_t* r = accepted_reads[i];
+                if (left_clipped && is_left_clipped(r, config.min_clip_len) && r->core.pos == breakpoint) {
+                    seq_bp_counts[read_start_offsets[i] + get_left_clip_size(r)]++;
+                } else if (!left_clipped && is_right_clipped(r, config.min_clip_len) && bam_endpos(r) == breakpoint) {
+                    seq_bp_counts[read_start_offsets[i] + r->core.l_qseq - get_right_clip_size(r)]++;
+                }
+            }
+            int max_count = 0;
+            for (auto& p : seq_bp_counts) {
+                if (p.second > max_count || (p.second == max_count && (left_clipped ? p.first < seq_bp_idx : p.first > seq_bp_idx))) {
+                    max_count = p.second;
+                    seq_bp_idx = p.first;
+                }
+            }
+            clip_len = left_clipped ? seq_bp_idx : (int) consensus_seq.length() - seq_bp_idx;
+        }
+
+        consensus_t* consensus = new consensus_t(left_clipped, start, breakpoint, end, consensus_seq,
+            consensus_qual, fwd_clipped, rev_clipped, clip_len, max_mapq, lowq_prefix, lowq_suffix);
+        consensus->other_bp_lower_boundary = other_bp_lower_boundary;
+        consensus->other_bp_upper_boundary = other_bp_upper_boundary;
+        consensus->is_hsr = is_hsr;
+        consensus->seq_bp_idx = seq_bp_idx;
+        consensus->cigar_indel_lengths = construction_read_indel_lengths(accepted_reads);
+        consensuses.push_back(consensus);
         clipped.swap(rejected_reads);
     }
 
