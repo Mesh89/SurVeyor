@@ -1,5 +1,5 @@
-#ifndef ASSEMBLE_H_
-#define ASSEMBLE_H_
+#ifndef DE_NOVO_ASSEMBLY_H_
+#define DE_NOVO_ASSEMBLY_H_
 
 #include <algorithm>
 #include <cstdint>
@@ -523,4 +523,4 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 	return chosen_ins;
 }
 
-#endif /* ASSEMBLE_H_ */
+#endif /* DE_NOVO_ASSEMBLY_H_ */

@@ -22,7 +22,7 @@
 #include "sam_utils.h"
 #include "clustering_utils.h"
 #include "remapping.h"
-#include "assemble.h"
+#include "de_novo_assembly.h"
 #include "reference_guided_assembly.h"
 #include "vcf_utils.h"
 

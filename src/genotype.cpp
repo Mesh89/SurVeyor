@@ -10,7 +10,7 @@
 #include <vector>
 #include <algorithm>
 
-#include "assemble.h"
+#include "de_novo_assembly.h"
 #include "htslib/hts_endian.h"
 #include "htslib/sam.h"
 #include "htslib/vcf.h"

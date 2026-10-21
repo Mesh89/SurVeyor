@@ -12,7 +12,7 @@
 #include "utils.h"
 #include "sam_utils.h"
 #include "dc_remapper.h"
-#include "assemble.h"
+#include "de_novo_assembly.h"
 #include "remapping.h"
 
 struct guided_contig_t {
