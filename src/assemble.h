@@ -102,6 +102,16 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 	}
 }
 
+bool is_contained(const std::string& s1, const std::string& s2, double max_seq_error) {
+	const std::string& shorter = s1.length() <= s2.length() ? s1 : s2;
+	const std::string& longer = s1.length() <= s2.length() ? s2 : s1;
+	int cap = (int) (shorter.length()*max_seq_error);
+	for (int offset = 0; offset <= longer.length()-shorter.length(); offset++) {
+		if (number_of_mismatches_fast(shorter.data(), longer.data()+offset, shorter.length(), cap) <= cap) return true;
+	}
+	return false;
+}
+
 void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, std::vector<int>& out_edges,
 		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev,
 		double max_seq_error, int min_overlap) {
@@ -140,7 +150,7 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 		for (int j = i+1; j < n; j++) {
 			std::string& s1 = read_seqs[i];
 			std::string& s2 = read_seqs[j];
-			if (s1 == s2) continue;
+			if (is_contained(s1, s2, max_seq_error)) continue;
 
 			int max_overlap = std::min(s1.length(), s2.length())-1;
 			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, max_seq_error, min_overlap, max_overlap);
