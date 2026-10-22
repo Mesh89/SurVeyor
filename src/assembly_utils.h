@@ -118,6 +118,34 @@ assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const
 	return assembly;
 }
 
+struct assembly_consensus_t {
+	std::string seq;
+	std::vector<base_votes_t> votes;
+};
+
+assembly_consensus_t make_read_contig(const std::string& seq, const uint8_t* quals) {
+	assembly_consensus_t contig{seq, std::vector<base_votes_t>(seq.length())};
+	for (int i = 0; i < seq.length(); i++) {
+		contig.votes[i].add(seq[i], quals ? quals[i] : 0);
+	}
+	return contig;
+}
+
+assembly_consensus_t polish_assembly_path(const std::vector<const assembly_consensus_t*>& inputs, assembly_sequence_t assembly) {
+	assembly_consensus_t consensus{std::move(assembly.seq), {}};
+	consensus.votes.resize(consensus.seq.length());
+	for (int v = 0; v < inputs.size(); v++) {
+		const std::vector<base_votes_t>& input_votes = inputs[v]->votes;
+		for (int i = 0; i < input_votes.size(); i++) {
+			consensus.votes[assembly.offsets[v]+i].merge(input_votes[i]);
+		}
+	}
+	for (int i = 0; i < consensus.seq.length(); i++) {
+		consensus.seq[i] = consensus.votes[i].best_base(consensus.seq[i]);
+	}
+	return consensus;
+}
+
 std::vector<int> find_rev_topological_order(int n, std::vector<int> out_edges, std::vector<std::vector<edge_t> >& l_adj_rev) {
 
 	std::queue<int> sinks;
@@ -220,17 +248,13 @@ void break_cycles(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >
 	}
 }
 
-void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {}, 
-	const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}, const std::string& preferred_bases = {}) {
+void correct_contig_with_alignments(std::string& contig, std::vector<std::string>& reads, const std::vector<ungapped_aln_t>& ungapped_alns, double max_acceptable_error_rate, const std::vector<const uint8_t*>& quals = {},
+	const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, const std::vector<bool>& read_is_reverse = {}, const std::string& preferred_bases = {}) {
 
-	std::vector<ungapped_aln_t> ungapped_alns;
-	for (std::string& read : reads) {
-		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, mismatch_score));
-	}
 	std::vector<base_votes_t> votes(contig.length());
 	std::vector<strand_base_scores_t> strand_scores(read_is_reverse.empty() ? 0 : contig.length());
 	for (int i = 0; i < reads.size(); i++) {
-		ungapped_aln_t& ungapped_aln = ungapped_alns[i];
+		const ungapped_aln_t& ungapped_aln = ungapped_alns[i];
 		if (ungapped_aln.query_end <= ungapped_aln.query_begin) continue;
 
 		double mismatch_rate = double(ungapped_aln.mismatches)/(ungapped_aln.query_end-ungapped_aln.query_begin);
@@ -260,6 +284,16 @@ void correct_contig(std::string& contig, std::vector<std::string>& reads, double
 		}
 		contig[i] = votes[i].best_base(contig[i]);
 	}
+}
+
+void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {},
+	const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}, const std::string& preferred_bases = {}) {
+
+	std::vector<ungapped_aln_t> ungapped_alns;
+	for (std::string& read : reads) {
+		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, mismatch_score));
+	}
+	correct_contig_with_alignments(contig, reads, ungapped_alns, max_acceptable_error_rate, quals, accept_read, read_is_reverse, preferred_bases);
 }
 
 bool is_contained(const std::string& s1, const std::string& s2, double max_seq_error) {

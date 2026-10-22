@@ -178,15 +178,15 @@ std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_rea
 		if (path.vertices.empty()) break;
 
 		assembly_sequence_t assembly = reconstruct_assembly_path(path, [&read_seqs](int vertex) -> const std::string& { return read_seqs[vertex]; });
-		std::vector<std::string> used_reads; // track reads used to build this contig, so that we can use them for correction
-		std::vector<const uint8_t*> used_quals;
+		std::vector<assembly_consensus_t> path_contigs;
+		path_contigs.reserve(path.vertices.size());
+		std::vector<const assembly_consensus_t*> path_inputs;
 		for (int vertex : path.vertices) {
-			used_reads.push_back(read_seqs[vertex]);
-			used_quals.push_back(read_quals[vertex]);
+			path_contigs.push_back(make_read_contig(read_seqs[vertex], read_quals[vertex]));
+			path_inputs.push_back(&path_contigs.back());
 		}
-		if (std::find(used_quals.begin(), used_quals.end(), nullptr) != used_quals.end()) used_quals.clear();
-		correct_contig(assembly.seq, used_reads, config.max_seq_error, config.min_clip_len, used_quals);
-		assembled_sequences.push_back(assembly.seq);
+		assembly_consensus_t consensus = polish_assembly_path(path_inputs, std::move(assembly));
+		assembled_sequences.push_back(std::move(consensus.seq));
 	}
 
 	return assembled_sequences;
@@ -301,7 +301,14 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence, std::string(assembled_sequence.length(), 'I'), remap_region_start, remap_region_end, 
 		remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
 	std::shared_ptr<sv_t> chosen_ins = NULL;
-	if (svs.empty() || svs[0]->svtype() != "INS" || svs[0]->svsize() < config.min_assembled_ins_size) { // cannot identify an SV insertion, check if it is an incomplete assembly
+	for (std::shared_ptr<sv_t> sv : svs) {
+		if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
+			chosen_ins = sv;
+			full_assembled_seq = assembled_sequence;
+			break;
+		}
+	}
+	if (chosen_ins == NULL) { // cannot identify an SV insertion, check if it is an incomplete assembly
 		if (assembled_sequences.size() == 1) return NULL;
 
 		extend = 2*(assembled_sequence.length() + assembled_sequences[1].length());
@@ -329,9 +336,6 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 
 		if (!svs1.empty() && chosen_ins == svs1[0]) full_assembled_seq = assembled_sequence + "-" + assembled_sequences[1];
 		else if (!svs2.empty() && chosen_ins == svs2[0]) full_assembled_seq = assembled_sequences[1] + "-" + assembled_sequence;
-	} else {
-		chosen_ins = svs[0];
-		full_assembled_seq = assembled_sequence;
 	}
 
 	if (chosen_ins == NULL) return NULL;

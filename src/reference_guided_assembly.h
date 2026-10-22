@@ -16,13 +16,8 @@
 #include "de_novo_assembly.h"
 #include "remapping.h"
 
-struct guided_contig_t {
-	std::string seq;
-	std::vector<base_votes_t> votes;
-};
-
 struct aln_guided_contig_t {
-	guided_contig_t* contig;
+	assembly_consensus_t* contig;
 	StripedSmithWaterman::Alignment aln;
 };
 
@@ -60,16 +55,16 @@ void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<
 }
 
 // remove contigs that are fully contained within another contig
-void remove_fully_contained(std::vector<guided_contig_t>& assembled_contigs, std::string& reference, StripedSmithWaterman::Aligner& aligner) {
+void remove_fully_contained(std::vector<assembly_consensus_t>& assembled_contigs, std::string& reference, StripedSmithWaterman::Aligner& aligner) {
 	StripedSmithWaterman::Filter filter;
 	StripedSmithWaterman::Alignment aln;
-	std::vector<std::pair<guided_contig_t, StripedSmithWaterman::Alignment> > assembled_seqs_w_alns;
-	for (guided_contig_t& contig : assembled_contigs) {
+	std::vector<std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment> > assembled_seqs_w_alns;
+	for (assembly_consensus_t& contig : assembled_contigs) {
 		aligner.Align(contig.seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
 		assembled_seqs_w_alns.push_back({std::move(contig), aln});
 	}
 	std::sort(assembled_seqs_w_alns.begin(), assembled_seqs_w_alns.end(),
-			[](const std::pair<guided_contig_t, StripedSmithWaterman::Alignment>& p1, const std::pair<guided_contig_t, StripedSmithWaterman::Alignment>& p2) {
+			[](const std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment>& p1, const std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment>& p2) {
 		if (p1.second.ref_begin != p2.second.ref_begin) {
             return p1.second.ref_begin < p2.second.ref_begin;
         }
@@ -119,8 +114,8 @@ std::vector<std::pair<std::string, StripedSmithWaterman::Alignment> > retain_non
 	return retained;
 }
 
-std::vector<guided_contig_t> generate_reference_guided_contigs(std::string reference, std::vector<guided_contig_t>& read_contigs,
-	std::vector<guided_contig_t>& discarded_contigs, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config) {
+std::vector<assembly_consensus_t> generate_reference_guided_contigs(std::string reference, std::vector<assembly_consensus_t>& read_contigs,
+	std::vector<assembly_consensus_t>& discarded_contigs, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config) {
 	StripedSmithWaterman::Filter filter;
 	StripedSmithWaterman::Alignment aln;
 
@@ -128,7 +123,7 @@ std::vector<guided_contig_t> generate_reference_guided_contigs(std::string refer
 	int n = read_contigs.size();
 	std::vector<int> out_edges(n);
 	std::vector<std::vector<edge_t> > l_adj(n), l_adj_rev(n);
-	for (guided_contig_t& contig : read_contigs) {
+	for (assembly_consensus_t& contig : read_contigs) {
 		harsh_aligner.Align(contig.seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
 		alns.push_back({&contig, aln});
 	}
@@ -136,7 +131,7 @@ std::vector<guided_contig_t> generate_reference_guided_contigs(std::string refer
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
-	std::vector<guided_contig_t> assembled_contigs;
+	std::vector<assembly_consensus_t> assembled_contigs;
 	std::vector<bool> used(n);
 	std::vector<path_permission_t> path_permissions(n, {true, true});
 	while (true) {
@@ -144,20 +139,9 @@ std::vector<guided_contig_t> generate_reference_guided_contigs(std::string refer
 		if (path.vertices.empty()) break;
 
 		assembly_sequence_t assembly = reconstruct_assembly_path(path, [&alns](int vertex) -> const std::string& { return alns[vertex].contig->seq; });
-		guided_contig_t assembled_contig{std::move(assembly.seq), alns[path.vertices[0]].contig->votes};
-		assembled_contig.votes.resize(assembled_contig.seq.length());
-		for (int v = 1; v < path.vertices.size(); v++) {
-			const guided_contig_t& next_contig = *alns[path.vertices[v]].contig;
-			int offset = assembly.offsets[v];
-			for (int i = 0; i < next_contig.votes.size(); i++) {
-				assembled_contig.votes[offset+i].merge(next_contig.votes[i]);
-			}
-		}
-
-		for (int i = 0; i < assembled_contig.seq.length(); i++) {
-			assembled_contig.seq[i] = assembled_contig.votes[i].best_base(assembled_contig.seq[i]);
-		}
-		assembled_contigs.push_back(std::move(assembled_contig));
+		std::vector<const assembly_consensus_t*> path_inputs;
+		for (int vertex : path.vertices) path_inputs.push_back(alns[vertex].contig);
+		assembled_contigs.push_back(polish_assembly_path(path_inputs, std::move(assembly)));
 	}
 	for (int i = 0; i < n; i++) {
 		if (!used[i]) discarded_contigs.push_back(*alns[i].contig);
@@ -186,31 +170,25 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	read_quals.insert(read_quals.end(), quals_is.begin(), quals_is.end());
 	read_quals.insert(read_quals.end(), quals_rf.begin(), quals_rf.end());
 
-	std::vector<guided_contig_t> read_contigs;
+	std::vector<assembly_consensus_t> read_contigs;
 	for (int i = 0; i < read_seqs.size(); i++) {
-		guided_contig_t contig{read_seqs[i], std::vector<base_votes_t>(read_seqs[i].length())};
-		for (int j = 0; j < contig.seq.length(); j++) {
-			char c = contig.seq[j];
-			int qual = read_quals.empty() ? 0 : read_quals[i][j];
-			contig.votes[j].add(c, qual);
-		}
-		read_contigs.push_back(std::move(contig));
+		read_contigs.push_back(make_read_contig(read_seqs[i], read_quals.empty() ? nullptr : read_quals[i]));
 	}
-	std::vector<guided_contig_t> discarded_contigs;
-	std::vector<guided_contig_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config);
+	std::vector<assembly_consensus_t> discarded_contigs;
+	std::vector<assembly_consensus_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config);
 
 	// try and join contigs
 	while (true) {
 		remove_fully_contained(assembled_contigs, reference, aligner);
-		std::vector<guided_contig_t> temp;
+		std::vector<assembly_consensus_t> temp;
 		int prev_ass_seqs = assembled_contigs.size();
 		assembled_contigs = generate_reference_guided_contigs(reference, assembled_contigs, temp, harsh_aligner, config);
 		assembled_contigs.insert(assembled_contigs.end(), temp.begin(), temp.end());
 		if (prev_ass_seqs <= assembled_contigs.size()) break;
 	}
 	std::vector<std::string> assembled_sequences, discarded_reads;
-	for (guided_contig_t& contig : assembled_contigs) assembled_sequences.push_back(std::move(contig.seq));
-	for (guided_contig_t& contig : discarded_contigs) discarded_reads.push_back(std::move(contig.seq));
+	for (assembly_consensus_t& contig : assembled_contigs) assembled_sequences.push_back(std::move(contig.seq));
+	for (assembly_consensus_t& contig : discarded_contigs) discarded_reads.push_back(std::move(contig.seq));
 
 	// score the retained contigs
 	StripedSmithWaterman::Filter filter;
