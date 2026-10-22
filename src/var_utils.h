@@ -137,7 +137,9 @@ inline char* generate_haplotype_left(char* chrom_seq, hts_pos_t hap_end, hts_pos
     try {
         validate_aux_haplotype(aux_indels, aux_snps);
     } catch (const std::runtime_error& e) {
-        throw std::runtime_error("Invalid AUX haplotype for SV " + id + (chr.empty() ? "" : " on " + chr) + ": " + e.what());
+        std::string message = e.what();
+        bool has_chr = !chr.empty() && message.find(" on " + chr + " at ") != std::string::npos;
+        throw std::runtime_error("Invalid AUX haplotype for SV " + id + (chr.empty() || has_chr ? "" : " on " + chr) + ": " + message);
     }
 
     // Include SNPs on the inclusive endpoint; indels must end strictly before it.
@@ -221,7 +223,9 @@ inline char* generate_haplotype_right(char* chrom_seq, hts_pos_t chrom_len, hts_
     try {
         validate_aux_haplotype(aux_indels, aux_snps);
     } catch (const std::runtime_error& e) {
-        throw std::runtime_error("Invalid AUX haplotype for SV " + id + (chr.empty() ? "" : " on " + chr) + ": " + e.what());
+        std::string message = e.what();
+        bool has_chr = !chr.empty() && message.find(" on " + chr + " at ") != std::string::npos;
+        throw std::runtime_error("Invalid AUX haplotype for SV " + id + (chr.empty() || has_chr ? "" : " on " + chr) + ": " + message);
     }
 
     // Include SNPs at hap_start and indels whose changed bases start there or later.

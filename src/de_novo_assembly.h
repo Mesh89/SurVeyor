@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include <mutex>
 #include <htslib/sam.h>
@@ -108,31 +109,11 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 	cache.store(std::move(cache_key), std::move(additions));
 }
 
-std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_read_seqs, std::vector<seq_w_pp_t>& unstable_read_seqs,
-		std::vector<seq_w_pp_t>& right_stable_read_seqs, config_t& config, stats_t& stats) {
+std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_consensus_t>& read_contigs, const std::vector<path_permission_t>& path_permissions,
+		std::vector<int>& order, config_t& config, stats_t& stats) {
 
 	std::vector<std::string> read_seqs;
-	std::vector<const uint8_t*> read_quals;
-	std::vector<path_permission_t> path_permissions;
-	std::vector<int> order;
-	for (seq_w_pp_t& s : left_stable_read_seqs) {
-		read_seqs.push_back(s.seq);
-		read_quals.push_back(s.qual.empty() ? nullptr : s.qual.data());
-		path_permissions.push_back(s.clip_pair);
-		order.push_back(1);
-	}
-	for (seq_w_pp_t& s : unstable_read_seqs) {
-		read_seqs.push_back(s.seq);
-		read_quals.push_back(s.qual.empty() ? nullptr : s.qual.data());
-		path_permissions.push_back(s.clip_pair);
-		order.push_back(2);
-	}
-	for (seq_w_pp_t& s : right_stable_read_seqs) {
-		read_seqs.push_back(s.seq);
-		read_quals.push_back(s.qual.empty() ? nullptr : s.qual.data());
-		path_permissions.push_back(s.clip_pair);
-		order.push_back(3);
-	}
+	for (const assembly_consensus_t& contig : read_contigs) read_seqs.push_back(contig.seq);
 
 	int n = read_seqs.size();
 	std::vector<int> out_edges(n);
@@ -167,88 +148,117 @@ std::vector<std::string> assemble_reads(std::vector<seq_w_pp_t>& left_stable_rea
 			}
 		}
 		if (rev_topological_order.size() < n) {
-			return {"HAS_CYCLE"};
+			return {{"HAS_CYCLE", {}}};
 		}
 	}
 
-	std::vector<std::string> assembled_sequences;
+	std::vector<assembly_consensus_t> assembled_contigs;
 	std::vector<bool> used(n);
 	while (true) {
 		assembly_path_t path = select_assembly_path(l_adj_rev, rev_topological_order, path_permissions, used);
 		if (path.vertices.empty()) break;
 
 		assembly_sequence_t assembly = reconstruct_assembly_path(path, [&read_seqs](int vertex) -> const std::string& { return read_seqs[vertex]; });
-		std::vector<assembly_consensus_t> path_contigs;
-		path_contigs.reserve(path.vertices.size());
 		std::vector<const assembly_consensus_t*> path_inputs;
-		for (int vertex : path.vertices) {
-			path_contigs.push_back(make_read_contig(read_seqs[vertex], read_quals[vertex]));
-			path_inputs.push_back(&path_contigs.back());
-		}
-		assembly_consensus_t consensus = polish_assembly_path(path_inputs, std::move(assembly));
-		assembled_sequences.push_back(std::move(consensus.seq));
+		for (int vertex : path.vertices) path_inputs.push_back(&read_contigs[vertex]);
+		assembled_contigs.push_back(polish_assembly_path(path_inputs, std::move(assembly)));
 	}
 
-	return assembled_sequences;
+	return assembled_contigs;
 }
 
 std::vector<std::string> assemble_sequences(std::string contig_name, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats) {
 
-	std::vector<seq_w_pp_t> left_stable_read_seqs, unstable_read_seqs, right_stable_read_seqs;
-	std::unordered_set<std::string> used_ls, used_us, used_rs;
-	if (r_cluster->clip_consensus) left_stable_read_seqs.push_back({r_cluster->clip_consensus->sequence, true, false, decode_qualities(r_cluster->clip_consensus->qual)});
+	enum observation_source_t { STABLE_READ, CACHED_MATE, SEMI_MAPPED_READ, CLIP_CONSENSUS };
+	struct observation_t {
+		bam1_t* read;
+		const std::string* clip_qual;
+		observation_source_t source;
+		bool reverse;
+	};
+	struct input_t {
+		std::string seq;
+		path_permission_t permissions;
+		std::vector<observation_t> observations;
+		std::unordered_set<std::string> read_sources;
+	};
+	struct input_group_t {
+		std::vector<input_t> inputs;
+		std::unordered_map<std::string, int> sequence_indices;
+	};
+	input_group_t left_stable, unstable, right_stable;
+	auto add_read = [](input_group_t& group, const std::string& seq, observation_t observation, path_permission_t permissions) {
+		auto entry = group.sequence_indices.emplace(seq, group.inputs.size());
+		if (entry.second) group.inputs.push_back({seq, permissions, {}, {}});
+		input_t& input = group.inputs[entry.first->second];
+		std::string source = bam_get_qname(observation.read);
+		source += is_first_read(observation.read) != (observation.source == CACHED_MATE) ? "_1" : "_2";
+		if (input.read_sources.insert(source).second) input.observations.push_back(observation);
+	};
+	if (r_cluster->clip_consensus) {
+		left_stable.inputs.push_back({r_cluster->clip_consensus->sequence, {true, false}, {{nullptr, &r_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}}, {}});
+	}
 	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
 		std::string seq = get_sequence(read.get());
 		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
 		rc(mate_seq);
-		if (!used_ls.count(seq)) {
-			left_stable_read_seqs.push_back({seq, !is_left_clipped(read.get(), 1), true, std::vector<uint8_t>(bam_get_qual(read.get()), bam_get_qual(read.get())+read->core.l_qseq)});
-			used_ls.insert(seq);
-		}
-		if (!used_us.count(mate_seq)) {
-			std::vector<uint8_t> mate_qual = decode_qualities(get_mate_qual(read.get(), matequals));
-			std::reverse(mate_qual.begin(), mate_qual.end());
-			unstable_read_seqs.push_back({mate_seq, true, true, std::move(mate_qual)});
-			used_us.insert(mate_seq);
-		}
+		add_read(left_stable, seq, {read.get(), nullptr, STABLE_READ, false}, {!is_left_clipped(read.get(), 1), true});
+		add_read(unstable, mate_seq, {read.get(), nullptr, CACHED_MATE, true}, {true, true});
 	}
 	for (std::shared_ptr<bam1_t> read : l_cluster->cluster->reads) {
 		std::string seq = get_sequence(read.get());
 		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
-		if (!used_rs.count(seq)) {
-			right_stable_read_seqs.push_back({seq, true, !is_right_clipped(read.get(), 1), std::vector<uint8_t>(bam_get_qual(read.get()), bam_get_qual(read.get())+read->core.l_qseq)});
-			used_rs.insert(seq);
-		}
-		if (!used_us.count(mate_seq)) {
-			unstable_read_seqs.push_back({mate_seq, true, true, decode_qualities(get_mate_qual(read.get(), matequals))});
-			used_us.insert(mate_seq);
-		}
+		add_read(right_stable, seq, {read.get(), nullptr, STABLE_READ, false}, {true, !is_right_clipped(read.get(), 1)});
+		add_read(unstable, mate_seq, {read.get(), nullptr, CACHED_MATE, false}, {true, true});
 	}
-	if (l_cluster->clip_consensus) right_stable_read_seqs.push_back({l_cluster->clip_consensus->sequence, false, true, decode_qualities(l_cluster->clip_consensus->qual)});
+	if (l_cluster->clip_consensus) {
+		right_stable.inputs.push_back({l_cluster->clip_consensus->sequence, {false, true}, {{nullptr, &l_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}}, {}});
+	}
 
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
 		std::string read_seq = get_sequence(read, true);
 		rc(read_seq);
-		if (!used_us.count(read_seq)) {
-			std::vector<uint8_t> read_qual = decode_qualities(get_qual_ascii(read, true));
-			std::reverse(read_qual.begin(), read_qual.end());
-			unstable_read_seqs.push_back({read_seq, !is_left_clipped(read, 1), !is_right_clipped(read, 1), std::move(read_qual)});
-			used_us.insert(read_seq);
-		}
+		add_read(unstable, read_seq, {read, nullptr, SEMI_MAPPED_READ, true}, {!is_left_clipped(read, 1), !is_right_clipped(read, 1)});
 	}
 	for (bam1_t* read : l_cluster->semi_mapped_reads) {
 		std::string read_seq = get_sequence(read, true);
-		if (!used_us.count(read_seq)) {
-			unstable_read_seqs.push_back({read_seq, !is_left_clipped(read, 1), !is_right_clipped(read, 1), decode_qualities(get_qual_ascii(read, true))});
-			used_us.insert(read_seq);
-		}
+		add_read(unstable, read_seq, {read, nullptr, SEMI_MAPPED_READ, false}, {!is_left_clipped(read, 1), !is_right_clipped(read, 1)});
 	}
 
 	const int TOO_MANY_READS = stats.get_max_depth(contig_name) * stats.max_is / stats.read_len;
-	if (unstable_read_seqs.size() + left_stable_read_seqs.size() + right_stable_read_seqs.size() >= TOO_MANY_READS) return {"TOO_MANY_READS"};
+	if (unstable.inputs.size() + left_stable.inputs.size() + right_stable.inputs.size() >= TOO_MANY_READS) return {"TOO_MANY_READS"};
 
-	std::vector<std::string> assembled_sequences = assemble_reads(left_stable_read_seqs, unstable_read_seqs, right_stable_read_seqs, config, stats);
+	std::vector<assembly_consensus_t> read_contigs;
+	std::vector<path_permission_t> path_permissions;
+	std::vector<int> order;
+	int group_order = 1;
+	for (input_group_t* group : {&left_stable, &unstable, &right_stable}) {
+		for (input_t& input : group->inputs) {
+			assembly_consensus_t contig{std::move(input.seq), {}};
+			contig.votes.resize(contig.seq.length());
+			for (const observation_t& observation : input.observations) {
+				std::vector<uint8_t> quals;
+				const uint8_t* quality_data;
+				if (observation.source == STABLE_READ) quality_data = bam_get_qual(observation.read);
+				else {
+					if (observation.source == CACHED_MATE) quals = decode_qualities(get_mate_qual(observation.read, matequals));
+					else if (observation.source == SEMI_MAPPED_READ) quals = decode_qualities(get_qual_ascii(observation.read, true));
+					else quals = decode_qualities(*observation.clip_qual);
+					if (observation.reverse) std::reverse(quals.begin(), quals.end());
+					quality_data = quals.empty() ? nullptr : quals.data();
+				}
+				for (int i = 0; i < contig.seq.length(); i++) contig.votes[i].add(contig.seq[i], quality_data ? quality_data[i] : 0);
+			}
+			read_contigs.push_back(std::move(contig));
+			path_permissions.push_back(input.permissions);
+			order.push_back(group_order);
+		}
+		group_order++;
+	}
+	std::vector<assembly_consensus_t> contigs = assemble_contigs(read_contigs, path_permissions, order, config, stats);
+	std::vector<std::string> assembled_sequences;
+	for (assembly_consensus_t& contig : contigs) assembled_sequences.push_back(std::move(contig.seq));
 
 	return assembled_sequences;
 }

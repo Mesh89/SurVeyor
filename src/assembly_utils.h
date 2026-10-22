@@ -35,18 +35,6 @@ bool reject_assembly_overlap(const std::string& left, const std::string& right, 
 struct path_permission_t {
 	bool can_start_path, can_end_path;
 };
-struct seq_w_pp_t {
-	std::string seq;
-	std::vector<uint8_t> qual;
-	path_permission_t clip_pair;
-
-	seq_w_pp_t() : seq(), clip_pair() {}
-	seq_w_pp_t(std::string& seq, bool can_start_path, bool can_end_path, std::vector<uint8_t> qual = {}) : seq(seq), qual(std::move(qual)) {
-		clip_pair.can_start_path = can_start_path;
-		clip_pair.can_end_path = can_end_path;
-	}
-};
-
 struct edge_t {
 	int next, score, overlap;
 

@@ -843,12 +843,16 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, {}, quals, {}, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false);
     consensus_seqs.push_back("");
 
-    std::vector<seq_w_pp_t> seqs_w_pp, temp3, temp4;
-    for (std::string& seq : seqs) {
-        seqs_w_pp.push_back({seq, true, true});
+    {
+        std::vector<assembly_consensus_t> read_contigs;
+        for (int i = 0; i < seqs.size(); i++) {
+            read_contigs.push_back(make_read_contig(seqs[i], quals.empty() ? nullptr : quals[i]));
+        }
+        std::vector<path_permission_t> path_permissions(seqs.size(), {true, true});
+        std::vector<int> order(seqs.size(), 2);
+        std::vector<assembly_consensus_t> assembled_contigs = assemble_contigs(read_contigs, path_permissions, order, config, stats);
+        for (assembly_consensus_t& contig : assembled_contigs) consensus_seqs.push_back(std::move(contig.seq));
     }
-    std::vector<std::string> consensus_seqs2 = assemble_reads(temp3, seqs_w_pp, temp4, config, stats);
-    consensus_seqs.insert(consensus_seqs.end(), consensus_seqs2.begin(), consensus_seqs2.end());
 
     positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets, false, read_is_reverse);
     consensus_seqs.push_back("");
