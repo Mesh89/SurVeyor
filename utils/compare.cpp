@@ -25,7 +25,7 @@ std::unordered_map<std::string, std::vector<std::shared_ptr<sv_t>>> called_dels_
 std::unordered_map<std::string, IntervalTree<repeat_t>*> reps_i;
 std::unordered_map<std::string, IntervalTree<std::shared_ptr<sv_t>>*> dels_csv_i, inss_csv_i, invs_csv_i;
 
-StripedSmithWaterman::Aligner edit_distance_aligner(1, 0, 1, 1, false);
+StripedSmithWaterman::Aligner edit_distance_aligner(1, 0, 1, 1, false, true);
 bool ignore_seq = false;
 
 std::mutex mtx;
