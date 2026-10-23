@@ -11,7 +11,6 @@
 #include <algorithm>
 
 #include "assembly_utils.h"
-#include "de_novo_assembly.h"
 #include "htslib/hts_endian.h"
 #include "htslib/sam.h"
 #include "htslib/vcf.h"
@@ -841,18 +840,6 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
     std::vector<std::string> consensus_seqs; 
 
     consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, {}, quals, {}, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false, {}, true);
-    consensus_seqs.push_back("");
-
-    {
-        std::vector<assembly_consensus_t> read_contigs;
-        for (int i = 0; i < seqs.size(); i++) {
-            read_contigs.push_back(make_read_contig(seqs[i], quals.empty() ? nullptr : quals[i]));
-        }
-        std::vector<path_permission_t> path_permissions(seqs.size(), {true, true});
-        std::vector<int> order(seqs.size(), 2);
-        std::vector<assembly_consensus_t> assembled_contigs = assemble_contigs(read_contigs, path_permissions, order, config, stats);
-        for (assembly_consensus_t& contig : assembled_contigs) consensus_seqs.push_back(std::move(contig.seq));
-    }
 
     positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets, false, read_is_reverse);
     consensus_seqs.push_back("");
@@ -956,14 +943,10 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<int> start_positions, end_positions;
     double cum_score = 0;
     std::vector<double> aln_scores;
-    int separation = 0;
     int chosen_cseq_idx = -1;
     for (int i = 0; i < consensus_seqs.size(); i++) {
         std::string cseq = consensus_seqs[i];
-        if (cseq.empty()) {
-            separation = i;
-            continue;
-        }
+        if (cseq.empty()) continue;
         if (cseq == "HAS_CYCLE") continue;
 
         std::vector<std::shared_ptr<bam1_t>> curr_consistent_reads;
