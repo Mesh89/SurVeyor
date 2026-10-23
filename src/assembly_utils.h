@@ -91,25 +91,24 @@ struct assembly_sequence_t {
 	std::vector<int> offsets; // One start offset per vertex in path order.
 };
 
-template<typename SequenceAccessor>
-assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const SequenceAccessor& sequence) {
-	assembly_sequence_t assembly;
-	if (path.vertices.empty()) return assembly;
-
-	assembly.seq = sequence(path.vertices[0]);
-	assembly.offsets.push_back(0);
-	for (int i = 0; i < path.overlaps.size(); i++) {
-		int overlap = path.overlaps[i];
-		assembly.offsets.push_back(assembly.seq.length()-overlap);
-		assembly.seq += sequence(path.vertices[i+1]).substr(overlap);
-	}
-	return assembly;
-}
-
 struct assembly_consensus_t {
 	std::string seq;
 	std::vector<base_votes_t> votes;
 };
+
+assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const std::vector<const assembly_consensus_t*>& contigs) {
+	assembly_sequence_t assembly;
+	if (path.vertices.empty()) return assembly;
+
+	assembly.seq = contigs[path.vertices[0]]->seq;
+	assembly.offsets.push_back(0);
+	for (int i = 0; i < path.overlaps.size(); i++) {
+		int overlap = path.overlaps[i];
+		assembly.offsets.push_back(assembly.seq.length()-overlap);
+		assembly.seq += contigs[path.vertices[i+1]]->seq.substr(overlap);
+	}
+	return assembly;
+}
 
 assembly_consensus_t make_read_contig(const std::string& seq, const uint8_t* quals) {
 	assembly_consensus_t contig{seq, std::vector<base_votes_t>(seq.length())};
@@ -132,6 +131,21 @@ assembly_consensus_t polish_assembly_path(const std::vector<const assembly_conse
 		consensus.seq[i] = consensus.votes[i].best_base(consensus.seq[i]);
 	}
 	return consensus;
+}
+
+std::vector<assembly_consensus_t> assemble_graph_paths(const std::vector<const assembly_consensus_t*>& contigs, const std::vector<std::vector<edge_t> >& l_adj_rev,
+		const std::vector<int>& rev_topological_order, const std::vector<path_permission_t>& path_permissions, std::vector<bool>& used) {
+	std::vector<assembly_consensus_t> assembled_contigs;
+	while (true) {
+		assembly_path_t path = select_assembly_path(l_adj_rev, rev_topological_order, path_permissions, used);
+		if (path.vertices.empty()) break;
+
+		assembly_sequence_t assembly = reconstruct_assembly_path(path, contigs);
+		std::vector<const assembly_consensus_t*> path_inputs;
+		for (int vertex : path.vertices) path_inputs.push_back(contigs[vertex]);
+		assembled_contigs.push_back(polish_assembly_path(path_inputs, std::move(assembly)));
+	}
+	return assembled_contigs;
 }
 
 std::vector<int> find_rev_topological_order(int n, std::vector<int> out_edges, std::vector<std::vector<edge_t> >& l_adj_rev) {
@@ -236,8 +250,8 @@ void break_cycles(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >
 	}
 }
 
-void correct_contig_with_alignments(std::string& contig, std::vector<std::string>& reads, const std::vector<ungapped_aln_t>& ungapped_alns, double max_acceptable_error_rate, const std::vector<const uint8_t*>& quals = {},
-	const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, const std::vector<bool>& read_is_reverse = {}, const std::string& preferred_bases = {}) {
+void correct_contig_with_alignments(std::string& contig, std::vector<std::string>& reads, const std::vector<ungapped_aln_t>& ungapped_alns, const std::vector<const uint8_t*>& quals,
+	const std::function<bool(int, const ungapped_aln_t&)>& accept_read, const std::vector<bool>& read_is_reverse, const std::string& preferred_bases) {
 
 	std::vector<base_votes_t> votes(contig.length());
 	std::vector<strand_base_scores_t> strand_scores(read_is_reverse.empty() ? 0 : contig.length());
@@ -245,8 +259,7 @@ void correct_contig_with_alignments(std::string& contig, std::vector<std::string
 		const ungapped_aln_t& ungapped_aln = ungapped_alns[i];
 		if (ungapped_aln.query_end <= ungapped_aln.query_begin) continue;
 
-		double mismatch_rate = double(ungapped_aln.mismatches)/(ungapped_aln.query_end-ungapped_aln.query_begin);
-		if (accept_read ? accept_read(i, ungapped_aln) : mismatch_rate <= max_acceptable_error_rate) {
+		if (accept_read(i, ungapped_aln)) {
 			for (int j = ungapped_aln.query_begin; j < ungapped_aln.query_end; j++) {
 				int ref_pos = j - ungapped_aln.query_begin + ungapped_aln.ref_begin;
 
@@ -274,14 +287,14 @@ void correct_contig_with_alignments(std::string& contig, std::vector<std::string
 	}
 }
 
-void correct_contig(std::string& contig, std::vector<std::string>& reads, double max_acceptable_error_rate, int min_clip_len, const std::vector<const uint8_t*>& quals = {},
-	const std::function<bool(int, const ungapped_aln_t&)>& accept_read = {}, int mismatch_score = -4, const std::vector<bool>& read_is_reverse = {}, const std::string& preferred_bases = {}) {
+void correct_contig(std::string& contig, std::vector<std::string>& reads, int min_clip_len, const std::vector<const uint8_t*>& quals,
+	const std::function<bool(int, const ungapped_aln_t&)>& accept_read, const std::vector<bool>& read_is_reverse, const std::string& preferred_bases) {
 
 	std::vector<ungapped_aln_t> ungapped_alns;
 	for (std::string& read : reads) {
-		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, mismatch_score));
+		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, 0));
 	}
-	correct_contig_with_alignments(contig, reads, ungapped_alns, max_acceptable_error_rate, quals, accept_read, read_is_reverse, preferred_bases);
+	correct_contig_with_alignments(contig, reads, ungapped_alns, quals, accept_read, read_is_reverse, preferred_bases);
 }
 
 bool is_contained(const std::string& s1, const std::string& s2, double max_seq_error) {

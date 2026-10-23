@@ -32,6 +32,7 @@ void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<
 
 	for (int i = 0; i < alns.size(); i++) {
 		for (int j = i+1; j < alns.size() && get_unclipped_end(alns[i].aln)-get_unclipped_start(alns[j].aln) >= config.min_clip_len; j++) {
+			if (is_contained(alns[i].contig->seq, alns[j].contig->seq, config.max_seq_error)) continue;
 			int min_overlap = config.min_clip_len;
 			// In principle, the suffix-prefix alignment should be the same as the overlap between the two alignments on the reference
 			// This may not be the case if there are insertions or deletions in between the reads. However, in that case,
@@ -133,18 +134,11 @@ std::vector<assembly_consensus_t> generate_reference_guided_contigs(std::string 
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
-	std::vector<assembly_consensus_t> assembled_contigs;
+	std::vector<const assembly_consensus_t*> graph_contigs;
+	for (const aln_guided_contig_t& aln_contig : alns) graph_contigs.push_back(aln_contig.contig);
 	std::vector<bool> used(n);
 	std::vector<path_permission_t> path_permissions(n, {true, true});
-	while (true) {
-		assembly_path_t path = select_assembly_path(l_adj_rev, rev_topological_order, path_permissions, used);
-		if (path.vertices.empty()) break;
-
-		assembly_sequence_t assembly = reconstruct_assembly_path(path, [&alns](int vertex) -> const std::string& { return alns[vertex].contig->seq; });
-		std::vector<const assembly_consensus_t*> path_inputs;
-		for (int vertex : path.vertices) path_inputs.push_back(alns[vertex].contig);
-		assembled_contigs.push_back(polish_assembly_path(path_inputs, std::move(assembly)));
-	}
+	std::vector<assembly_consensus_t> assembled_contigs = assemble_graph_paths(graph_contigs, l_adj_rev, rev_topological_order, path_permissions, used);
 	for (int i = 0; i < n; i++) {
 		if (!used[i]) discarded_contigs.push_back(*alns[i].contig);
 	}
@@ -161,7 +155,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		const std::vector<const uint8_t*>& quals_lf, const std::vector<const uint8_t*>& quals_is, const std::vector<const uint8_t*>& quals_rf,
 		StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner,
 		std::vector<StripedSmithWaterman::Alignment>& consensus_contigs_alns, config_t& config, stats_t& stats,
-		bool scaffold = true, const std::vector<rga_input_source_t>& input_sources = {}) {
+		bool scaffold = true, const std::vector<rga_input_source_t>& input_sources = {}, bool retain_initial_contigs = false) {
 
 	std::vector<std::string> read_seqs;
 	for (std::string& seq : seqs_lf) {
@@ -209,6 +203,10 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	}
 	std::vector<assembly_consensus_t> discarded_contigs;
 	std::vector<assembly_consensus_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config);
+	std::vector<std::string> initial_sequences;
+	if (retain_initial_contigs) {
+		for (const assembly_consensus_t& contig : assembled_contigs) initial_sequences.push_back(contig.seq);
+	}
 
 	// try and join contigs
 	while (true) {
@@ -255,10 +253,19 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		retained_contigs.push_back(std::move(p.first));
 		consensus_contigs_alns.push_back(p.second);
 	}
+	auto append_initial_sequences = [&](std::vector<std::string>& sequences) {
+		for (std::string& seq : initial_sequences) {
+			if (std::find(sequences.begin(), sequences.end(), seq) != sequences.end()) continue;
+			harsh_aligner.Align(seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
+			sequences.push_back(std::move(seq));
+			consensus_contigs_alns.push_back(aln);
+		}
+	};
 
 	if (!scaffold || retained_contigs.empty()) {
 		std::vector<std::string> sequences;
 		for (assembly_consensus_t& contig : retained_contigs) sequences.push_back(std::move(contig.seq));
+		append_initial_sequences(sequences);
 		return sequences;
 	}
 
@@ -333,6 +340,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		consensus_contigs_alns.push_back(p.second);
 	}
 
+	append_initial_sequences(sequences);
 	return sequences;
 }
 

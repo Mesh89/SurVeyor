@@ -840,7 +840,7 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
 
     std::vector<std::string> consensus_seqs; 
 
-    consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, {}, quals, {}, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false);
+    consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, {}, quals, {}, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false, {}, true);
     consensus_seqs.push_back("");
 
     {
@@ -874,7 +874,7 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
             return passes_consensus_mismatch_filter(seqs[i], read_is_reverse[i], consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config);
         };
         // Use ARC's placement scoring and acceptance policy before accumulating base-quality votes.
-        correct_contig(consensus_seq, seqs, config.max_seq_error, config.min_clip_len, quals, accept_read, 0, read_is_reverse, preferred_bases);
+        correct_contig(consensus_seq, seqs, config.min_clip_len, quals, accept_read, read_is_reverse, preferred_bases);
     }
 
     return consensus_seqs;

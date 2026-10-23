@@ -63,10 +63,9 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 			std::string& s2 = read_seqs[j];
 			if (is_contained(s1, s2, max_seq_error)) continue;
 
-			int max_overlap = std::min(s1.length(), s2.length())-1;
-			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, max_seq_error, min_overlap, max_overlap);
+			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, max_seq_error, min_overlap);
 			bool spa1_rejected = reject_assembly_overlap(s1, s2, spa1.overlap);
-			suffix_prefix_aln_t spa2 = aln_suffix_prefix(s2, s1, 1, -4, max_seq_error, min_overlap, max_overlap);
+			suffix_prefix_aln_t spa2 = aln_suffix_prefix(s2, s1, 1, -4, max_seq_error, min_overlap);
 			bool spa2_rejected = reject_assembly_overlap(s2, s1, spa2.overlap);
 
 			if (spa1.overlap && spa2.overlap) {
@@ -152,19 +151,10 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 		}
 	}
 
-	std::vector<assembly_consensus_t> assembled_contigs;
+	std::vector<const assembly_consensus_t*> graph_contigs;
+	for (const assembly_consensus_t& contig : read_contigs) graph_contigs.push_back(&contig);
 	std::vector<bool> used(n);
-	while (true) {
-		assembly_path_t path = select_assembly_path(l_adj_rev, rev_topological_order, path_permissions, used);
-		if (path.vertices.empty()) break;
-
-		assembly_sequence_t assembly = reconstruct_assembly_path(path, [&read_seqs](int vertex) -> const std::string& { return read_seqs[vertex]; });
-		std::vector<const assembly_consensus_t*> path_inputs;
-		for (int vertex : path.vertices) path_inputs.push_back(&read_contigs[vertex]);
-		assembled_contigs.push_back(polish_assembly_path(path_inputs, std::move(assembly)));
-	}
-
-	return assembled_contigs;
+	return assemble_graph_paths(graph_contigs, l_adj_rev, rev_topological_order, path_permissions, used);
 }
 
 std::vector<std::string> assemble_sequences(std::string contig_name, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
