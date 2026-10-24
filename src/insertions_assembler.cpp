@@ -133,9 +133,9 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
                   aligner, permissive_aligner, is_rc, config, stats);
 
     // build corrected consensus sequence and realign reads to it
-    bool left_bp_precise = false, right_bp_precise = false;
+    std::vector<hts_pair_pos_t> assembled_contig_intervals;
     std::string corrected_consensus_sequence = generate_consensus_sequences(contig_name, contigs, contig_map, r_cluster, l_cluster, ro_remap_side, lo_remap_side,
-					best_region, is_rc, left_bp_precise, right_bp_precise, mateseqs, matequals, aligner, harsh_aligner, config, stats);
+					best_region, is_rc, assembled_contig_intervals, mateseqs, matequals, aligner, harsh_aligner, config, stats);
 
     /* == Try assembly == */
 	int rc_accepted_reads = 0, lc_accepted_reads = 0;
@@ -160,7 +160,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 
     bool success = false;
     std::shared_ptr<insertion_t> insertion = detect_reference_guided_assembly_insertion(contig_name, contigs.get_seq(contig_name), contigs.get_len(contig_name), 
-        corrected_consensus_sequence, r_cluster, l_cluster, ro_remap_side, lo_remap_side, best_region, is_rc, left_bp_precise, right_bp_precise, aligner, stats, config);
+        corrected_consensus_sequence, r_cluster, l_cluster, ro_remap_side, lo_remap_side, best_region, is_rc, assembled_contig_intervals, aligner, stats, config);
     if (insertion != NULL) {
         found.push_back(insertion);
         success = true;

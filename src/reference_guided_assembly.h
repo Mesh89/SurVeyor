@@ -402,10 +402,10 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t& contigs, contig_map_t& contig_map, 
 			std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster, 
 	        remap_side_t& rc_remap_side, remap_side_t& lc_remap_side, region_t& best_region, bool is_rc, 
-			bool& left_bp_precise, bool& right_bp_precise, std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
+			std::vector<hts_pair_pos_t>& assembled_contig_intervals, std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
 			StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config, stats_t& stats) {
 
-	left_bp_precise = false, right_bp_precise = false;
+	assembled_contig_intervals.clear();
 
 	if (best_region.score.remap_start >= best_region.score.remap_end) return "";
 
@@ -493,14 +493,6 @@ std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t
 	if (consensus_contigs.empty()) {
 		corrected_junction_seq = full_junction_sequence;
 	} else {
-		int l_bp_in_seq = refined_r_cluster.end-refined_r_cluster.start, r_bp_in_seq = full_junction_sequence.length()-(refined_l_cluster.end-refined_l_cluster.start);
-
-		const int OFFSET = 50;
-		for (StripedSmithWaterman::Alignment& aln : consensus_contigs_alns) {
-			left_bp_precise |= (aln.ref_begin < l_bp_in_seq-OFFSET && aln.ref_end >= l_bp_in_seq+OFFSET);
-			right_bp_precise |= (aln.ref_begin < r_bp_in_seq-OFFSET && aln.ref_end >= r_bp_in_seq+OFFSET);
-		}
-	
 		std::vector<std::pair<std::string, StripedSmithWaterman::Alignment> > contigs_sorted_by_pos;
 		StripedSmithWaterman::Filter filter;
 		for (int i = 0; i < consensus_contigs.size(); i++) {
@@ -519,7 +511,10 @@ std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t
 			int span_begin = std::max(0, p.second.ref_begin-p.second.query_begin);
 			int span_end = std::min(int(full_junction_sequence.length())-1, p.second.ref_end+int(p.first.length())-1-p.second.query_end);
 			if (span_begin > cur) corrected_junction_seq += full_junction_sequence.substr(cur, span_begin-cur);
+			hts_pos_t contig_begin = corrected_junction_seq.length();
 			corrected_junction_seq += p.first;
+			// Half-open coordinates in the corrected junction, excluding template-filled gaps.
+			assembled_contig_intervals.push_back({contig_begin, hts_pos_t(corrected_junction_seq.length())});
 			cur = std::max(cur, span_end+1);
 		}
 		corrected_junction_seq += full_junction_sequence.substr(cur);
@@ -592,7 +587,7 @@ void update_read(bam1_t* read, region_t& chosen_region, remap_info_t& remap_info
 std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::string& junction_seq,
 			std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster, 
 			remap_side_t& ro_remap_side, remap_side_t& lo_remap_side,
-			region_t& best_region, bool is_rc, bool left_bp_precise, bool right_bp_precise, 
+			region_t& best_region, bool is_rc, const std::vector<hts_pair_pos_t>& assembled_contig_intervals,
 			StripedSmithWaterman::Aligner& aligner, stats_t& stats, config_t& config) {
 
 	int remap_start = std::max(hts_pos_t(0), r_cluster->start-50);
@@ -600,37 +595,16 @@ std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::str
 	if (remap_start >= remap_end) return NULL;
 
 	 std::vector<std::shared_ptr<sv_t>> insertions = detect_svs_from_junction(contig_name, contig_seq, junction_seq, std::string(junction_seq.length(), 'I'),
-                remap_start, remap_end, remap_start, remap_end, aligner, 0, 0, stats, config);
+                remap_start, remap_end, remap_start, remap_end, aligner, 0, 0, stats, config, -1, 1000, false, nullptr, &assembled_contig_intervals);
 
 	if (insertions.empty() || insertions[0]->svtype() != "INS" || insertions[0]->svsize() < config.min_assembled_ins_size) return NULL;
 
 	std::shared_ptr<insertion_t> insertion = std::dynamic_pointer_cast<insertion_t>(insertions[0]);
 
-	std::shared_ptr<insertion_cluster_t> refined_r_cluster = std::make_shared<insertion_cluster_t>();
-    for (int i = 0; i < r_cluster->cluster->reads.size(); i++) {
-        std::shared_ptr<bam1_t> r = r_cluster->cluster->reads[i];
-        if (ro_remap_side.read_remap_infos[i].accepted) {
-            refined_r_cluster->add_stable_read(r);
-        }
-    }
-	if (r_cluster->clip_consensus && ro_remap_side.clip_remap_info && ro_remap_side.clip_remap_info->accepted) {
-        refined_r_cluster->add_clip_cluster(r_cluster->clip_consensus);
-    }
-
-	std::shared_ptr<insertion_cluster_t> refined_l_cluster = std::make_shared<insertion_cluster_t>();
-    for (int i = 0; i < l_cluster->cluster->reads.size(); i++) {
-        std::shared_ptr<bam1_t> r = l_cluster->cluster->reads[i];
-        if (lo_remap_side.read_remap_infos[i].accepted) {
-            refined_l_cluster->add_stable_read(r);
-        }
-    }
-    if (l_cluster->clip_consensus && lo_remap_side.clip_remap_info && lo_remap_side.clip_remap_info->accepted) {
-        refined_l_cluster->add_clip_cluster(l_cluster->clip_consensus);
-    }
-
-	if (refined_r_cluster->empty() || refined_l_cluster->empty()) {
-		return NULL;
-	}
+	std::shared_ptr<consensus_t> rc_consensus = r_cluster->clip_consensus && ro_remap_side.clip_remap_info && ro_remap_side.clip_remap_info->accepted ? r_cluster->clip_consensus : nullptr;
+	std::shared_ptr<consensus_t> lc_consensus = l_cluster->clip_consensus && lo_remap_side.clip_remap_info && lo_remap_side.clip_remap_info->accepted ? l_cluster->clip_consensus : nullptr;
+	if (!rc_consensus && std::none_of(ro_remap_side.read_remap_infos.begin(), ro_remap_side.read_remap_infos.end(), [](const remap_info_t& ri) { return ri.accepted; })) return NULL;
+	if (!lc_consensus && std::none_of(lo_remap_side.read_remap_infos.begin(), lo_remap_side.read_remap_infos.end(), [](const remap_info_t& ri) { return ri.accepted; })) return NULL;
 
 	// Get transposed sequence coverage
 	std::vector<std::pair<int,int>> covered_segments;
@@ -697,9 +671,8 @@ std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::str
 		insertion->ins_seq = insertion->ins_seq.substr(prefix_cov_start, suffix_cov_end-prefix_cov_start+1);
 	}
 
-	if (refined_r_cluster->clip_consensus) insertion->rc_consensus = refined_r_cluster->clip_consensus;
-	if (refined_l_cluster->clip_consensus) insertion->lc_consensus = refined_l_cluster->clip_consensus;
-	insertion->imprecise = !left_bp_precise || !right_bp_precise;
+	if (rc_consensus) insertion->rc_consensus = rc_consensus;
+	if (lc_consensus) insertion->lc_consensus = lc_consensus;
 	insertion->source = "REFERENCE_GUIDED_ASSEMBLY";
 	insertion->mh_len = 0; // current value is just a temporary approximation, reset it. genotype will calculate it correctly
 

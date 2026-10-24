@@ -411,12 +411,22 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_name, char* contig_seq, std::string junction_seq, std::string junction_qual,
 		hts_pos_t ref_remap_lh_start, hts_pos_t ref_remap_lh_end, hts_pos_t ref_remap_rh_start, hts_pos_t ref_remap_rh_end, 
 		StripedSmithWaterman::Aligner& aligner, int lowq_junction_prefix, int lowq_junction_suffix,
-	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000, bool split_only = false, const std::set<int>* cigar_indel_lengths = nullptr) {
+	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000, bool split_only = false, const std::set<int>* cigar_indel_lengths = nullptr, const std::vector<hts_pair_pos_t>* assembled_contig_intervals = nullptr) {
 		// do not find aux SNPs in low-quality regions of the junction sequence
 
 	const int MAX_REF_REMAP_LEN = 100000;
 	if (contig_len < 0) contig_len = std::max(ref_remap_lh_end, ref_remap_rh_end);
 	haplotype_normalization::normalization_context_t normalization_context(contig_seq, contig_len, normalization_extend);
+	auto set_insertion_precision = [&](const std::shared_ptr<sv_t>& sv, const junction_query_origins_t& origins) {
+		if (assembled_contig_intervals == nullptr || sv->svtype() != "INS") return;
+		hts_pos_t query_begin = origins.insertion_origin(sv.get(), 0), query_end = origins.insertion_origin(sv.get(), sv->ins_seq.length()-1)+1;
+		bool left_supported = false, right_supported = false;
+		for (const auto& contig : *assembled_contig_intervals) {
+			left_supported |= query_begin-contig.beg >= 50 && contig.end-query_begin >= 50;
+			right_supported |= query_end-contig.beg >= 50 && contig.end-query_end >= 50;
+		}
+		sv->imprecise = !left_supported || !right_supported;
+	};
 
     hts_pos_t ref_remap_lh_len = ref_remap_lh_end - ref_remap_lh_start;
     hts_pos_t ref_remap_rh_len = ref_remap_rh_end - ref_remap_rh_start;
@@ -482,7 +492,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		junction_query_origins_t full_query_origins;
 		std::vector<std::shared_ptr<sv_t>> window_svs = detect_svs_from_aln(full_aln, contig_name, remap_start, junction_seq,
 			junction_qual, nullptr, lowq_junction_prefix, lowq_junction_suffix, stats, config, true, &full_query_origins);
-		for (auto& sv : window_svs) sv = filter_decomposed_aux_snps(sv, normalization_context, junction_seq, junction_qual, lowq_junction_prefix, lowq_junction_suffix, full_query_origins);
+		for (auto& sv : window_svs) {
+			set_insertion_precision(sv, full_query_origins);
+			sv = filter_decomposed_aux_snps(sv, normalization_context, junction_seq, junction_qual, lowq_junction_prefix, lowq_junction_suffix, full_query_origins);
+		}
 		full_svs.insert(full_svs.end(), window_svs.begin(), window_svs.end());
 	};
 	if (remap_windows_overlap) {
@@ -679,7 +692,10 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	}
 
 	// Keep both interpretations after their AUX contexts and remap ranges are complete.
-	for (auto& sv : svs) sv = filter_decomposed_aux_snps(sv, normalization_context, junction_seq, junction_qual, lowq_junction_prefix, lowq_junction_suffix, split_query_origins);
+	for (auto& sv : svs) {
+		set_insertion_precision(sv, split_query_origins);
+		sv = filter_decomposed_aux_snps(sv, normalization_context, junction_seq, junction_qual, lowq_junction_prefix, lowq_junction_suffix, split_query_origins);
+	}
 	svs.insert(svs.end(), full_svs.begin(), full_svs.end());
     return svs;
 }
