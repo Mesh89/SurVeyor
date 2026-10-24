@@ -320,7 +320,7 @@ void refine_dp_dels(std::vector<std::shared_ptr<deletion_t>>& deletions, std::st
 				// left-align
 				auto candidate = std::make_shared<deletion_t>(*std::static_pointer_cast<deletion_t>(svs[0]));
 				// Temporarily writes AUX SNP bases into contig_seq; safe because refinement runs one task per contig after all other pools finish.
-				haplotype_normalization::left_align_del(candidate, contig_seq);
+				haplotype_normalization::left_align(candidate, contig_seq);
 				if (candidate->start < left_bp_start || candidate->start > left_bp_end) continue;
 				if (candidate->end < right_bp_start || candidate->end > right_bp_end) continue;
 				if (candidate->svsize() < config.min_sv_size) continue;

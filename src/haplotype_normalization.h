@@ -520,7 +520,7 @@ std::vector<std::shared_ptr<sv_t>> vars_from_alignment(StripedSmithWaterman::Ali
 	return vars;
 }
 
-bool realign_haplotype_atoms(std::shared_ptr<sv_t> sv, std::vector<std::shared_ptr<sv_t>>& indels, std::vector<snp_t>& snps, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr, const std::vector<hts_pos_t>* alt_query_positions = nullptr) {
+bool realign_haplotype_atoms(std::shared_ptr<sv_t> sv, std::vector<std::shared_ptr<sv_t>>& indels, std::vector<snp_t>& snps, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr, const std::vector<hts_pos_t>* alt_query_positions = nullptr, bool require_full_interval = false) {
 	char* chr_seq = context.chr_seq;
 	hts_pos_t chr_len = context.chr_len;
 	hts_pos_t ins_start = sv->start, ins_end = sv->end;
@@ -551,6 +551,7 @@ bool realign_haplotype_atoms(std::shared_ptr<sv_t> sv, std::vector<std::shared_p
 
 	hts_pos_t ref_start = std::max(hts_pos_t(0), ins_start - extend + 1);
 	hts_pos_t ref_end = std::min(chr_len, ins_end + extend + 1);
+	hts_pos_t original_ref_start = ref_start, original_ref_end = ref_end;
 	StripedSmithWaterman::Filter filter;
 	StripedSmithWaterman::Alignment aln;
 	// keep extending the reference window until we find an alignment without soft clipping at either end (up to 10 times)
@@ -573,9 +574,25 @@ bool realign_haplotype_atoms(std::shared_ptr<sv_t> sv, std::vector<std::shared_p
 	}
 
 	bool success = !normalization_clipped(aln, true) && !normalization_clipped(aln, false);
+	// A shifted local alignment can hide a real indel in a repeat.
+	if (require_full_interval) success = success && !aln.cigar.empty() && aln.query_begin == 0 && aln.query_end == alt_len-1 && ref_start+aln.ref_begin == original_ref_start && ref_start+aln.ref_end+1 == original_ref_end;
 	if (success) {
-		if (provenance != nullptr) provenance->snps.clear();
+		if (provenance != nullptr) {
+			if (require_full_interval) {
+				// Replace local SNP origins while retaining the untouched AUX context.
+				for (auto it = provenance->snps.begin(); it != provenance->snps.end();) {
+					if (it->first.first >= original_ref_start && it->first.first < original_ref_end) it = provenance->snps.erase(it);
+					else ++it;
+				}
+			} else provenance->snps.clear();
+		}
 		indels = vars_from_alignment(aln, sv->chr, ref_start, putative_alt_allele, snps, provenance, alt_query_positions);
+		if (require_full_interval) {
+			for (const auto& snp : sv->aux_snps) {
+				if (snp.pos < original_ref_start || snp.pos >= original_ref_end) snps.push_back(snp);
+			}
+			std::sort(snps.begin(), snps.end(), [](const snp_t& a, const snp_t& b) { return a.pos < b.pos; });
+		}
 	}
 
 	delete[] lf_seq;
@@ -625,11 +642,11 @@ std::shared_ptr<sv_t> update_main_var_from_realigned_vars(std::shared_ptr<sv_t> 
 std::shared_ptr<sv_t> realign_indel_haplotype(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
 	bool has_replaced_ref = sv->start != sv->end && !sv->ins_seq.empty();
 	bool has_aux_indels = !sv->aux_indels.empty();
-	if (sv->incomplete_ins_seq() || (!has_replaced_ref && !has_aux_indels) || sv->svsize() >= 50) return sv;
+	if (sv->incomplete_ins_seq() || (!has_replaced_ref && !has_aux_indels && sv->aux_snps.empty()) || sv->svsize() >= 50) return sv;
 
 	std::vector<std::shared_ptr<sv_t>> realigned_svs;
 	std::vector<snp_t> snps;
-	if (realign_haplotype_atoms(sv, realigned_svs, snps, context, provenance)) {
+	if (realign_haplotype_atoms(sv, realigned_svs, snps, context, provenance, nullptr, !has_replaced_ref && !has_aux_indels)) {
 		sv = update_main_var_from_realigned_vars(sv, realigned_svs, snps);
 	}
 	return sv;
@@ -646,6 +663,7 @@ std::shared_ptr<sv_t> realign(std::shared_ptr<sv_t> sv, const normalization_cont
 
 
 std::shared_ptr<sv_t> normalize_haplotype(std::shared_ptr<sv_t> sv, const normalization_context_t& context, normalization_provenance_t* provenance = nullptr) {
+	if (sv->imprecise) return sv;
 	sv = merge_adjacent_main_indel(sv, provenance);
 	if (sv != nullptr) sv = simplify(sv, context, provenance);
 	if (sv != nullptr) {
@@ -741,6 +759,7 @@ void left_align_ins(std::shared_ptr<sv_t> sv, char* chr_seq) {
 
 
 void left_align(std::shared_ptr<sv_t> sv, char* chr_seq) {
+	if (sv->imprecise) return;
 	std::string svtype = sv->svtype();
 	if (svtype == "DEL") {
 		left_align_del(sv, chr_seq);
