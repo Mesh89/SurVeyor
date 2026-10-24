@@ -41,7 +41,6 @@ std::ofstream assembly_failed_no_seq, assembly_failed_cycle_writer, assembly_fai
 std::vector<std::shared_ptr<sv_t>> insertions;
 
 const double BASE_ACCEPTANCE_THRESHOLD = 0.95;
-const int TOO_MANY_READS = 1000;
 
 struct pair_eval_t {
     bool success = false;
@@ -80,7 +79,8 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
                    stats_t& stats, std::vector<std::shared_ptr<sv_t>>& found,
                    std::ostream& failed_no_seq, std::ostream& failed_cycle, std::ostream& failed_too_many_reads) {
 
-	if (l_cluster->cluster->count + r_cluster->cluster->count > TOO_MANY_READS) return false;
+	const int TOO_MANY_READS = stats.get_max_depth(contig_map.get_name(contig_id)) * stats.max_is / stats.read_len;
+	if (l_cluster->cluster->count + r_cluster->cluster->count + l_cluster->semi_mapped_reads.size() + r_cluster->semi_mapped_reads.size() > TOO_MANY_READS) return false;
 
     std::vector<region_t> regions;
 

@@ -9,10 +9,13 @@
 #include <stack>
 #include <string>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "htslib/hts.h"
+#include "htslib/sam.h"
 #include "consensus.h"
 #include "ungapped_alignment.h"
 #include "utils.h"
@@ -41,6 +44,13 @@ struct edge_t {
 	edge_t() : next(0), score(0), overlap(0) {}
 	edge_t(int next, int score, int overlap) : next(next), score(score), overlap(overlap) {}
 };
+
+void add_assembly_edge(int from, const edge_t& edge, std::vector<int>& out_edges,
+		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev) {
+	out_edges[from]++;
+	l_adj[from].push_back(edge);
+	l_adj_rev[edge.next].push_back({from, edge.score, edge.overlap});
+}
 
 struct assembly_path_t {
 	std::vector<int> vertices;
@@ -96,6 +106,23 @@ struct assembly_consensus_t {
 	std::vector<base_votes_t> votes;
 };
 
+struct assembly_input_group_t {
+	struct representative_t {
+		int index;
+		std::unordered_set<std::string> sources;
+	};
+	std::unordered_map<std::string, representative_t> representatives;
+
+	// Return the representative index and whether to accumulate this observation's evidence.
+	std::pair<int, bool> add(const std::string& seq, int next_index, bam1_t* read = nullptr, bool mate = false) {
+		auto entry = representatives.emplace(seq, representative_t{next_index, {}});
+		if (!read) return {entry.first->second.index, true};
+		std::string source = bam_get_qname(read);
+		source += bool(read->core.flag & BAM_FREAD1) != mate ? "_1" : "_2";
+		return {entry.first->second.index, entry.first->second.sources.insert(source).second};
+	}
+};
+
 assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const std::vector<const assembly_consensus_t*>& contigs) {
 	assembly_sequence_t assembly;
 	if (path.vertices.empty()) return assembly;
@@ -110,11 +137,15 @@ assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const
 	return assembly;
 }
 
+void add_read_votes(assembly_consensus_t& contig, const uint8_t* quals) {
+	for (int i = 0; i < contig.seq.length(); i++) {
+		contig.votes[i].add(contig.seq[i], quals ? quals[i] : 0);
+	}
+}
+
 assembly_consensus_t make_read_contig(const std::string& seq, const uint8_t* quals) {
 	assembly_consensus_t contig{seq, std::vector<base_votes_t>(seq.length())};
-	for (int i = 0; i < seq.length(); i++) {
-		contig.votes[i].add(seq[i], quals ? quals[i] : 0);
-	}
+	add_read_votes(contig, quals);
 	return contig;
 }
 

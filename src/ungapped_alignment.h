@@ -187,7 +187,7 @@ suffix_prefix_aln_t aln_suffix_prefix(std::string& s1, std::string& s2, int matc
     int best_score = 0, best_aln_mismatches = 0;
     int overlap = 0;
 
-    for (int i = std::max(0, (int) s1.length()-max_overlap); i < s1.length()-min_overlap+1; i++) {
+    for (int i = std::max(0, (int) s1.length()-max_overlap); i < (int) s1.length()-min_overlap+1; i++) {
         if (i+s2.length() < s1.length()) continue;	// this means that the suffix of s1 I am considering is larger than the the whole s2,
                                                     // therefore it wouldn't be a suffix-prefix alignment   
 

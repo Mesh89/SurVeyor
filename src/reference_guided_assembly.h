@@ -5,7 +5,6 @@
 #include <memory>
 #include <queue>
 #include <unordered_map>
-#include <unordered_set>
 
 #include "../libs/ssw_selected.h"
 #include "htslib/sam.h"
@@ -45,9 +44,7 @@ void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<
 			suffix_prefix_aln_t spa = aln_suffix_prefix(alns[i].contig->seq, alns[j].contig->seq, 1, -4, config.max_seq_error, min_overlap);
 			bool rejected = reject_assembly_overlap(alns[i].contig->seq, alns[j].contig->seq, spa.overlap);
 			if (spa.overlap && !rejected) {
-				out_edges[i]++;
-				l_adj[i].push_back({j, spa.score, spa.overlap});
-				l_adj_rev[j].push_back({i, spa.score, spa.overlap});
+				add_assembly_edge(i, {j, spa.score, spa.overlap}, out_edges, l_adj, l_adj_rev);
 			}
 		}
 	}
@@ -172,13 +169,9 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	read_quals.insert(read_quals.end(), quals_rf.begin(), quals_rf.end());
 
 	std::vector<assembly_consensus_t> read_contigs;
-	struct representative_t {
-		int index;
-		std::unordered_set<std::string> sources;
-	};
 	int group_begin = 0;
 	for (int group_size : {seqs_lf.size(), seqs_is.size(), seqs_rf.size()}) {
-		std::unordered_map<std::string, representative_t> representatives;
+		assembly_input_group_t representatives;
 		for (int i = group_begin; i < group_begin+group_size; i++) {
 			const std::string& seq = read_seqs[i];
 			const uint8_t* quals = read_quals.empty() ? nullptr : read_quals[i];
@@ -187,17 +180,10 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 				read_contigs.push_back(make_read_contig(seq, quals));
 				continue;
 			}
-			auto entry = representatives.emplace(seq, representative_t{int(read_contigs.size()), {}});
-			if (source) {
-				std::string id = bam_get_qname(source->read);
-				id += is_first_read(source->read) != source->mate ? "_1" : "_2";
-				if (!entry.first->second.sources.insert(id).second) continue;
-			}
-			if (entry.second) read_contigs.push_back(make_read_contig(seq, quals));
-			else {
-				std::vector<base_votes_t>& votes = read_contigs[entry.first->second.index].votes;
-				for (int pos = 0; pos < seq.length(); pos++) votes[pos].add(seq[pos], quals ? quals[pos] : 0);
-			}
+			auto input = representatives.add(seq, read_contigs.size(), source ? source->read : nullptr, source ? source->mate : false);
+			if (!input.second) continue;
+			if (input.first == read_contigs.size()) read_contigs.push_back(make_read_contig(seq, quals));
+			else add_read_votes(read_contigs[input.first], quals);
 		}
 		group_begin += group_size;
 	}
@@ -353,7 +339,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	std::vector<const uint8_t*> quals_lf, quals_is, quals_rf;
 	std::vector<rga_input_source_t> sources_lf, sources_is, sources_rf;
 	std::vector<std::vector<uint8_t>> quals_storage;
-	quals_storage.reserve(r_cluster->cluster->reads.size()+l_cluster->cluster->reads.size()+2);
+	quals_storage.reserve(r_cluster->cluster->reads.size()+l_cluster->cluster->reads.size()+r_cluster->semi_mapped_reads.size()+l_cluster->semi_mapped_reads.size()+2);
 	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
 		std::string read_seq = get_sequence(read.get());
 		seqs_lf.push_back(read_seq);
@@ -389,6 +375,22 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		quals_storage.push_back(decode_qualities(l_cluster->clip_consensus->qual));
 		quals_rf.push_back(quals_storage.back().data());
 		sources_rf.push_back({nullptr, false});
+	}
+	for (bam1_t* read : r_cluster->semi_mapped_reads) {
+		std::string read_seq = get_sequence(read, true);
+		rc(read_seq);
+		quals_storage.push_back(decode_qualities(get_qual_ascii(read, true)));
+		std::reverse(quals_storage.back().begin(), quals_storage.back().end());
+		seqs_is.push_back(read_seq);
+		quals_is.push_back(quals_storage.back().data());
+		sources_is.push_back({read, false});
+	}
+	for (bam1_t* read : l_cluster->semi_mapped_reads) {
+		std::string read_seq = get_sequence(read, true);
+		quals_storage.push_back(decode_qualities(get_qual_ascii(read, true)));
+		seqs_is.push_back(read_seq);
+		quals_is.push_back(quals_storage.back().data());
+		sources_is.push_back({read, false});
 	}
 
 	std::vector<rga_input_source_t> input_sources = sources_lf;

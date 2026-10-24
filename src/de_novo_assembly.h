@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
-#include <unordered_set>
 #include <mutex>
 #include <htslib/sam.h>
 
@@ -68,32 +67,12 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 			suffix_prefix_aln_t spa2 = aln_suffix_prefix(s2, s1, 1, -4, max_seq_error, min_overlap);
 			bool spa2_rejected = reject_assembly_overlap(s2, s1, spa2.overlap);
 
-			if (spa1.overlap && spa2.overlap) {
-				if (spa1.score >= spa2.score && order[i] <= order[j]) {
-					if (!spa1_rejected) {
-						out_edges[i]++;
-						l_adj[i].push_back({j, spa1.score, spa1.overlap});
-						l_adj_rev[j].push_back({i, spa1.score, spa1.overlap});
-					}
-				} else if (spa1.score < spa2.score && order[j] <= order[i]) {
-					if (!spa2_rejected) {
-						out_edges[j]++;
-						l_adj[j].push_back({i, spa2.score, spa2.overlap});
-						l_adj_rev[i].push_back({j, spa2.score, spa2.overlap});
-					}
-				}
-			} else if (spa1.overlap && order[i] <= order[j]) {
-				if (!spa1_rejected) {
-					out_edges[i]++;
-					l_adj[i].push_back({j, spa1.score, spa1.overlap});
-					l_adj_rev[j].push_back({i, spa1.score, spa1.overlap});
-				}
-			} else if (spa2.overlap && order[j] <= order[i]) {
-				if (!spa2_rejected) {
-					out_edges[j]++;
-					l_adj[j].push_back({i, spa2.score, spa2.overlap});
-					l_adj_rev[i].push_back({j, spa2.score, spa2.overlap});
-				}
+			bool reverse = spa2.overlap && (!spa1.overlap || spa1.score < spa2.score);
+			int from = reverse ? j : i, to = reverse ? i : j;
+			const suffix_prefix_aln_t& spa = reverse ? spa2 : spa1;
+			bool rejected = reverse ? spa2_rejected : spa1_rejected;
+			if (spa.overlap && order[from] <= order[to] && !rejected) {
+				add_assembly_edge(from, {to, spa.score, spa.overlap}, out_edges, l_adj, l_adj_rev);
 			}
 		}
 	}
@@ -171,23 +150,19 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 		std::string seq;
 		path_permission_t permissions;
 		std::vector<observation_t> observations;
-		std::unordered_set<std::string> read_sources;
 	};
 	struct input_group_t {
 		std::vector<input_t> inputs;
-		std::unordered_map<std::string, int> sequence_indices;
+		assembly_input_group_t representatives;
 	};
 	input_group_t left_stable, unstable, right_stable;
 	auto add_read = [](input_group_t& group, const std::string& seq, observation_t observation, path_permission_t permissions) {
-		auto entry = group.sequence_indices.emplace(seq, group.inputs.size());
-		if (entry.second) group.inputs.push_back({seq, permissions, {}, {}});
-		input_t& input = group.inputs[entry.first->second];
-		std::string source = bam_get_qname(observation.read);
-		source += is_first_read(observation.read) != (observation.source == CACHED_MATE) ? "_1" : "_2";
-		if (input.read_sources.insert(source).second) input.observations.push_back(observation);
+		auto input = group.representatives.add(seq, group.inputs.size(), observation.read, observation.source == CACHED_MATE);
+		if (input.first == group.inputs.size()) group.inputs.push_back({seq, permissions, {}});
+		if (input.second) group.inputs[input.first].observations.push_back(observation);
 	};
 	if (r_cluster->clip_consensus) {
-		left_stable.inputs.push_back({r_cluster->clip_consensus->sequence, {true, false}, {{nullptr, &r_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}}, {}});
+		left_stable.inputs.push_back({r_cluster->clip_consensus->sequence, {true, false}, {{nullptr, &r_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}}});
 	}
 	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
 		std::string seq = get_sequence(read.get());
@@ -203,7 +178,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 		add_read(unstable, mate_seq, {read.get(), nullptr, CACHED_MATE, false}, {true, true});
 	}
 	if (l_cluster->clip_consensus) {
-		right_stable.inputs.push_back({l_cluster->clip_consensus->sequence, {false, true}, {{nullptr, &l_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}}, {}});
+		right_stable.inputs.push_back({l_cluster->clip_consensus->sequence, {false, true}, {{nullptr, &l_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}}});
 	}
 
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
@@ -238,7 +213,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 					if (observation.reverse) std::reverse(quals.begin(), quals.end());
 					quality_data = quals.empty() ? nullptr : quals.data();
 				}
-				for (int i = 0; i < contig.seq.length(); i++) contig.votes[i].add(contig.seq[i], quality_data ? quality_data[i] : 0);
+				add_read_votes(contig, quality_data);
 			}
 			read_contigs.push_back(std::move(contig));
 			path_permissions.push_back(input.permissions);
