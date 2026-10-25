@@ -671,6 +671,9 @@ class Features:
             feature_values.append(features[feature_name])
         return feature_values
 
+# models of the DUP records (INS_TO_DUP excluded) covered by the copy number model
+CNU_MODELS = ("DUP", "DUP_LARGE", "DUP_LARGE_NOEXL")
+
 def select_gt(gt1, gt2):
     if gt1 == "./." and gt2 != "./.":
         return gt2

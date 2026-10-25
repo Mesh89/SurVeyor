@@ -17,9 +17,6 @@ cmd_args = cmd_parser.parse_args()
 training_data, training_gts = defaultdict(list), defaultdict(list)
 training_cn_unresolved = defaultdict(list)
 
-# models of the DUP records (INS_TO_DUP excluded) used to train the copy number model
-CNU_MODELS = ("DUP", "DUP_LARGE", "DUP_LARGE_NOEXL")
-
 def process_vcf(training_prefix):
     vcf_training_data, vcf_training_gts, vcf_training_cn_unresolved, _ = \
         features.parse_vcf(training_prefix + ".vcf.gz", training_prefix + ".stats", training_prefix + ".gts", 
@@ -47,7 +44,7 @@ if __name__ == '__main__':
             for model in vcf_training_data:
                 training_data[model].append(vcf_training_data[model])
                 training_gts[model].append(vcf_training_gts[model])
-                if model in CNU_MODELS:
+                if model in features.CNU_MODELS:
                     training_cn_unresolved[model].append(vcf_training_cn_unresolved[model])
 
     for model in training_data:
@@ -117,7 +114,7 @@ if __name__ == '__main__':
         # copy number model: DUPs present in the benchmark, labelled 1 if their copy number is unresolved (the benchmark
         # insertion is longer than a single copy of the DUP) and 0 otherwise
         cnu_training_data, cnu_training_labels = [], []
-        for model_name in CNU_MODELS:
+        for model_name in features.CNU_MODELS:
             if model_name not in training_cn_unresolved:
                 continue
             mask = np.isin(training_gts[model_name], ("0/1", "1/1", "./1")) & (training_cn_unresolved[model_name] >= 0)

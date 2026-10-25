@@ -433,6 +433,14 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "HOPR");
 	const char* hopr_tag = "##FORMAT=<ID=HOPR,Number=1,Type=Float,Description=\"Probability of an existing SV to be homozygous, according to the ML model.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hopr_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "CNUPR");
+	const char* cnupr_tag = "##FORMAT=<ID=CNUPR,Number=1,Type=Float,Description=\"Probability that the number of additional tandem copies of this DUP is unresolved, i.e. that the inserted allele is longer than one copy of the duplicated reference interval, according to the ML model.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, cnupr_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "CNU");
+	const char* cnu_tag = "##FORMAT=<ID=CNU,Number=1,Type=Integer,Description=\"1 if the number of additional tandem copies of this DUP is unresolved (CNUPR >= 0.5): END and SVLEN describe the duplicated reference interval, but the inserted allele is likely longer. 0 otherwise.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, cnu_tag, &len));
 }
 
 bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name, config_t config, std::string command) {
