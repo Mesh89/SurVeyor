@@ -204,6 +204,14 @@ bool check_ins_dup_seq(sv_t* ins_sv, sv_t* dup_sv, StripedSmithWaterman::Aligner
 	aligner.Align(smaller_seq.data(), larger_seq.data(), larger_seq.length(), filter, &alignment, 0);
 	return alignment.query_end-alignment.query_begin >= smaller_seq.length()*0.8;
 }
+// a DUP matching an INS is single copy if the INS is not longer than one copy of the DUP, using the length thresholds
+// of INS-INS matches (check_ins_dup_seq already requires the DUP not to be longer than the INS)
+bool is_single_copy(sv_t* ins_sv, sv_t* dup_sv) {
+	int ins_seq_len = ins_sv->ins_seq.length();
+	int max_len_diff = (ins_sv->imprecise || dup_sv->imprecise) ? max_imprec_len_diff : max_prec_len_diff;
+	double min_len_ratio = (ins_sv->imprecise || dup_sv->imprecise) ? min_imprec_len_ratio : min_prec_len_ratio;
+	return ins_seq_len <= dup_sv->svlen() + max_len_diff && double(dup_sv->svlen())/ins_seq_len >= min_len_ratio;
+}
 bool is_compatible_ins_dup(sv_t* sv1, sv_t* sv2, StripedSmithWaterman::Aligner& aligner, bool repeat_mode) {
 	StripedSmithWaterman::Alignment alignment;
 	int max_dist = (sv1->imprecise || sv2->imprecise) ? max_imprec_dist : max_prec_dist;
@@ -360,6 +368,14 @@ struct sv_match_t {
 };
 std::vector<sv_match_t> matches;
 
+// for a called DUP, whether its copy number is unresolved, i.e. its benchmark match is longer than a single copy of it (1),
+// or not (0); . for other called SVs
+std::string cn_unresolved_label(sv_match_t& match) {
+	if (match.c_sv->svtype() != "DUP") return ".";
+	if (match.b_sv->svtype() != "INS") return "0";
+	return is_single_copy(match.b_sv.get(), match.c_sv.get()) ? "0" : "1";
+}
+
 void find_match(int id, int start_idx, int end_idx) {
 
 	StripedSmithWaterman::Aligner aligner(1,4,6,1,false);
@@ -468,7 +484,7 @@ int main(int argc, char* argv[]) {
 		("wrong-gts", "Print pairs of matching SVs that have discordant genotypes.", cxxopts::value<std::string>())
 		("keep-all-benchmark", "Keep all variants in the benchmark file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
 		("keep-all-called", "Keep all variants in the called file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
-		("c,called-to-benchmark-gts", "For each called SV matching a benchmark SV, report their genotype according to the benchmark dataset.", cxxopts::value<std::string>())
+		("c,called-to-benchmark-gts", "For each called SV matching a benchmark SV, report their genotype according to the benchmark dataset and, for DUPs, whether the copy number is unresolved (the benchmark SV is longer than a single copy of the DUP).", cxxopts::value<std::string>())
 		("e,exclusive", "SV cannot be used in multiple matches.", cxxopts::value<bool>()->default_value("false"))
 		("ignore-ft", "Ignore the FT field, if present. Without this option, only SVs with FT=PASS or absent are considered.", cxxopts::value<bool>()->default_value("false"))
 		("t,threads", "Number of threads to use.", cxxopts::value<int>()->default_value("1"))
@@ -731,9 +747,10 @@ int main(int argc, char* argv[]) {
 	if (called_to_benchmark_gts_fout.is_open()) {
 		// note that this reports called SVs that matched to a benchmark SV with missing genotype as ./.
 		// this is good, because these SVs are less confident, and will be ignored when training our model
+		// the third column says whether a called DUP has an unresolved copy number (see cn_unresolved_label)
 		for (sv_match_t& match : accepted_matches) {
 			if (match.c_sv != NULL) {
-				called_to_benchmark_gts_fout << match.c_sv->id << " " << match.b_sv->print_gt() << std::endl;
+				called_to_benchmark_gts_fout << match.c_sv->id << " " << match.b_sv->print_gt() << " " << cn_unresolved_label(match) << std::endl;
 			}
 		}
 		std::set<std::string> c_unchoosen_ids;
@@ -746,7 +763,7 @@ int main(int argc, char* argv[]) {
 		// these SVs matched to a benchmark SV, but another match for the benchmark SV was chosen instead
 		// let us reported them with ./. since they are less confident, and will be ignored when training our model
 		for (std::string id : c_unchoosen_ids) {
-			called_to_benchmark_gts_fout << id << " " << "./." << std::endl;
+			called_to_benchmark_gts_fout << id << " " << "./. ." << std::endl;
 		}
 	}
 

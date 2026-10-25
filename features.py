@@ -687,7 +687,7 @@ def read_gts(file_path, tolerate_no_gts = False):
     with open(file_path, 'r') as file:
         gts = defaultdict(lambda: "0/0")
         for line in file:
-            id, gt = line.strip().split()
+            id, gt, _ = line.strip().split()
             if id not in gts:
                 gts[id] = gt
             else:
