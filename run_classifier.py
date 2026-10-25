@@ -32,7 +32,7 @@ class Classifier:
         vcf_writer.close()
 
     def run_classifier(in_vcf, out_vcf, stats_fname, model_dir):
-        test_data, _, test_variant_ids = \
+        test_data, _, _, test_variant_ids = \
             features.parse_vcf(in_vcf, stats_fname, "XXX", tolerate_no_gts = True)
 
         svid_to_gt = dict()

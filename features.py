@@ -681,18 +681,22 @@ def select_gt(gt1, gt2):
     else:
         return "./."
 
+# returns the benchmark genotype of each called SV, and for DUPs whether their copy number is unresolved (1) or not (0)
 def read_gts(file_path, tolerate_no_gts = False):
+    gts, cn_unresolved = defaultdict(lambda: "0/0"), dict()
     if not os.path.exists(file_path) and tolerate_no_gts:
-        return defaultdict(lambda: "0/0")
+        return gts, cn_unresolved
     with open(file_path, 'r') as file:
-        gts = defaultdict(lambda: "0/0")
         for line in file:
-            id, gt, _ = line.strip().split()
+            id, gt, cnu = line.strip().split()
             if id not in gts:
                 gts[id] = gt
             else:
                 gts[id] = select_gt(gts[id], gt)
-    return gts
+            if cnu != ".":
+                # conflicting labels for the same SV make it unknown (-1)
+                cn_unresolved[id] = int(cnu) if cn_unresolved.get(id, int(cnu)) == int(cnu) else -1
+    return gts, cn_unresolved
 
 def load_stats(stats_fname):
     stats = defaultdict(dict)
@@ -709,11 +713,12 @@ def get_stat(stats, stat_name, chrom):
 
 # Function to parse the VCF file and extract relevant features using pysam
 def parse_vcf(vcf_fname, stats_fname, fp_fname, tolerate_no_gts = False):
-    gts = read_gts(fp_fname, tolerate_no_gts=tolerate_no_gts)
+    gts, cn_unresolved = read_gts(fp_fname, tolerate_no_gts=tolerate_no_gts)
     vcf_reader = pysam.VariantFile(vcf_fname)
     stats = load_stats(stats_fname)
 
     features_by_source, gts_by_source, variant_ids_by_source = defaultdict(list), defaultdict(list), defaultdict(list)
+    cn_unresolved_by_source = defaultdict(list)
     for record in vcf_reader.fetch():
         record_svtype = Features.get_svtype(record)
         if record_svtype.startswith('INV'):
@@ -724,11 +729,13 @@ def parse_vcf(vcf_fname, stats_fname, fp_fname, tolerate_no_gts = False):
         if gts[record.id] != "./.": # if no genotype is available, skip the record
             features_by_source[model_name].append(feature_values)
             gts_by_source[model_name].append(gts[record.id])
+            cn_unresolved_by_source[model_name].append(cn_unresolved.get(record.id, -1)) # -1 = unknown
             variant_ids_by_source[model_name].append(Features.generate_id(record))
 
     for model_name in features_by_source:
         features_by_source[model_name] = np.array(features_by_source[model_name])
         gts_by_source[model_name] = np.array(gts_by_source[model_name])
+        cn_unresolved_by_source[model_name] = np.array(cn_unresolved_by_source[model_name])
         variant_ids_by_source[model_name] = np.array(variant_ids_by_source[model_name])
     
-    return features_by_source, gts_by_source, variant_ids_by_source
+    return features_by_source, gts_by_source, cn_unresolved_by_source, variant_ids_by_source
