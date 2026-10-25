@@ -102,28 +102,30 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
 	if (rev_topological_order.size() < n) {
-		std::fill(out_edges.begin(), out_edges.end(), 0);
-		for (int i = 0; i < n; i++) {
-			l_adj[i].clear();
-			l_adj_rev[i].clear();
-		}
-		build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, 0.0, config.min_clip_len);
+		// A cycle means a repeat. An overlap with a mismatch where both bases have quality >= 20 likely joins different
+		// repeat copies or haplotypes, so remove it; low-quality mismatches are likely sequencing errors, so those overlaps stay.
+		remove_assembly_edges(out_edges, l_adj, l_adj_rev, [&read_contigs](int from, const edge_t& e) {
+			return e.score != e.overlap && count_hq_mismatches(read_contigs[from], read_contigs[e.next], e.overlap, 20) > 0;
+		});
+		rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+		auto prune_short_overlaps = [&]() {
+			for (int min_overlap = config.min_clip_len+10; rev_topological_order.size() < n && min_overlap <= stats.read_len/2; min_overlap += 10) {
+				remove_assembly_edges(out_edges, l_adj, l_adj_rev, [min_overlap](int from, const edge_t& e) { return e.overlap < min_overlap; });
+				rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+			}
+		};
+		prune_short_overlaps();
 
-		int min_overlap = config.min_clip_len;
-		for (; min_overlap <= stats.read_len/2; min_overlap += 10) {
+		// Still cyclic: rebuild with exact overlaps only and prune again.
+		if (rev_topological_order.size() < n) {
+			std::fill(out_edges.begin(), out_edges.end(), 0);
 			for (int i = 0; i < n; i++) {
-				l_adj[i].erase(std::remove_if(l_adj[i].begin(), l_adj[i].end(),
-						[&min_overlap](edge_t& e) { return e.overlap < min_overlap; }), l_adj[i].end());
-				l_adj_rev[i].erase(std::remove_if(l_adj_rev[i].begin(), l_adj_rev[i].end(),
-						[&min_overlap](edge_t& e) { return e.overlap < min_overlap; }), l_adj_rev[i].end());
-				out_edges[i] = l_adj[i].size();
+				l_adj[i].clear();
+				l_adj_rev[i].clear();
 			}
-
+			build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, 0.0, config.min_clip_len);
 			rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
-
-			if (rev_topological_order.size() == n) {
-				break;
-			}
+			prune_short_overlaps();
 		}
 		if (rev_topological_order.size() < n) {
 			return {{"HAS_CYCLE", {}}};

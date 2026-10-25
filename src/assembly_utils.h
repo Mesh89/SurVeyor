@@ -199,6 +199,32 @@ std::vector<int> find_rev_topological_order(int n, std::vector<int> out_edges, s
 	return rev_topological_order;
 }
 
+// Remove every edge from -> e.next for which remove(from, e) is true.
+void remove_assembly_edges(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev,
+		const std::function<bool(int, const edge_t&)>& remove) {
+	for (int i = 0; i < l_adj.size(); i++) {
+		l_adj[i].erase(std::remove_if(l_adj[i].begin(), l_adj[i].end(), [&](const edge_t& e) { return remove(i, e); }), l_adj[i].end());
+		out_edges[i] = l_adj[i].size();
+		l_adj_rev[i].erase(std::remove_if(l_adj_rev[i].begin(), l_adj_rev[i].end(), [&](const edge_t& e) { return remove(e.next, {i, e.score, e.overlap}); }), l_adj_rev[i].end());
+	}
+}
+
+// Count overlap mismatches where the mean quality of both bases is at least min_qual.
+int count_hq_mismatches(const assembly_consensus_t& left, const assembly_consensus_t& right, int overlap, int min_qual) {
+	int hq_mismatches = 0, left_start = left.seq.length()-overlap;
+	for (int i = 0; i < overlap; i++) {
+		char left_base = left.seq[left_start+i], right_base = right.seq[i];
+		int left_index = base_to_index(left_base), right_index = base_to_index(right_base);
+		if (left_base == right_base || left_index < 0 || right_index < 0) continue;
+		const base_votes_t& left_votes = left.votes[left_start+i];
+		const base_votes_t& right_votes = right.votes[i];
+		int left_qual = left_votes.counts[left_index] ? left_votes.quals[left_index]/left_votes.counts[left_index] : 0;
+		int right_qual = right_votes.counts[right_index] ? right_votes.quals[right_index]/right_votes.counts[right_index] : 0;
+		if (left_qual >= min_qual && right_qual >= min_qual) hq_mismatches++;
+	}
+	return hq_mismatches;
+}
+
 bool break_cycle_at_vertex(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >& l_adj,
 		std::vector<std::vector<edge_t> >& l_adj_rev, int i) {
 
