@@ -36,8 +36,8 @@ struct insertion_cluster_t {
     }
     void add_semi_mapped_reads(bam1_t* read) {
         if (clip_consensus) {
-            bool sm_left_clipped = is_left_clipped(read, 0);
-            bool sm_right_clipped = is_right_clipped(read, 0);
+            bool sm_left_clipped = is_left_clipped(read, 1);
+            bool sm_right_clipped = is_right_clipped(read, 1);
             if (sm_left_clipped && clip_consensus->left_clipped && read->core.pos == clip_consensus->breakpoint) {
                 return;
             } else if (sm_right_clipped && !clip_consensus->left_clipped && bam_endpos(read) == clip_consensus->breakpoint) {

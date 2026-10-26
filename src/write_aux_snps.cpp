@@ -159,21 +159,6 @@ bool is_expanded_aux_indel_record(bcf1_t* record) {
     return get_record_id(record).find(".AUX_INDEL.") != std::string::npos;
 }
 
-int get_required_hpid(bcf_hdr_t* hdr, bcf1_t* record) {
-    int32_t* hpid = NULL;
-    int hpid_len = 0;
-    if (bcf_get_info_int32(hdr, record, "HPID", &hpid, &hpid_len) <= 0 ||
-            hpid_len == 0 ||
-            hpid[0] == bcf_int32_missing ||
-            hpid[0] == bcf_int32_vector_end) {
-        free(hpid);
-        throw std::runtime_error("Missing HPID for " + get_record_id(record) + ".");
-    }
-    int value = hpid[0];
-    free(hpid);
-    return value;
-}
-
 void set_gt(bcf_hdr_t* hdr, bcf1_t* record, int allele1, int allele2) {
     int gt[2] = { bcf_gt_unphased(allele1), bcf_gt_unphased(allele2) };
     bcf_update_genotypes(hdr, record, gt, 2);
@@ -414,6 +399,7 @@ void make_multiallelic(bcf_hdr_t* hdr, std::vector<bcf1_t*>& small_variants) {
 
 struct chrom_variants_t {
     std::vector<bcf1_t*> input_records;
+    std::vector<int> input_hpids;
     std::unordered_map<int, int> hpid_counts;
     std::vector<bcf1_t*> records;
     std::vector<bcf1_t*> small_variants;
@@ -437,20 +423,28 @@ void process_variants(int, const std::string& in_vcf_fname, const std::string& c
     bcf_srs_t* input_reader = open_region_reader(in_vcf_fname, chrom);
     while (bcf_sr_next_line(input_reader)) {
         bcf1_t* record = bcf_dup(bcf_sr_get_line(input_reader, 0));
+        std::shared_ptr<sv_t> sv = bcf_to_sv(in_vcf_hdr, record);
+        if (sv == nullptr) {
+            throw std::runtime_error("Failed to parse variant " + get_record_id(record) + ".");
+        }
         variants.input_records.push_back(record);
-        variants.hpid_counts[get_required_hpid(in_vcf_hdr, record)]++;
+        variants.input_hpids.push_back(sv->hpid);
+        variants.hpid_counts[sv->hpid]++;
     }
     if (input_reader->errnum) {
         std::string error = bcf_sr_strerror(input_reader->errnum);
         bcf_sr_destroy(input_reader);
         for (bcf1_t* record : variants.input_records) bcf_destroy(record);
         variants.input_records.clear();
+        variants.input_hpids.clear();
         throw std::runtime_error("Failed to read variants on chromosome " + chrom + ": " + error + ".");
     }
     bcf_sr_destroy(input_reader);
 
     std::unordered_set<bcf1_t*> aux_records;
-    for (bcf1_t* b : variants.input_records) {
+    for (size_t record_idx = 0; record_idx < variants.input_records.size(); record_idx++) {
+        bcf1_t* b = variants.input_records[record_idx];
+        int parent_hpid = variants.input_hpids[record_idx];
         variants.records.push_back(b);
 
         char* s_data = NULL;
@@ -458,7 +452,6 @@ void process_variants(int, const std::string& in_vcf_fname, const std::string& c
         bcf_get_info_string(in_vcf_hdr, b, "AUX_SNPS", (void**) &s_data, &len);
         if (len > 0 && !is_expanded_aux_indel_record(b)) {
             bcf_unpack(b, BCF_UN_ALL);
-            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
             std::istringstream ss(s_data);
             std::string snp_str;
             int i = 0;
@@ -482,7 +475,6 @@ void process_variants(int, const std::string& in_vcf_fname, const std::string& c
         bcf_get_info_string(in_vcf_hdr, b, "AUX_INDELS", (void**) &s_data, &len);
         if (len > 0 && !is_expanded_aux_indel_record(b)) {
             bcf_unpack(b, BCF_UN_ALL);
-            int parent_hpid = get_required_hpid(in_vcf_hdr, b);
             std::istringstream ss(s_data);;
             std::string indel_str;
             int i = 0;
@@ -519,6 +511,7 @@ void process_variants(int, const std::string& in_vcf_fname, const std::string& c
         free(s_data);
     }
     variants.input_records.clear();
+    variants.input_hpids.clear();
 
     // sort by pos and then by non-ascending EPR
     std::stable_sort(variants.records.begin(), variants.records.end(),
