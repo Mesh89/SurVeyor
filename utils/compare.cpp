@@ -620,6 +620,7 @@ int main(int argc, char* argv[]) {
 		("wrong-gts", "Print pairs of matching SVs that have discordant genotypes.", cxxopts::value<std::string>())
 		("keep-all-benchmark", "Keep all variants in the benchmark file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
 		("keep-all-called", "Keep all variants in the called file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
+		("all-matches", "Keep every match, not only the optimal ones for each called SV. Used to deduplicate a VCF by comparing it with itself.", cxxopts::value<bool>()->default_value("false"))
 		("c,called-to-benchmark-gts", "For each called SV, report benchmark GT and exact-match status.", cxxopts::value<std::string>())
 		("e,exclusive", "SV cannot be used in multiple matches.", cxxopts::value<bool>()->default_value("false"))
 		("ignore-ft", "Ignore the FT field, if present. Without this option, only SVs with FT=PASS or absent are considered.", cxxopts::value<bool>()->default_value("false"))
@@ -651,6 +652,7 @@ int main(int argc, char* argv[]) {
 	min_imprec_len_ratio = parsed_args["min_len_ratio_imprecise"].as<double>();
     bool report = parsed_args["report"].as<bool>();
 	bool exclusive = parsed_args["exclusive"].as<bool>();
+	bool all_matches = parsed_args["all-matches"].as<bool>();
 	int threads = parsed_args["threads"].as<int>();
 	ignore_seq = parsed_args["ignore-seq"].as<bool>();
 	int hom_alt_split_radius = parsed_args["hom-alt-split-radius"].as<int>();
@@ -930,22 +932,24 @@ int main(int argc, char* argv[]) {
 		return std::tie(a.b_sv->id, a.c_sv->id) < std::tie(b.b_sv->id, b.c_sv->id); // to make sort stable
 	});
 
-	// for each called SV, we only keep optimal matches, as defined by match_for_called_cmp
-	std::vector<sv_match_t> optimal_matches_for_called;
-	std::unordered_map<std::string, sv_match_t*> optimal_match_by_called; // we need one example of optimal match for each called SV
-	for (sv_match_t& match : matches) {
-		std::string c_id = match.c_sv->id;
-		if (!optimal_match_by_called.count(c_id)) {
-			optimal_match_by_called[c_id] = &match;
-			optimal_matches_for_called.push_back(match);
-		} else {
-			sv_match_t& optimal_match = *optimal_match_by_called[c_id];
-			if (!match_for_called_cmp(optimal_match, match)) {
+	if (!all_matches) {
+		// for each called SV, we only keep optimal matches, as defined by match_for_called_cmp
+		std::vector<sv_match_t> optimal_matches_for_called;
+		std::unordered_map<std::string, sv_match_t*> optimal_match_by_called; // we need one example of optimal match for each called SV
+		for (sv_match_t& match : matches) {
+			std::string c_id = match.c_sv->id;
+			if (!optimal_match_by_called.count(c_id)) {
+				optimal_match_by_called[c_id] = &match;
 				optimal_matches_for_called.push_back(match);
+			} else {
+				sv_match_t& optimal_match = *optimal_match_by_called[c_id];
+				if (!match_for_called_cmp(optimal_match, match)) {
+					optimal_matches_for_called.push_back(match);
+				}
 			}
 		}
+		matches.swap(optimal_matches_for_called);
 	}
-	matches.swap(optimal_matches_for_called);
 
 	// count tps (both in benchmark and called) from matches
 	// in exclusive mode, each sv can only be used in one match

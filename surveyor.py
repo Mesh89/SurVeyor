@@ -392,9 +392,9 @@ def reads_categorizer(workdir):
 
 def deduplicate_vcf(vcf_fname, deduped_vcf_fname):
     if cmd_args.tr_bed:
-        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s -T %s -t %d > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.tr_bed, cmd_args.threads, cmd_args.workdir)
+        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s --all-matches -R %s -T %s -t %d > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.tr_bed, cmd_args.threads, cmd_args.workdir)
     else:
-        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s -R %s -t %d > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.threads, cmd_args.workdir)
+        compare_cmd = SURVEYOR_PATH + "/bin/compare %s %s --all-matches -R %s -t %d > %s/compare.txt" % (vcf_fname, vcf_fname, cmd_args.reference, cmd_args.threads, cmd_args.workdir)
     run_cmd(compare_cmd)
     run_cmd(SURVEYOR_PATH + "/bin/dedup_vcf %s %s %s/compare.txt %d" % (vcf_fname, deduped_vcf_fname, cmd_args.workdir, cmd_args.threads))
 
