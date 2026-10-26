@@ -128,6 +128,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
     const std::string hsr_index_fname = workspace + "/hsr/" + std::to_string(contig_id) + ".bam.bai";
     const std::string ss_index_fname = workspace + "/same-strand/" + std::to_string(contig_id) + ".bam.bai";
     const std::string ow_index_fname = workspace + "/outward-pairs/" + std::to_string(contig_id) + ".bam.bai";
+    const std::string lp_index_fname = workspace + "/long-pairs/" + std::to_string(contig_id) + ".bam.bai";
     std::unique_ptr<samFile, decltype(&hts_close)> sr_writer(nullptr, &hts_close);
     std::unique_ptr<samFile, decltype(&hts_close)> hsr_writer(nullptr, &hts_close);
     std::unique_ptr<samFile, decltype(&hts_close)> rdc_writer(nullptr, &hts_close);
@@ -187,12 +188,14 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
         }
         if (is_samechr(read)) {
         	if (is_long(read, stats.max_is)) {
-                if (read->core.isize > 0) {
-                    if (!lp_writer) lp_writer.reset(open_writer_mt(workspace + "/long-pairs/" + std::to_string(contig_id) + ".bam", bam_file.header, &hts_pool));
+                if (!lp_writer) {
+                    lp_writer.reset(open_writer_mt(workspace + "/long-pairs/" + std::to_string(contig_id) + ".bam", bam_file.header, &hts_pool));
+                    if (sam_idx_init(lp_writer.get(), bam_file.header, 0, lp_index_fname.c_str()) < 0) throw std::runtime_error("Failed to initialize index for " + std::string(lp_writer->fn));
+                }
 
-                    int ok = sam_write1(lp_writer.get(), bam_file.header, read);
-                    if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(lp_writer->fn));
-                } else {
+                int ok = sam_write1(lp_writer.get(), bam_file.header, read);
+                if (ok < 0) throw std::runtime_error("Failed to write to " + std::string(lp_writer->fn));
+                if (read->core.isize < 0) {
                     if (!lp_mateseqs_fout.is_open()) lp_mateseqs_fout.open(workspace + "/long-pairs/" + std::to_string(contig_id) + ".txt");
                     lp_mateseqs_fout << bam_get_qname(read) << " " << get_sequence(read) << " " << std::to_string(get_nm(read)) << "\n";
                 }
@@ -281,7 +284,7 @@ void categorize(int id, int contig_id, std::string contig_name, std::string bam_
 
     if (read_status < -1) throw std::runtime_error("Failed to read " + bam_fname + " on " + contig_name);
 
-    for (auto writer : {&sr_writer, &hsr_writer, &ss_writer, &ow_writer}) {
+    for (auto writer : {&sr_writer, &hsr_writer, &ss_writer, &ow_writer, &lp_writer}) {
         if (!*writer) continue;
         std::string fname = (*writer)->fn;
         int index_status = sam_idx_save(writer->get());

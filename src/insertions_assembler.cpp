@@ -324,7 +324,7 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 	}
 }
 
-void add_same_strand_and_outward_pairs(const std::vector<std::string>& pairs_fnames, int contig_id, std::vector<std::shared_ptr<insertion_cluster_t>>& r_clusters, std::vector<std::shared_ptr<insertion_cluster_t>>& l_clusters,
+void add_assembly_pairs(const std::vector<std::string>& pairs_fnames, int contig_id, std::vector<std::shared_ptr<insertion_cluster_t>>& r_clusters, std::vector<std::shared_ptr<insertion_cluster_t>>& l_clusters,
         std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals) {
 
     // Freeze the original stable-read spans and priority, excluding clip and semi-mapped extensions.
@@ -348,7 +348,7 @@ void add_same_strand_and_outward_pairs(const std::vector<std::string>& pairs_fna
         bam1_t* read = bam_init1();
         std::unordered_set<std::string> retained_mates;
         while (sam_itr_next(pairs_file.file, iter, read) >= 0) {
-            if (!(read->core.flag & BAM_FPAIRED) || !is_primary(read) || (!is_samestr(read) && !is_outward(read)) || is_dc_pair(read) || !is_stable_end(read, config)) continue;
+            if (!(read->core.flag & BAM_FPAIRED) || !is_primary(read) || (!is_samestr(read) && !is_outward(read) && !(is_long(read, stats.max_is) && std::abs(read->core.isize) > 10000)) || is_dc_pair(read) || !is_stable_end(read, config)) continue;
             int best = clusters.size();
             for (auto span : span_tree.findOverlapping(read->core.pos, bam_endpos(read))) {
                 if (span.start <= read->core.pos && bam_endpos(read) <= span.stop && clusters[span.value]->cluster->la_rev == bam_is_rev(read)) {
@@ -521,7 +521,8 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
     auto matequals = std::make_shared<std::unordered_map<std::string, std::string> >();
     std::string same_strand_fname = workdir + "/workspace/same-strand/" + std::to_string(contig_id) + ".bam";
     std::string outward_fname = workdir + "/workspace/outward-pairs/" + std::to_string(contig_id) + ".bam";
-    add_same_strand_and_outward_pairs({same_strand_fname, outward_fname}, contig_id, r_clusters, l_clusters, *mateseqs, *matequals);
+    std::string long_fname = workdir + "/workspace/long-pairs/" + std::to_string(contig_id) + ".bam";
+    add_assembly_pairs({same_strand_fname, outward_fname, long_fname}, contig_id, r_clusters, l_clusters, *mateseqs, *matequals);
 
     std::vector<cc_v_distance_t> pq;
     std::multimap<int, std::shared_ptr<insertion_cluster_t> > l_clusters_map;
