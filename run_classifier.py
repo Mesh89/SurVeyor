@@ -4,8 +4,10 @@ import xgboost as xgb
 import os
 import numpy as np
 
-# DUPs with a copy number model probability at least this high are reported as having an unresolved copy number
-CNU_THRESHOLD = 0.5
+# DUPs with a copy number model probability at least this high are reported as having an unresolved copy number; chosen on the
+# HGSVC3 training samples (chromosome-held-out) as the highest value keeping >= 90% of untagged DUPs correctly sized in both call
+# and catalogue-genotyping mode (0.245, rounded to 0.25)
+CNU_THRESHOLD = 0.25
 
 class Classifier:
     def write_vcf(vcf_reader, vcf_header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_cnupr, out_vcf_fname, stats_fname):
@@ -95,8 +97,8 @@ class Classifier:
         header = vcf_reader.header
         header.add_line('##FORMAT=<ID=EPR,Number=1,Type=Float,Description="Probability of the SV existing in the sample, according to the ML model.">')
         header.add_line('##FORMAT=<ID=HOPR,Number=1,Type=Float,Description="Probability of an existing SV to be homozygous, according to the ML model.">')
-        header.add_line('##FORMAT=<ID=CNUPR,Number=1,Type=Float,Description="Probability that the number of additional tandem copies of this DUP is unresolved, i.e. that the inserted allele is longer than one copy of the duplicated reference interval, according to the ML model.">')
-        header.add_line('##FORMAT=<ID=CNU,Number=1,Type=Integer,Description="1 if the number of additional tandem copies of this DUP is unresolved (CNUPR >= 0.5): END and SVLEN describe the duplicated reference interval, but the inserted allele is likely longer. 0 otherwise.">')
+        header.add_line('##FORMAT=<ID=CNUPR,Number=1,Type=Float,Description="Probability that the copy number of this DUP is unresolved, i.e. that the inserted allele is not between 0.5x and 2x the DUP length, according to the ML model.">')
+        header.add_line('##FORMAT=<ID=CNU,Number=1,Type=Integer,Description="1 if the copy number of this DUP is unresolved (CNUPR >= 0.25): END and SVLEN describe the duplicated reference interval, but the inserted allele is likely more than twice (or less than half) as long. 0 otherwise.">')
         Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_cnupr, out_vcf, stats_fname)
 
 if __name__ == "__main__":

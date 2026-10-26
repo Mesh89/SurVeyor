@@ -431,11 +431,11 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hopr_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "CNUPR");
-	const char* cnupr_tag = "##FORMAT=<ID=CNUPR,Number=1,Type=Float,Description=\"Probability that the number of additional tandem copies of this DUP is unresolved, i.e. that the inserted allele is longer than one copy of the duplicated reference interval, according to the ML model.\">";
+	const char* cnupr_tag = "##FORMAT=<ID=CNUPR,Number=1,Type=Float,Description=\"Probability that the copy number of this DUP is unresolved, i.e. that the inserted allele is not between 0.5x and 2x the DUP length, according to the ML model.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, cnupr_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "CNU");
-	const char* cnu_tag = "##FORMAT=<ID=CNU,Number=1,Type=Integer,Description=\"1 if the number of additional tandem copies of this DUP is unresolved (CNUPR >= 0.5): END and SVLEN describe the duplicated reference interval, but the inserted allele is likely longer. 0 otherwise.\">";
+	const char* cnu_tag = "##FORMAT=<ID=CNU,Number=1,Type=Integer,Description=\"1 if the copy number of this DUP is unresolved (CNUPR >= 0.25): END and SVLEN describe the duplicated reference interval, but the inserted allele is likely more than twice (or less than half) as long. 0 otherwise.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, cnu_tag, &len));
 }
 
