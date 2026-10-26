@@ -324,6 +324,60 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 	}
 }
 
+void add_same_strand_pairs(std::string pairs_fname, int contig_id, std::vector<std::shared_ptr<insertion_cluster_t>>& r_clusters, std::vector<std::shared_ptr<insertion_cluster_t>>& l_clusters,
+        std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals) {
+
+    if (!file_exists(pairs_fname)) return;
+
+    // Freeze the original stable-read spans and priority, excluding clip and semi-mapped extensions.
+    std::vector<std::shared_ptr<insertion_cluster_t>> clusters = r_clusters;
+    clusters.insert(clusters.end(), l_clusters.begin(), l_clusters.end());
+    std::vector<Interval<int, hts_pos_t>> spans;
+    std::vector<std::unordered_set<std::string>> pair_names(clusters.size());
+    for (int i = 0; i < clusters.size(); i++) {
+        spans.push_back(Interval<int, hts_pos_t>(clusters[i]->cluster->la_start, clusters[i]->cluster->la_end, i));
+        for (auto read : clusters[i]->cluster->reads) pair_names[i].insert(bam_get_qname(read.get()));
+        for (bam1_t* read : clusters[i]->semi_mapped_reads) pair_names[i].insert(bam_get_qname(read));
+    }
+    IntervalTree<int, hts_pos_t> span_tree(spans);
+
+    open_samFile_t pairs_file(pairs_fname);
+    std::string contig_name = contig_map.get_name(contig_id);
+    hts_itr_t* iter = sam_itr_querys(pairs_file.idx, pairs_file.header, contig_name.c_str());
+    bam1_t* read = bam_init1();
+    std::unordered_set<std::string> retained_mates;
+    while (sam_itr_next(pairs_file.file, iter, read) >= 0) {
+        if (!(read->core.flag & BAM_FPAIRED) || !is_primary(read) || !is_samestr(read) || is_dc_pair(read) || !is_stable_end(read, config)) continue;
+        int best = clusters.size();
+        for (auto span : span_tree.findOverlapping(read->core.pos, bam_endpos(read))) {
+            if (span.start <= read->core.pos && bam_endpos(read) <= span.stop && clusters[span.value]->cluster->la_rev == bam_is_rev(read)) {
+                best = std::min(best, span.value);
+            }
+        }
+        if (best == clusters.size() || !pair_names[best].insert(bam_get_qname(read)).second) continue;
+        auto cluster = clusters[best];
+        cluster->add_stable_read(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+        cluster->cluster->count++;
+        cluster->cluster->la_confident_count += read->core.qual >= config.high_confidence_mapq;
+        cluster->cluster->ra_confident_count += get_mq(read) >= config.high_confidence_mapq;
+        retained_mates.insert(get_mate_lookup_qname(read));
+    }
+    sam_itr_destroy(iter);
+
+    // Load original mate sequences and qualities using the assembler's existing end-specific keys.
+    iter = sam_itr_querys(pairs_file.idx, pairs_file.header, contig_name.c_str());
+    while (sam_itr_next(pairs_file.file, iter, read) >= 0) {
+        if (!is_primary(read)) continue;
+        std::string qname = std::string(bam_get_qname(read)) + (is_first_read(read) ? "_1" : "_2");
+        if (retained_mates.count(qname)) {
+            mateseqs[qname] = get_sequence(read, true);
+            matequals[qname] = get_qual_ascii(read, true);
+        }
+    }
+    sam_itr_destroy(iter);
+    bam_destroy1(read);
+}
+
 int dfs(int curr_idx, std::vector<std::vector<int> >& dependencies, std::vector<int>& dfs_label, int& label) {
     dfs_label[curr_idx] = label;
     for (int next_idx : dependencies[curr_idx]) {
@@ -461,6 +515,11 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
 	std::string clipped_fname = workdir + "/workspace/sr/" + std::to_string(contig_id) + ".bam";
 	add_semi_mapped_pairs(clipped_fname, contig_id, r_clusters, l_clusters);
 
+    auto mateseqs = std::make_shared<std::unordered_map<std::string, std::string> >();
+    auto matequals = std::make_shared<std::unordered_map<std::string, std::string> >();
+    std::string same_strand_fname = workdir + "/workspace/same-strand/" + std::to_string(contig_id) + ".bam";
+    add_same_strand_pairs(same_strand_fname, contig_id, r_clusters, l_clusters, *mateseqs, *matequals);
+
     std::vector<cc_v_distance_t> pq;
     std::multimap<int, std::shared_ptr<insertion_cluster_t> > l_clusters_map;
     for (std::shared_ptr<insertion_cluster_t> l_cluster : l_clusters) {
@@ -505,8 +564,6 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
         }
     }
 
-    auto mateseqs = std::make_shared<std::unordered_map<std::string, std::string> >();
-    auto matequals = std::make_shared<std::unordered_map<std::string, std::string> >();
     std::ifstream mateseqs_fin(workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt");
     std::string qname, seq, qual; int mapq;
     while (mateseqs_fin >> qname >> seq >> qual >> mapq) {

@@ -748,6 +748,7 @@ void cluster_ss_dps(int id, int contig_id, std::string contig_name) {
 	hts_itr_t* iter = sam_itr_querys(dp_bam_file->idx, dp_bam_file->header, contig_name.c_str());
 	bam1_t* read = bam_init1();
 	while (sam_itr_next(dp_bam_file->file, iter, read) >= 0) {
+		if (read->core.pos >= read->core.mpos) continue;
 		std::string qname = bam_get_qname(read);
 		std::shared_ptr<cluster_t> cluster = std::make_shared<cluster_t>(read, config.high_confidence_mapq);
 		ss_clusters.push_back(cluster);
