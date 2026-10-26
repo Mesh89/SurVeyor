@@ -34,10 +34,7 @@ class Classifier:
                     record.samples[0]['GT'] = (None, None)
                 # generate_id is not unique (an INS_TO_DUP record can be identical to a DUP record), so check the model too
                 if record_id in svid_to_cnupr and model_name in features.CNU_MODELS:
-                    # rounded, so that CNU agrees with the CNUPR printed in the VCF (floats are printed with 6 significant digits)
-                    cnupr = round(float(svid_to_cnupr[record_id]), 4)
-                    record.samples[0]['CNUPR'] = cnupr
-                    record.samples[0]['CNU'] = 1 if cnupr >= CNU_THRESHOLD else 0
+                    record.samples[0]['CNU'] = 1 if svid_to_cnupr[record_id] >= CNU_THRESHOLD else 0
                 vcf_writer.write(record)
             else:
                 vcf_writer.write(record)
@@ -97,8 +94,7 @@ class Classifier:
         header = vcf_reader.header
         header.add_line('##FORMAT=<ID=EPR,Number=1,Type=Float,Description="Probability of the SV existing in the sample, according to the ML model.">')
         header.add_line('##FORMAT=<ID=HOPR,Number=1,Type=Float,Description="Probability of an existing SV to be homozygous, according to the ML model.">')
-        header.add_line('##FORMAT=<ID=CNUPR,Number=1,Type=Float,Description="Probability that the copy number of this DUP is unresolved, i.e. that the inserted allele is not between 0.5x and 2x the DUP length, according to the ML model.">')
-        header.add_line('##FORMAT=<ID=CNU,Number=1,Type=Integer,Description="1 if the copy number of this DUP is unresolved (CNUPR >= 0.25): END and SVLEN describe the duplicated reference interval, but the inserted allele is likely more than twice (or less than half) as long. 0 otherwise.">')
+        header.add_line('##FORMAT=<ID=CNU,Number=1,Type=Integer,Description="1 if the copy number of this DUP is unresolved according to the ML model: END and SVLEN describe the duplicated reference interval, but the inserted allele is likely more than twice (or less than half) as long. 0 otherwise.">')
         Classifier.write_vcf(vcf_reader, header, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_cnupr, out_vcf, stats_fname)
 
 if __name__ == "__main__":
