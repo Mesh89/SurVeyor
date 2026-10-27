@@ -153,20 +153,22 @@ As mentioned previously, if the catalogue was generated from many samples and yo
 ```
 where `SIMPLE_REPEATS_BED` is a list of repetitive regions for the reference in BED format, and using the `genotyped.deduped.vcf.gz` file.
 
-### Tandem duplications with unresolved copy number (to appear in 0.13)
-Some tandem duplications reported by SurVeyor have an unresolved copy number. In these cases, SurVeyor can identify the reference interval involved in the duplication, but it cannot determine from short-read evidence how additional copies are present. Such records are annotated with the INFO flag DUP_CN_UNRESOLVED.
+### Tandem duplications with unresolved copy number (since 0.12.3)
+Some tandem duplications reported by SurVeyor have an unresolved copy number. In these cases, SurVeyor can identify the reference interval involved in the duplication, but it cannot determine from short-read evidence how many additional copies are present. For every DUP record and every sample, SurVeyor reports this in the FORMAT field CNU, both when calling and when genotyping.
 
 For example:
 
-```bash
-SVTYPE=DUP;END=100500;SVLEN=500;DUP_CN_UNRESOLVED
-````
+```
+FORMAT  GT:...:CNU
+SAMPLE  0/1:...:1
+```
 
-When DUP_CN_UNRESOLVED is present, END and SVLEN describe the duplicated reference interval. They should not be interpreted as the total inserted allele length. Rather, it should be intepreted as the reference interval being expanded in the alternative allele. The event may correspond to a larger inserted sequence containing one or more copies of the reported reference interval.
+When CNU is 1, END and SVLEN describe the duplicated reference interval. They should not be interpreted as the total inserted allele length. Rather, the reference interval is expanded in the alternative allele, which may be more than twice (or less than half) as long, for example because it contains several copies of the reported interval.
 
-When DUP_CN_UNRESOLVED is absent from a DUP record, SurVeyor found evidence consistent with a single additional tandem copy of the reported interval.
+When CNU is 0, the evidence is consistent with an inserted allele between half and twice the length of the reported interval, i.e., roughly one additional tandem copy.
 
-This annotation is intended to make tandem duplication calls easier to interpret, especially in repetitive regions where short reads may identify the duplicated sequence but not resolve the number of copied units.
+Since CNU is predicted separately for each sample, it is also available when genotyping a catalogue of SVs discovered in other samples (see above). CNU says nothing about whether the duplication is present in the sample; that is given by GT.
+
 
 ## Citation
 
