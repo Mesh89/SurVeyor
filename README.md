@@ -66,7 +66,7 @@ python surveyor.py call -h
 
 The basic command to genotype a set of structural variants in VCF format (IN_VCF) is
 ```
-python surveyor.py genotype --threads N_THREADS IN_VCF BAM_FILE WORKDIR REFERENCE_FASTA TRAINED_MODEL
+python surveyor.py genotype --threads N_THREADS IN_VCF BAM_FILE WORKDIR REFERENCE_FASTA --ml-model TRAINED_MODEL
 ```
 The genotyped variants will be reported in genotyped.vcf.gz (version with all of the original calls) and genotyped.deduped.vcf.gz (version with duplicate calls removed).
 
@@ -74,6 +74,24 @@ For other parameters, please see the help with
 ```
 python surveyor.py genotype -h
 ```
+
+## Tandem duplications with unresolved copy number (since 0.12.3)
+Some tandem duplications reported by SurVeyor have an unresolved copy number. In these cases, SurVeyor can identify the reference interval involved in the duplication, but it cannot determine from short-read evidence how many additional copies are present. For every DUP record and every sample, SurVeyor reports this in the FORMAT field CNU, both when calling and when genotyping.
+
+For example:
+
+```
+FORMAT  GT:...:CNU
+SAMPLE  0/1:...:1
+```
+
+When CNU is 1, END and SVLEN describe the duplicated reference interval. They should not be interpreted as the total inserted allele length. Rather, the reference interval is expanded in the alternative allele, which may be more than twice (or less than half) as long, for example because it contains several copies of the reported interval.
+
+When CNU is 0, the evidence is consistent with an inserted allele between half and twice the length of the reported interval, i.e., roughly one additional tandem copy.
+
+Since CNU is predicted separately for each sample, it is also available when genotyping a catalogue of SVs discovered in other samples with the genotype command above. CNU says nothing about whether the duplication is present in the sample; that is given by GT.
+
+CNU requires the trained model released with version 0.12.3 or later. It replaces the INFO flag DUP_CN_UNRESOLVED of version 0.12.2.
 
 ## Citation
 
