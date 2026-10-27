@@ -38,9 +38,9 @@ struct insertion_cluster_t {
         if (clip_consensus) {
             bool sm_left_clipped = is_left_clipped(read, 1);
             bool sm_right_clipped = is_right_clipped(read, 1);
-            if (sm_left_clipped && clip_consensus->left_clipped && read->core.pos == clip_consensus->breakpoint) {
+            if (sm_left_clipped && clip_consensus->left_clipped && read->core.pos == clip_consensus->breakpoint && get_left_clip_size(read) <= clip_consensus->clip_len) {
                 return;
-            } else if (sm_right_clipped && !clip_consensus->left_clipped && bam_endpos(read) == clip_consensus->breakpoint) {
+            } else if (sm_right_clipped && !clip_consensus->left_clipped && bam_endpos(read) == clip_consensus->breakpoint && get_right_clip_size(read) <= clip_consensus->clip_len) {
                 return;
             }
         }

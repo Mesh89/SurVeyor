@@ -3,6 +3,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include <map>
 #include <algorithm>
 #include <deque>
@@ -257,7 +258,9 @@ std::vector<std::shared_ptr<insertion_cluster_t> > cluster_reads(open_samFile_t*
 }
 
 bool is_semi_mapped(bam1_t* read) {
-	return is_proper_pair(read, stats.min_is, stats.max_is) && !is_mate_clipped(read);
+	if (!is_proper_pair(read, stats.min_is, stats.max_is)) return false;
+	if (!is_mate_clipped(read)) return true;
+	return get_mate_left_clip_size(read) < config.min_clip_len && get_mate_right_clip_size(read) < config.min_clip_len && get_mq(read) >= config.min_stable_mapq && get_mq(read) >= read->core.qual;
 }
 
 void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector<std::shared_ptr<insertion_cluster_t> >& r_clusters, std::vector<std::shared_ptr<insertion_cluster_t> >& l_clusters) {
@@ -299,8 +302,9 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 		for (auto i : sm_reads) {
 			bam1_t* r = i.value;
 			if (!used_sm_reads.count(r)) {
+				size_t size_before = rc->semi_mapped_reads.size();
 				rc->add_semi_mapped_reads(bam_dup1(r));
-				used_sm_reads.insert(r);
+				if (rc->semi_mapped_reads.size() > size_before) used_sm_reads.insert(r);
 			}
 		}
 	}
@@ -311,8 +315,9 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 		for (auto i : sm_reads) {
 			bam1_t* r = i.value;
 			if (!used_sm_reads.count(r)) {
+				size_t size_before = rc->semi_mapped_reads.size();
 				rc->add_semi_mapped_reads(bam_dup1(r));
-				used_sm_reads.insert(r);
+				if (rc->semi_mapped_reads.size() > size_before) used_sm_reads.insert(r);
 			}
 		}
 	}
@@ -378,6 +383,97 @@ void add_assembly_pairs(const std::vector<std::string>& pairs_fnames, int contig
         sam_itr_destroy(iter);
         bam_destroy1(read);
     }
+}
+
+void merge_assembly_clusters(std::vector<std::shared_ptr<insertion_cluster_t>>& clusters) {
+    using read_key_t = std::pair<std::string, int>;
+    auto read_key = [](bam1_t* read) {
+        return std::make_pair(std::string(bam_get_qname(read)), read->core.flag & (BAM_FREAD1 | BAM_FREAD2));
+    };
+    struct merge_proposal_t {
+        int first, second;
+        read_key_t outlier_key;
+    };
+    std::unordered_map<consensus_t*, std::vector<int>> clusters_by_consensus;
+    for (int i = 0; i < clusters.size(); i++) {
+        if (clusters[i]->clip_consensus) clusters_by_consensus[clusters[i]->clip_consensus.get()].push_back(i);
+    }
+
+    // Find all proposals on the original clusters before changing memberships.
+    std::vector<merge_proposal_t> proposals;
+    std::vector<bool> proposed(clusters.size(), false);
+    for (const auto& group : clusters_by_consensus) {
+        const auto& indices = group.second;
+        hts_pos_t breakpoint = group.first->breakpoint;
+        for (int a = 0; a < indices.size(); a++) {
+            int i = indices[a];
+            for (int b = a+1; b < indices.size(); b++) {
+                int j = indices[b];
+                if (clusters[i]->cluster->la_rev != clusters[j]->cluster->la_rev) continue;
+                bool reverse = clusters[i]->cluster->la_rev;
+                hts_pos_t start = HTS_POS_MAX, end = 0, retained_start = HTS_POS_MAX, retained_end = 0;
+                int wrong_side_reads = 0;
+                read_key_t outlier_key;
+                std::set<read_key_t> read_keys;
+                for (auto cluster : {clusters[i], clusters[j]}) {
+                    for (auto read : cluster->cluster->reads) {
+                        read_key_t key = read_key(read.get());
+                        if (!read_keys.insert(key).second) continue;
+                        hts_pos_t read_start = read->core.pos, read_end = bam_endpos(read.get());
+                        start = std::min(start, read_start);
+                        end = std::max(end, read_end);
+                        if (reverse ? read_end <= breakpoint : read_start >= breakpoint) {
+                            wrong_side_reads++;
+                            outlier_key = key;
+                        } else {
+                            retained_start = std::min(retained_start, read_start);
+                            retained_end = std::max(retained_end, read_end);
+                        }
+                    }
+                }
+                if (wrong_side_reads != 1 || end-start <= stats.max_is || retained_end-retained_start > stats.max_is) continue;
+                if (proposed[i] || proposed[j]) {
+                    throw std::runtime_error("Overlapping insertion-cluster merge proposals at breakpoint " + std::to_string(breakpoint) + ".");
+                }
+                proposed[i] = proposed[j] = true;
+                proposals.push_back({i, j, outlier_key});
+            }
+        }
+    }
+
+    for (const auto& proposal : proposals) {
+        auto first = clusters[proposal.first], second = clusters[proposal.second];
+        std::shared_ptr<cluster_t> stable_cluster;
+        std::vector<std::shared_ptr<bam1_t>> reads;
+        std::set<read_key_t> read_keys;
+        for (auto cluster : {first, second}) {
+            for (auto read : cluster->cluster->reads) {
+                read_key_t key = read_key(read.get());
+                if (key == proposal.outlier_key || !read_keys.insert(key).second) continue;
+                auto single = std::make_shared<cluster_t>(read.get(), config.high_confidence_mapq);
+                single->ra_start = single->la_start;
+                single->ra_end = single->la_end;
+                single->ra_rev = single->la_rev;
+                stable_cluster = stable_cluster ? cluster_t::merge(stable_cluster, single) : single;
+                reads.push_back(read);
+            }
+        }
+        stable_cluster->id = first->cluster->id;
+        stable_cluster->reads.swap(reads);
+        auto merged = std::make_shared<insertion_cluster_t>(stable_cluster);
+        merged->add_clip_cluster(first->clip_consensus);
+        for (auto cluster : {first, second}) {
+            for (bam1_t* read : cluster->semi_mapped_reads) {
+                if (read_keys.insert(read_key(read)).second) merged->add_semi_mapped_reads(read);
+                else bam_destroy1(read);
+            }
+            cluster->semi_mapped_reads.clear();
+            cluster->cluster->reads.clear();
+        }
+        clusters[proposal.first] = merged;
+        clusters[proposal.second] = nullptr;
+    }
+    clusters.erase(std::remove(clusters.begin(), clusters.end(), nullptr), clusters.end());
 }
 
 int dfs(int curr_idx, std::vector<std::vector<int> >& dependencies, std::vector<int>& dfs_label, int& label) {
@@ -523,6 +619,8 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
     std::string outward_fname = workdir + "/workspace/outward-pairs/" + std::to_string(contig_id) + ".bam";
     std::string long_fname = workdir + "/workspace/long-pairs/" + std::to_string(contig_id) + ".bam";
     add_assembly_pairs({same_strand_fname, outward_fname, long_fname}, contig_id, r_clusters, l_clusters, *mateseqs, *matequals);
+    merge_assembly_clusters(r_clusters);
+    merge_assembly_clusters(l_clusters);
 
     std::vector<cc_v_distance_t> pq;
     std::multimap<int, std::shared_ptr<insertion_cluster_t> > l_clusters_map;
