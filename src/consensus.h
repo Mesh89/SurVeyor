@@ -69,11 +69,20 @@ struct base_votes_t {
         }
     }
 
-    char best_base(char current_base) const {
+    int diff_qual(int base) const {
+        int qual = quals[base];
+        for (int i = 0; i < 4; i++) if (i != base) qual -= quals[i];
+        return qual;
+    }
+
+    char best_base(char current_base, bool keep_current_on_tie = false) const {
         if (counts[0] + counts[1] + counts[2] + counts[3] == 0) return current_base;
         int best = 0;
         for (int base = 1; base < 4; base++) {
             if (quals[base] > quals[best] || (quals[base] == quals[best] && counts[base] >= counts[best])) best = base;
+        }
+        if (keep_current_on_tie) {
+            for (int base = 0; base < 4; base++) if (base != best && quals[base] == quals[best]) return current_base;
         }
         return "ACGT"[best];
     }

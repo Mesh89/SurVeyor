@@ -14,6 +14,7 @@
 #include "ungapped_alignment.h"
 #include "types.h"
 #include "dc_remapper.h"
+#include "hp_mismatch_rate_thresholds.h"
 
 std::mutex failed_assembly_mtx;
 
@@ -139,7 +140,7 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 }
 
 std::vector<std::string> assemble_sequences(std::string contig_name, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
-		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats) {
+		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model) {
 
 	enum observation_source_t { STABLE_READ, CACHED_MATE, SEMI_MAPPED_READ, CLIP_CONSENSUS };
 	struct observation_t {
@@ -190,6 +191,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 	std::vector<assembly_consensus_t> read_contigs;
 	std::vector<path_permission_t> path_permissions;
 	std::vector<int> order;
+	hp_tail_quality_table_t quality_cache;
 	int group_order = 1;
 	for (std::vector<input_t>* group : {&left_stable, &unstable, &right_stable}) {
 		for (input_t& input : *group) {
@@ -197,11 +199,20 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 			contig.votes.resize(contig.seq.length());
 			observation_t& observation = input.observation;
 			std::vector<uint8_t> quals;
-			if (observation.source == STABLE_READ) quals = get_qual(observation.read);
-			else if (observation.source == CACHED_MATE) quals = decode_qualities(get_mate_qual(observation.read, matequals));
-			else if (observation.source == SEMI_MAPPED_READ) quals = get_qual(observation.read, true);
-			else quals = decode_qualities(*observation.clip_qual);
-			if (observation.reverse) std::reverse(quals.begin(), quals.end());
+			if (observation.source == STABLE_READ || observation.source == SEMI_MAPPED_READ) {
+				quals = recalibrate_clip_read_qualities(observation.read, config, hp_tail_quality_model, quality_cache);
+				if (observation.source == SEMI_MAPPED_READ && bam_is_rev(observation.read) != observation.reverse) std::reverse(quals.begin(), quals.end());
+			} else if (observation.source == CACHED_MATE) {
+				quals = decode_qualities(get_mate_qual(observation.read, matequals));
+				if (observation.reverse) std::reverse(quals.begin(), quals.end());
+				hts_pair_pos_t hp = longest_homopolymer(contig.seq.c_str(), contig.seq.length());
+				int hp_len = hp.end-hp.beg;
+				if (!quals.empty() && hp_len >= MIN_REF_HP_LEN) {
+					std::vector<hp_read_observation_t> observations{{contig.seq, std::move(quals), int(hp.beg), observation.reverse, 0.0, int(contig.seq.length()-hp.end)}};
+					recalibrate_hp_3p_tail_qualities(observations, hp_len, contig.seq[hp.beg], hp_tail_quality_model, quality_cache);
+					quals = std::move(observations[0].quals);
+				}
+			} else quals = decode_qualities(*observation.clip_qual);
 			add_read_votes(contig, quals.empty() ? nullptr : quals.data());
 			read_contigs.push_back(std::move(contig));
 			path_permissions.push_back(input.permissions);
@@ -210,6 +221,33 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 		group_order++;
 	}
 	std::vector<assembly_consensus_t> contigs = assemble_contigs(read_contigs, path_permissions, order, config, stats);
+	for (assembly_consensus_t& contig : contigs) {
+		if (contig.seq == "HAS_CYCLE") continue;
+		std::vector<base_votes_t> votes(contig.seq.length());
+		for (const assembly_consensus_t& read : read_contigs) {
+			int len = read.seq.length();
+			ungapped_aln_t aln = best_ungapped_aln(read.seq.c_str(), len, contig.seq.c_str(), contig.seq.length(), len-std::min(len, 40));
+			if (aln.mismatch_rate() > 0.1) continue;
+			bool hq_mismatch = false;
+			for (int i = aln.query_begin, j = aln.ref_begin; i < aln.query_end; i++, j++) {
+				if (read.seq[i] == contig.seq[j]) continue;
+				int read_base = base_to_index(read.seq[i]), contig_base = base_to_index(contig.seq[j]);
+				if (read_base < 0 || contig_base < 0) continue;
+				const base_votes_t& read_votes = read.votes[i];
+				const base_votes_t& contig_votes = contig.votes[j];
+				int read_qual = read_votes.quals[read_base];
+				int contig_qual = contig_votes.diff_qual(contig_base);
+				if (read_qual >= 20 && contig_qual >= 20) {
+					hq_mismatch = true;
+					break;
+				}
+			}
+			if (hq_mismatch) continue;
+			for (int i = aln.query_begin, j = aln.ref_begin; i < aln.query_end; i++, j++) votes[j].merge(read.votes[i]);
+		}
+		for (int i = 0; i < contig.seq.length(); i++) contig.seq[i] = votes[i].best_base(contig.seq[i], true);
+		contig.votes = std::move(votes);
+	}
 	std::vector<std::string> assembled_sequences;
 	for (assembly_consensus_t& contig : contigs) assembled_sequences.push_back(std::move(contig.seq));
 
@@ -221,9 +259,9 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
 		std::ostream& assembly_failed_no_seq, std::ostream& assembly_failed_cycle_writer, std::ostream& assembly_failed_too_many_reads_writer,
 		StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
-		config_t& config, stats_t& stats) {
+		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model) {
 
-	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats);
+	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats, hp_tail_quality_model);
 
 	std::string ins_full_id = "NO_ID";
 	if (assembled_sequences.empty()) {

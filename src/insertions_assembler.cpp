@@ -30,6 +30,7 @@
 
 config_t config;
 stats_t stats;
+hp_tail_quality_model_t hp_tail_quality_model;
 std::string workdir;
 std::mutex mtx;
 ctpl::thread_pool* spec_thread_pool = nullptr;
@@ -112,7 +113,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     std::string contig_name = contig_map.get_name(contig_id);
     if (regions.empty()) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model);
                 
         if (ins != NULL) {
             found.push_back(ins);
@@ -149,7 +150,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 	int tot_reads = r_cluster->cluster->reads.size() + l_cluster->cluster->reads.size();
 	if (rc_accepted_reads == 0 || lc_accepted_reads == 0 || double(rc_accepted_reads+lc_accepted_reads)/tot_reads < 0.5) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model);
 
 		if (ins != NULL) {
             found.push_back(ins);
@@ -751,6 +752,7 @@ int main(int argc, char* argv[]) {
 
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
+    hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
     contigs.read_fasta_into_map(reference_fname, true, config.threads);
     contig_map.load(workdir);
