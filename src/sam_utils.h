@@ -375,6 +375,14 @@ bool has_sequencing_3prime_poly_g_clip(bam1_t* read) {
     return 5*gs >= 4*clip_len;
 }
 
+std::vector<uint8_t> get_qual(bam1_t* r, bool fastq_seq = false) {
+	const uint8_t* raw_quals = bam_get_qual(r);
+	std::vector<uint8_t> quals(raw_quals, raw_quals+r->core.l_qseq);
+	std::replace(quals.begin(), quals.end(), uint8_t(255), uint8_t(0));
+	if (fastq_seq && bam_is_rev(r)) std::reverse(quals.begin(), quals.end());
+	return quals;
+}
+
 std::string get_qual_ascii(bam1_t* r, bool fastq_seq = false) {
 	uint8_t* qual = bam_get_qual(r);
 	std::string qual_ascii(r->core.l_qseq, ' ');

@@ -839,7 +839,7 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
 
     std::vector<std::string> consensus_seqs; 
 
-    consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, {}, quals, {}, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false, {}, true);
+    consensus_seqs = generate_reference_guided_consensus(ref_seq, temp1, seqs, temp2, {}, quals, {}, aligner, harsh_aligner, consensus_contigs_alns, config, stats, false, true);
 
     positional_consensus_t positional_consensus = build_positional_consensus(seqs, quals, read_start_offsets, false, read_is_reverse);
     consensus_seqs.push_back("");

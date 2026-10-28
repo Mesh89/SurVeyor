@@ -142,17 +142,12 @@ std::vector<assembly_consensus_t> generate_reference_guided_contigs(std::string 
 	return assembled_contigs;
 }
 
-struct rga_input_source_t {
-	bam1_t* read; // A null read marks a separate clip-consensus input.
-	bool mate;
-};
-
 std::vector<std::string> generate_reference_guided_consensus(std::string reference, 
 		std::vector<std::string>& seqs_lf, std::vector<std::string>& seqs_is, std::vector<std::string>& seqs_rf,
 		const std::vector<const uint8_t*>& quals_lf, const std::vector<const uint8_t*>& quals_is, const std::vector<const uint8_t*>& quals_rf,
 		StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner,
 		std::vector<StripedSmithWaterman::Alignment>& consensus_contigs_alns, config_t& config, stats_t& stats,
-		bool scaffold = true, const std::vector<rga_input_source_t>& input_sources = {}, bool retain_initial_contigs = false) {
+		bool scaffold = true, bool retain_initial_contigs = false) {
 
 	std::vector<std::string> read_seqs;
 	for (std::string& seq : seqs_lf) {
@@ -169,23 +164,8 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	read_quals.insert(read_quals.end(), quals_rf.begin(), quals_rf.end());
 
 	std::vector<assembly_consensus_t> read_contigs;
-	int group_begin = 0;
-	for (int group_size : {seqs_lf.size(), seqs_is.size(), seqs_rf.size()}) {
-		assembly_input_group_t representatives;
-		for (int i = group_begin; i < group_begin+group_size; i++) {
-			const std::string& seq = read_seqs[i];
-			const uint8_t* quals = read_quals.empty() ? nullptr : read_quals[i];
-			const rga_input_source_t* source = input_sources.empty() ? nullptr : &input_sources[i];
-			if (source && !source->read) {
-				read_contigs.push_back(make_read_contig(seq, quals));
-				continue;
-			}
-			auto input = representatives.add(seq, read_contigs.size(), source ? source->read : nullptr, source ? source->mate : false);
-			if (!input.second) continue;
-			if (input.first == read_contigs.size()) read_contigs.push_back(make_read_contig(seq, quals));
-			else add_read_votes(read_contigs[input.first], quals);
-		}
-		group_begin += group_size;
+	for (int i = 0; i < read_seqs.size(); i++) {
+		read_contigs.push_back(make_read_contig(read_seqs[i], read_quals.empty() ? nullptr : read_quals[i]));
 	}
 	std::vector<assembly_consensus_t> discarded_contigs;
 	std::vector<assembly_consensus_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config);
@@ -337,66 +317,56 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 
 	std::vector<std::string> seqs_lf, seqs_is, seqs_rf;
 	std::vector<const uint8_t*> quals_lf, quals_is, quals_rf;
-	std::vector<rga_input_source_t> sources_lf, sources_is, sources_rf;
 	std::vector<std::vector<uint8_t>> quals_storage;
-	quals_storage.reserve(r_cluster->cluster->reads.size()+l_cluster->cluster->reads.size()+r_cluster->semi_mapped_reads.size()+l_cluster->semi_mapped_reads.size()+2);
+	quals_storage.reserve(2*(r_cluster->cluster->reads.size()+l_cluster->cluster->reads.size())+r_cluster->semi_mapped_reads.size()+l_cluster->semi_mapped_reads.size()+2);
 	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
 		std::string read_seq = get_sequence(read.get());
 		seqs_lf.push_back(read_seq);
-		quals_lf.push_back(bam_get_qual(read.get()));
-		sources_lf.push_back({read.get(), false});
+		quals_storage.push_back(get_qual(read.get()));
+		quals_lf.push_back(quals_storage.back().data());
 		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
 		quals_storage.push_back(decode_qualities(get_mate_qual(read.get(), matequals)));
 		rc(mate_seq);
 		std::reverse(quals_storage.back().begin(), quals_storage.back().end());
 		seqs_is.push_back(mate_seq);
 		quals_is.push_back(quals_storage.back().data());
-		sources_is.push_back({read.get(), true});
 	}
 	for (std::shared_ptr<bam1_t> read : l_cluster->cluster->reads) {
 		std::string read_seq = get_sequence(read.get());
 		seqs_rf.push_back(read_seq);
-		quals_rf.push_back(bam_get_qual(read.get()));
-		sources_rf.push_back({read.get(), false});
+		quals_storage.push_back(get_qual(read.get()));
+		quals_rf.push_back(quals_storage.back().data());
 		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
 		quals_storage.push_back(decode_qualities(get_mate_qual(read.get(), matequals)));
 		seqs_is.push_back(mate_seq);
 		quals_is.push_back(quals_storage.back().data());
-		sources_is.push_back({read.get(), true});
 	}
 	if (r_cluster->clip_consensus) {
 		seqs_lf.push_back(r_cluster->clip_consensus->sequence);
 		quals_storage.push_back(decode_qualities(r_cluster->clip_consensus->qual));
 		quals_lf.push_back(quals_storage.back().data());
-		sources_lf.push_back({nullptr, false});
 	}
 	if (l_cluster->clip_consensus) {
 		seqs_rf.push_back(l_cluster->clip_consensus->sequence);
 		quals_storage.push_back(decode_qualities(l_cluster->clip_consensus->qual));
 		quals_rf.push_back(quals_storage.back().data());
-		sources_rf.push_back({nullptr, false});
 	}
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
 		std::string read_seq = get_sequence(read, true);
 		rc(read_seq);
-		quals_storage.push_back(decode_qualities(get_qual_ascii(read, true)));
+		quals_storage.push_back(get_qual(read, true));
 		std::reverse(quals_storage.back().begin(), quals_storage.back().end());
 		seqs_is.push_back(read_seq);
 		quals_is.push_back(quals_storage.back().data());
-		sources_is.push_back({read, false});
 	}
 	for (bam1_t* read : l_cluster->semi_mapped_reads) {
 		std::string read_seq = get_sequence(read, true);
-		quals_storage.push_back(decode_qualities(get_qual_ascii(read, true)));
+		quals_storage.push_back(get_qual(read, true));
 		seqs_is.push_back(read_seq);
 		quals_is.push_back(quals_storage.back().data());
-		sources_is.push_back({read, false});
 	}
 
-	std::vector<rga_input_source_t> input_sources = sources_lf;
-	input_sources.insert(input_sources.end(), sources_is.begin(), sources_is.end());
-	input_sources.insert(input_sources.end(), sources_rf.begin(), sources_rf.end());
-	return generate_reference_guided_consensus(reference, seqs_lf, seqs_is, seqs_rf, quals_lf, quals_is, quals_rf, aligner, harsh_aligner, consensus_contigs_alns, config, stats, true, input_sources);
+	return generate_reference_guided_consensus(reference, seqs_lf, seqs_is, seqs_rf, quals_lf, quals_is, quals_rf, aligner, harsh_aligner, consensus_contigs_alns, config, stats);
 }
 
 std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t& contigs, contig_map_t& contig_map, 

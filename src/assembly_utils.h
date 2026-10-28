@@ -106,23 +106,6 @@ struct assembly_consensus_t {
 	std::vector<base_votes_t> votes;
 };
 
-struct assembly_input_group_t {
-	struct representative_t {
-		int index;
-		std::unordered_set<std::string> sources;
-	};
-	std::unordered_map<std::string, representative_t> representatives;
-
-	// Return the representative index and whether to accumulate this observation's evidence.
-	std::pair<int, bool> add(const std::string& seq, int next_index, bam1_t* read = nullptr, bool mate = false) {
-		auto entry = representatives.emplace(seq, representative_t{next_index, {}});
-		if (!read) return {entry.first->second.index, true};
-		std::string source = bam_get_qname(read);
-		source += bool(read->core.flag & BAM_FREAD1) != mate ? "_1" : "_2";
-		return {entry.first->second.index, entry.first->second.sources.insert(source).second};
-	}
-};
-
 assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const std::vector<const assembly_consensus_t*>& contigs) {
 	assembly_sequence_t assembly;
 	if (path.vertices.empty()) return assembly;
