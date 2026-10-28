@@ -19,8 +19,29 @@
 #include "ungapped_alignment.h"
 
 static const char HP_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "hp_3p_mismatch_rate_thresholds.tsv";
+static const char HP_QUALITY_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "hp_3p_quality_mismatch_rate_thresholds.tsv";
 static const char DNR_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "dnr_3p_mismatch_rate_thresholds.tsv";
+const int HP_TAIL_QUALITY_BIN_SIZE = 5;
+const int HP_TAIL_QUALITY_BIN_COUNT = 255 / HP_TAIL_QUALITY_BIN_SIZE;
 const int MIN_CONSENSUS_DNR_UNITS = 4;
+
+struct hp_quality_mismatch_rate_threshold_t {
+    uint64_t observations;
+    double threshold;
+    bool estimated;
+};
+
+using hp_quality_mismatch_rate_threshold_table_t = std::map<std::array<int, 3>, hp_quality_mismatch_rate_threshold_t>; // Sequenced base, corrected HP length, quality bin.
+
+inline double average_original_tail_quality(const uint8_t* quals, int beg, int end) {
+    if (quals == nullptr) return -1.0;
+    double sum = 0;
+    for (int pos = beg; pos < end; pos++) {
+        if (quals[pos] == 255) return -1.0;
+        sum += quals[pos];
+    }
+    return sum / (end - beg);
+}
 
 // Merge the two phases of each repeat; reverse-complement classes remain distinct.
 inline int dnr_class_idx(char first, char second) {
@@ -36,10 +57,12 @@ inline int dnr_class_idx(char first, char second) {
 
 struct hp_mismatch_rate_thresholds_t {
     std::array<std::vector<double>, 4> thresholds_by_base;
+    hp_quality_mismatch_rate_threshold_table_t quality_thresholds;
     std::array<std::vector<double>, 6> dnr_thresholds_by_class;
 
     explicit hp_mismatch_rate_thresholds_t(const std::string& workdir) {
         load(workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+        load_quality(workdir + "/" + HP_QUALITY_MISMATCH_RATE_THRESHOLDS_FILENAME);
         load_dnr(workdir + "/" + DNR_MISMATCH_RATE_THRESHOLDS_FILENAME);
     }
 
@@ -69,6 +92,24 @@ struct hp_mismatch_rate_thresholds_t {
         if (expected_hp_len == 0) throw std::runtime_error("No HP mismatch-rate thresholds in " + fname + ".");
     }
 
+    void load_quality(const std::string& fname) {
+        quality_thresholds.clear();
+        std::ifstream fin(fname);
+        if (!fin) return; // Older workdirs contain only the base x HP-length table.
+        std::string header[7];
+        const char* expected[] = {"HP_BASE", "HP_LEN", "AVG_QUAL_MIN", "AVG_QUAL_MAX", "OBSERVATIONS", "THRESHOLD", "SOURCE"};
+        for (int i = 0; i < 7; i++) if (!(fin >> header[i]) || header[i] != expected[i]) throw std::runtime_error("Invalid header in " + fname + ".");
+        std::string base, source;
+        int hp_len, qual_min, qual_max;
+        int64_t observations;
+        double threshold;
+        while (fin >> base) {
+            if (!(fin >> hp_len >> qual_min >> qual_max >> observations >> threshold >> source) || base.size() != 1 || get_base_idx(base[0]) < 0 || hp_len < 0 || qual_min < 0 || qual_max > 255 || qual_min % HP_TAIL_QUALITY_BIN_SIZE != 0 || qual_max != qual_min + HP_TAIL_QUALITY_BIN_SIZE || observations < 0 || !std::isfinite(threshold) || threshold < 0 || threshold > 1 || (source != "estimated" && source != "inherited")) throw std::runtime_error("Invalid data in " + fname + ".");
+            if (!quality_thresholds.emplace(std::array<int, 3>{get_base_idx(base[0]), hp_len, qual_min / HP_TAIL_QUALITY_BIN_SIZE}, hp_quality_mismatch_rate_threshold_t{uint64_t(observations), threshold, source == "estimated"}).second) throw std::runtime_error("Duplicate HP quality bin in " + fname + ".");
+        }
+        if (!fin.eof()) throw std::runtime_error("Invalid data in " + fname + ".");
+    }
+
     void load_dnr(const std::string& fname) {
         std::ifstream fin(fname);
         if (!fin) throw std::runtime_error("Unable to open " + fname + ".");
@@ -94,6 +135,21 @@ struct hp_mismatch_rate_thresholds_t {
         if (hp_base_idx < 0) throw std::invalid_argument("HP base must be A, C, G, or T.");
         const std::vector<double>& thresholds = thresholds_by_base[hp_base_idx];
         return thresholds[std::min<size_t>(hp_len, thresholds.size() - 1)];
+    }
+
+    double get_threshold(int hp_len, char hp_base, double average_quality) const {
+        double fallback = get_threshold(hp_len, hp_base);
+        if (average_quality < 0 || quality_thresholds.empty()) return fallback;
+        int base_idx = get_base_idx(hp_base);
+        int quality_bin = int(average_quality / HP_TAIL_QUALITY_BIN_SIZE);
+        auto bin = quality_thresholds.upper_bound({base_idx, hp_len, quality_bin});
+        // Inherited bins must not become independent sources for missing bins.
+        while (bin != quality_thresholds.begin()) {
+            --bin;
+            if (bin->first[0] != base_idx || bin->first[1] != hp_len) break;
+            if (bin->second.estimated) return bin->second.threshold;
+        }
+        return fallback;
     }
 
     double get_dnr_threshold(int units, int class_idx) const {
@@ -165,7 +221,7 @@ inline double ungapped_mismatch_rate_for_ref_range(const std::string& read_seq, 
 }
 
 inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool is_reverse, const std::string& consensus_seq, const ungapped_aln_t& aln,
-    const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, const config_t& config) {
+    const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, const config_t& config, const uint8_t* original_quals = nullptr) {
 
     int aligned_len = aln.query_end - aln.query_begin;
     if (aligned_len <= 0) return false;
@@ -176,6 +232,8 @@ inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool i
         for (const consensus_hp_region_t& hp : hp_regions) {
             int tail_3p_len = is_reverse ? hp.beg - aln.ref_begin : aln.ref_end - hp.end;
             if (aln.ref_begin >= hp.beg || aln.ref_end <= hp.end || tail_3p_len < config.min_clip_len) continue;
+            int three_p_beg = is_reverse ? aln.ref_begin : hp.end;
+            int three_p_end = is_reverse ? hp.beg : aln.ref_end;
             double threshold;
             if (hp.period == 2) {
                 char first = uppercase_hp_base(consensus_seq[is_reverse ? hp.end - 1 : hp.beg]);
@@ -187,14 +245,14 @@ inline bool passes_consensus_mismatch_filter(const std::string& read_seq, bool i
                 threshold = hp_mismatch_rate_thresholds->get_dnr_threshold(hp.length() / 2, dnr_class_idx(first, second));
             } else {
                 char sequenced_hp_base = is_reverse ? complement_hp_base(hp.base) : hp.base;
-                threshold = hp_mismatch_rate_thresholds->get_threshold(hp.length(), sequenced_hp_base);
+                int query_tail_beg = aln.query_begin + three_p_beg - aln.ref_begin;
+                double average_quality = average_original_tail_quality(original_quals, query_tail_beg, query_tail_beg + tail_3p_len);
+                threshold = hp_mismatch_rate_thresholds->get_threshold(hp.length(), sequenced_hp_base, average_quality);
             }
 
             // Each eligible repeat defines its own core and tail boundaries.
             int five_p_and_hp_beg = is_reverse ? hp.beg : aln.ref_begin;
             int five_p_and_hp_end = is_reverse ? aln.ref_end : hp.end;
-            int three_p_beg = is_reverse ? aln.ref_begin : hp.end;
-            int three_p_end = is_reverse ? hp.beg : aln.ref_end;
             double five_p_and_hp_mismatch_rate = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, five_p_and_hp_beg, five_p_and_hp_end);
             double mismatch_rate_3p = ungapped_mismatch_rate_for_ref_range(read_seq, consensus_seq, aln, three_p_beg, three_p_end);
             if (five_p_and_hp_mismatch_rate <= config.max_seq_error && mismatch_rate_3p <= threshold) return true;

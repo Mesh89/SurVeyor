@@ -543,7 +543,7 @@ std::vector<bool> find_accepted_reads(std::string& consensus_seq, std::deque<bam
 
         const std::string& read_seq = read_cache.sequence(r);
         ungapped_aln_t aln(0, r->core.l_qseq, offset, offset + r->core.l_qseq, mm, r->core.l_qseq - mm);
-        if (passes_consensus_mismatch_filter(read_seq, bam_is_rev(r), consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config)) {
+        if (passes_consensus_mismatch_filter(read_seq, bam_is_rev(r), consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config, bam_get_qual(r))) {
             // The read should either map much better to the consensus than to the reference,
             // or contain an SV-sized net indel with respect to the reference.
             int orig_score = compute_read_score(r, 1, -4, -6, -1);

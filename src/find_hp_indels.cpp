@@ -96,16 +96,19 @@ struct hp_positional_consensus_t {
 
 using hp_mismatch_rates_by_len_t = std::vector<std::vector<double>>;
 using hp_mismatch_rates_by_len_and_base_t = std::array<hp_mismatch_rates_by_len_t, 4>;
+using hp_mismatch_rates_by_quality_t = std::map<std::array<int, 3>, std::vector<double>>;
 
 struct hp_read_mismatch_rate_t {
     double rate;
     int sequenced_hp_base_idx;
+    double average_original_quality;
 };
 
 struct hp_chunk_result_t {
     std::vector<std::shared_ptr<sv_t>> hp_indels;
     std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
     hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
+    hp_mismatch_rates_by_quality_t threshold_estimation_rates_by_quality;
     hp_tail_error_table_t tail_error_table;
     hp_candidate_chunk_t candidate_chunk;
 };
@@ -226,7 +229,7 @@ hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_position
         bool has_independent_consensus = observation.is_reverse ? left_5p_reads >= MIN_SUPPORTING_READS : right_5p_reads >= MIN_SUPPORTING_READS;
         int sequenced_hp_base_idx = observation.is_reverse ? 3 - ref_hp_base_idx : ref_hp_base_idx;
         if (!has_independent_consensus) {
-            mismatch_rates.candidate_rates.push_back({observation.ref_3p_mismatch_rate, sequenced_hp_base_idx});
+            mismatch_rates.candidate_rates.push_back({observation.ref_3p_mismatch_rate, sequenced_hp_base_idx, -1.0});
             continue;
         }
         if (consensus.seq.empty()) continue;
@@ -241,9 +244,10 @@ hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_position
         int consensus_beg = consensus_offset + tail_beg;
         int mismatches = number_of_mismatches_fast(observation.seq.c_str() + tail_beg, consensus.seq.c_str() + consensus_beg, compared_bases, compared_bases);
         double mismatch_rate = double(mismatches) / compared_bases;
-        mismatch_rates.candidate_rates.push_back({mismatch_rate, sequenced_hp_base_idx});
-        mismatch_rates.threshold_estimation_rates.push_back({mismatch_rate, sequenced_hp_base_idx});
         const std::vector<uint8_t>& original_quals = observation.original_quals.empty() ? observation.quals : observation.original_quals;
+        double average_quality = original_quals.size() >= tail_end ? average_original_tail_quality(original_quals.data(), tail_beg, tail_end) : -1.0;
+        mismatch_rates.candidate_rates.push_back({mismatch_rate, sequenced_hp_base_idx, average_quality});
+        mismatch_rates.threshold_estimation_rates.push_back({mismatch_rate, sequenced_hp_base_idx, average_quality});
         for (int qpos = tail_beg; qpos < tail_end; qpos++) {
             int cpos = consensus_offset + qpos;
             int read_base = base_to_index(observation.seq[qpos]);
@@ -267,6 +271,15 @@ double median_double(std::vector<double> values) {
     return values.size() % 2 == 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
 }
 
+double estimate_hp_mismatch_rate_threshold(const std::vector<double>& rates, double default_threshold) {
+    double center = median_double(rates);
+    std::vector<double> absolute_deviations;
+    absolute_deviations.reserve(rates.size());
+    for (double rate : rates) absolute_deviations.push_back(std::abs(rate - center));
+    double robust_sigma = 1.4826 * median_double(absolute_deviations);
+    return std::min(MAX_HP_MM_THRESHOLD, std::max(default_threshold, center + HP_MM_OUTLIER_MAD_MULTIPLIER * robust_sigma));
+}
+
 std::vector<double> estimate_hp_mismatch_rate_thresholds(const hp_mismatch_rates_by_len_t& mismatch_rates_by_hp_len, double default_threshold) {
     std::vector<double> thresholds(mismatch_rates_by_hp_len.size(), -1.0);
     std::vector<bool> threshold_computed(mismatch_rates_by_hp_len.size(), false);
@@ -283,12 +296,7 @@ std::vector<double> estimate_hp_mismatch_rate_thresholds(const hp_mismatch_rates
         }
         if (rates.size() < MIN_READS_FOR_HP_MM_THRESHOLD) continue;
 
-        double center = median_double(rates);
-        std::vector<double> absolute_deviations;
-        absolute_deviations.reserve(rates.size());
-        for (double rate : rates) absolute_deviations.push_back(std::abs(rate - center));
-        double robust_sigma = 1.4826 * median_double(absolute_deviations);
-        thresholds[hp_len] = std::min(MAX_HP_MM_THRESHOLD, std::max(default_threshold, center + HP_MM_OUTLIER_MAD_MULTIPLIER * robust_sigma));
+        thresholds[hp_len] = estimate_hp_mismatch_rate_threshold(rates, default_threshold);
         threshold_computed[hp_len] = true;
     }
 
@@ -303,6 +311,35 @@ std::vector<double> estimate_hp_mismatch_rate_thresholds(const hp_mismatch_rates
         }
     }
     return thresholds;
+}
+
+hp_quality_mismatch_rate_threshold_table_t estimate_hp_quality_mismatch_rate_thresholds(const hp_mismatch_rates_by_quality_t& rates_by_quality, const std::array<std::vector<double>, 4>& fallback_thresholds, double default_threshold) {
+    hp_quality_mismatch_rate_threshold_table_t thresholds;
+    for (int base = 0; base < 4; base++) {
+        for (int hp_len = 0; hp_len < fallback_thresholds[base].size(); hp_len++) {
+            double threshold = fallback_thresholds[base][hp_len];
+            for (int quality_bin = 0; quality_bin < HP_TAIL_QUALITY_BIN_COUNT; quality_bin++) {
+                std::array<int, 3> key{base, hp_len, quality_bin};
+                auto rates = rates_by_quality.find(key);
+                size_t observations = rates == rates_by_quality.end() ? 0 : rates->second.size();
+                bool estimated = observations >= MIN_READS_FOR_HP_MM_THRESHOLD;
+                if (estimated) threshold = estimate_hp_mismatch_rate_threshold(rates->second, default_threshold);
+                thresholds[key] = {observations, threshold, estimated};
+            }
+        }
+    }
+    return thresholds;
+}
+
+void write_hp_quality_mismatch_rate_thresholds(const hp_quality_mismatch_rate_threshold_table_t& thresholds, const std::string& fname) {
+    std::ofstream fout(fname);
+    if (!fout) throw std::runtime_error("Unable to open " + fname + " for writing.");
+    fout << "HP_BASE\tHP_LEN\tAVG_QUAL_MIN\tAVG_QUAL_MAX\tOBSERVATIONS\tTHRESHOLD\tSOURCE\n" << std::setprecision(17);
+    for (const auto& bin : thresholds) {
+        int qual_min = bin.first[2] * HP_TAIL_QUALITY_BIN_SIZE;
+        fout << "ACGT"[bin.first[0]] << "\t" << bin.first[1] << "\t" << qual_min << "\t" << qual_min + HP_TAIL_QUALITY_BIN_SIZE << "\t" << bin.second.observations << "\t" << bin.second.threshold << "\t" << (bin.second.estimated ? "estimated" : "inherited") << "\n";
+    }
+    if (!fout) throw std::runtime_error("Unable to write " + fname + ".");
 }
 
 void write_hp_mismatch_rate_thresholds(const std::array<std::vector<double>, 4>& thresholds_by_base, const std::string& fname) {
@@ -528,7 +565,10 @@ hp_chunk_result_t postprocess_hp_runs(const std::vector<hp_run_t>& hp_runs, cons
                 hp_mismatch_rates_by_len_t& rates_by_hp_len = result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx];
                 if (rates_by_hp_len.size() <= alt_hp_len) rates_by_hp_len.resize(alt_hp_len + 1);
             }
-            for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.threshold_estimation_rates) result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx][alt_hp_len].push_back(read_rate.rate);
+            for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.threshold_estimation_rates) {
+                result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx][alt_hp_len].push_back(read_rate.rate);
+                if (read_rate.average_original_quality >= 0) result.threshold_estimation_rates_by_quality[{read_rate.sequenced_hp_base_idx, alt_hp_len, int(read_rate.average_original_quality / HP_TAIL_QUALITY_BIN_SIZE)}].push_back(read_rate.rate);
+            }
 
             if (!generate_candidates) continue;
             if (hp_run.beg == 0 || alt_hp_len == ref_hp_len) continue;
@@ -949,10 +989,15 @@ int main(int argc, char* argv[]) {
     std::vector<std::shared_ptr<sv_t>> hp_indels;
     std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
     hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
+    hp_mismatch_rates_by_quality_t threshold_estimation_rates_by_quality;
     hp_tail_error_table_t tail_error_table;
     for (std::future<hp_chunk_result_t>& future : futures) {
         hp_chunk_result_t chunk_result = future.get();
         if (!chunk_result.candidate_chunk.hp_runs.empty()) candidate_chunks.push_back(std::move(chunk_result.candidate_chunk));
+        for (const auto& entry : chunk_result.threshold_estimation_rates_by_quality) {
+            auto& rates = threshold_estimation_rates_by_quality[entry.first];
+            rates.insert(rates.end(), entry.second.begin(), entry.second.end());
+        }
         for (const auto& entry : chunk_result.tail_error_table) {
             auto& counts = tail_error_table[entry.first];
             counts.first += entry.second.first;
@@ -973,6 +1018,8 @@ int main(int argc, char* argv[]) {
     std::array<std::vector<double>, 4> hp_mismatch_rate_thresholds_by_base;
     for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) hp_mismatch_rate_thresholds_by_base[hp_base_idx] = estimate_hp_mismatch_rate_thresholds(threshold_estimation_rates_by_hp_len_and_base[hp_base_idx], config.max_seq_error);
     write_hp_mismatch_rate_thresholds(hp_mismatch_rate_thresholds_by_base, workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    auto hp_quality_mismatch_rate_thresholds = estimate_hp_quality_mismatch_rate_thresholds(threshold_estimation_rates_by_quality, hp_mismatch_rate_thresholds_by_base, config.max_seq_error);
+    write_hp_quality_mismatch_rate_thresholds(hp_quality_mismatch_rate_thresholds, workdir + "/" + HP_QUALITY_MISMATCH_RATE_THRESHOLDS_FILENAME);
     write_hp_tail_error_table(tail_error_table, workdir + "/hp_3p_tail_error_probabilities.txt");
 
     // Train DNR thresholds in a separate pass over the same chunks, including thresholds-only runs.
@@ -1007,6 +1054,7 @@ int main(int argc, char* argv[]) {
     }
     write_dnr_mismatch_rate_thresholds(dnr_thresholds_by_class, workdir + "/" + DNR_MISMATCH_RATE_THRESHOLDS_FILENAME);
     if (thresholds_only) return 0;
+    hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir);
     hp_tail_quality_model_t quality_model = make_hp_tail_quality_model(tail_error_table);
     futures.clear();
     {
@@ -1035,7 +1083,7 @@ int main(int argc, char* argv[]) {
         for (const hp_read_mismatch_rate_t& read_rate : hp_indel_3p_mismatch_rates[hp_indel_idx]) {
             int hp_base_idx = read_rate.sequenced_hp_base_idx;
             if (hp_base_idx < 0 || hp_len >= hp_mismatch_rate_thresholds_by_base[hp_base_idx].size()) continue;
-            if (read_rate.rate <= hp_mismatch_rate_thresholds_by_base[hp_base_idx][hp_len]) {
+            if (read_rate.rate <= hp_mismatch_rate_thresholds.get_threshold(hp_len, "ACGT"[hp_base_idx], read_rate.average_original_quality)) {
                 passing_reads++;
             }
         }
