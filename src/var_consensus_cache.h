@@ -59,6 +59,7 @@ struct record_t {
     uint64_t variant_hash = 0;
     std::vector<build_t> builds;
     consensus_alignment_metrics_t alt1, alt2, extended1, extended2;
+    int trimmed_alt1_len = 0, trimmed_alt2_len = 0;
     anchor_t left, right;
 
     void write(std::ostream& out) const {
@@ -66,6 +67,7 @@ struct record_t {
         for (const auto& b : builds) out << '\t' << b.reads_hash << '\t' << b.allele_hash << '\t' << b.avg << '\t' << b.stddev << '\t' << b.flags << '\t' << b.anchors;
         write_metrics(out, alt1); write_metrics(out, alt2); write_metrics(out, extended1); write_metrics(out, extended2);
         for (const auto& a : {left, right}) out << '\t' << a.start << '\t' << a.end << '\t' << a.seq_len;
+        out << '\t' << trimmed_alt1_len << '\t' << trimmed_alt2_len;
         out << '\n';
     }
     void read(std::istream& in) {
@@ -75,19 +77,23 @@ struct record_t {
         for (auto& b : builds) in >> b.reads_hash >> b.allele_hash >> b.avg >> b.stddev >> b.flags >> b.anchors;
         read_metrics(in, alt1); read_metrics(in, alt2); read_metrics(in, extended1); read_metrics(in, extended2);
         for (auto* a : {&left, &right}) in >> a->start >> a->end >> a->seq_len;
+        in >> trimmed_alt1_len >> trimmed_alt2_len;
     }
     void capture(sv_t* sv) {
         alt1 = sv->sample_info.alt_consensus1_metrics; alt2 = sv->sample_info.alt_consensus2_metrics;
         extended1 = sv->sample_info.ext_alt_consensus1_metrics; extended2 = sv->sample_info.ext_alt_consensus2_metrics;
+        trimmed_alt1_len = sv->sample_info.trimmed_alt_consensus1_len; trimmed_alt2_len = sv->sample_info.trimmed_alt_consensus2_len;
         left.capture(sv->left_anchor_aln); right.capture(sv->right_anchor_aln);
     }
     void restore_alt(sv_t* sv, size_t index) const {
         if (index == 0) {
             sv->sample_info.alt_consensus1_metrics = alt1;
             sv->sample_info.ext_alt_consensus1_metrics = extended1;
+            sv->sample_info.trimmed_alt_consensus1_len = trimmed_alt1_len;
         } else {
             sv->sample_info.alt_consensus2_metrics = alt2;
             sv->sample_info.ext_alt_consensus2_metrics = extended2;
+            sv->sample_info.trimmed_alt_consensus2_len = trimmed_alt2_len;
         }
         if (builds[index].anchors & LEFT_ANCHOR) left.restore(sv->left_anchor_aln);
         if (builds[index].anchors & RIGHT_ANCHOR) right.restore(sv->right_anchor_aln);
@@ -131,6 +137,7 @@ public:
                 std::istringstream row(line);
                 std::string id; row >> id;
                 by_id[id].read(row);
+                if (!row) by_id.erase(id); // Older rows lack the trimmed seed lengths and must be recomputed.
             }
         } else {
             for (auto* sv : svs) by_id.emplace(sv->id, record_t());

@@ -197,6 +197,7 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     };
 
     if (!consensus_cache.hit(0)) {
+        inv->sample_info.trimmed_alt_consensus1_len = alt_consensus_seq.length();
         if (!alt_untrimmed_consensus_seq.empty()) {
             inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_untrimmed_consensus_seq);
         }
@@ -525,6 +526,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     };
 
     if (!consensus_cache.hit(0)) {
+        inv->sample_info.trimmed_alt_consensus1_len = alt_bp1_consensus_seq.length();
         inv->sample_info.ext_alt_consensus1_metrics.length = alt_bp1_consensus_seq.length();
         if (!alt_bp1_untrimmed_consensus_seq.empty()) {
             inv->sample_info.alt_consensus1_metrics = score_inv_consensus(alt_bp1_untrimmed_consensus_seq, true);
@@ -555,6 +557,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     }
 
     if (!consensus_cache.hit(1)) {
+        inv->sample_info.trimmed_alt_consensus2_len = alt_bp2_consensus_seq.length();
         inv->sample_info.ext_alt_consensus2_metrics.length = alt_bp2_consensus_seq.length();
         if (!alt_bp2_untrimmed_consensus_seq.empty()) {
             inv->sample_info.alt_consensus2_metrics = score_inv_consensus(alt_bp2_untrimmed_consensus_seq, false);

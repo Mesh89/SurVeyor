@@ -87,6 +87,10 @@ void copy_all_format_to_base(bcf_hdr_t* base_hdr, htsFile* base_fp, const std::u
             }
             free(gt);
 
+            // An unavailable new seed must not retain a stale length from the base record.
+            for (const char* key : {"TAL", "TAL2"}) {
+                if (bcf_get_fmt(gt_hdr, gt_record, key) == nullptr) bcf_update_format_int32(out_hdr, b, key, NULL, 0);
+            }
             bcf_fmt_t* fmt = gt_record->d.fmt;
             for (int i = 0; i < gt_record->n_fmt; i++) {
                 const char* key = bcf_hdr_int2id(gt_hdr, BCF_DT_ID, fmt[i].id);

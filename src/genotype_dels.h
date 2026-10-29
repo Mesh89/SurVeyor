@@ -331,9 +331,15 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     double alt_avg_score, ref_bp1_avg_score, ref_bp2_avg_score;
     double alt_stddev_score, ref_bp1_stddev_score, ref_bp2_stddev_score;
     std::vector<bool> alt_is_exact_read, ref_bp1_is_exact_read, ref_bp2_is_exact_read;
-    auto alt_is_consistent_read = consensus_cache.build(0, alt_avg_score, alt_stddev_score, alt_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds, &alt_untrimmed_consensus_seq); });
-    auto ref_bp1_is_consistent_read = consensus_cache.build(1, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_seqs, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, hp_mismatch_rate_thresholds); });
-    auto ref_bp2_is_consistent_read = consensus_cache.build(2, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, [&]() { return gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_seqs, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds); });
+    auto alt_is_consistent_read = consensus_cache.build(0, alt_avg_score, alt_stddev_score, alt_is_exact_read, [&]() { 
+        return gen_consensus_and_classify_seqs(alt_seq, alt_better_reads, std::vector<bool>(), alt_consensus_seq, alt_avg_score, alt_stddev_score, alt_is_exact_read, hp_mismatch_rate_thresholds, &alt_untrimmed_consensus_seq); 
+    });
+    auto ref_bp1_is_consistent_read = consensus_cache.build(1, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, [&]() { 
+        return gen_consensus_and_classify_seqs(ref_bp1_seq, ref_bp1_better_seqs, std::vector<bool>(), ref_bp1_consensus_seq, ref_bp1_avg_score, ref_bp1_stddev_score, ref_bp1_is_exact_read, hp_mismatch_rate_thresholds); 
+    });
+    auto ref_bp2_is_consistent_read = consensus_cache.build(2, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, [&]() { 
+        return gen_consensus_and_classify_seqs(ref_bp2_seq, ref_bp2_better_seqs, std::vector<bool>(), ref_bp2_consensus_seq, ref_bp2_avg_score, ref_bp2_stddev_score, ref_bp2_is_exact_read, hp_mismatch_rate_thresholds); 
+    });
 
     std::vector<int> alt_better_read_positions_consistent = get_consistent_reads_start_positions(alt_is_consistent_read, alt_better_read_positions);
     del->sample_info.alt1_occ_ratio = occ_ratio(alt_better_read_positions_consistent, alt_ref_diff_reads_expected_positions.size());
@@ -409,6 +415,7 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     };
 
     if (!consensus_cache.hit(0)) {
+        del->sample_info.trimmed_alt_consensus1_len = alt_consensus_seq.length();
         if (!alt_untrimmed_consensus_seq.empty()) {
             del->sample_info.alt_consensus1_metrics = score_del_consensus(alt_untrimmed_consensus_seq);
         }

@@ -498,6 +498,17 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_format_float(out_hdr, sv->vcf_entry, "KSPVAL", NULL, 0);
     }
 
+    if (sv->sample_info.trimmed_alt_consensus1_len > 0) {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "TAL", &(sv->sample_info.trimmed_alt_consensus1_len), 1);
+    } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "TAL", NULL, 0);
+    }
+    if (sv->sample_info.trimmed_alt_consensus2_len > 0) {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "TAL2", &(sv->sample_info.trimmed_alt_consensus2_len), 1);
+    } else {
+        bcf_update_format_int32(out_hdr, sv->vcf_entry, "TAL2", NULL, 0);
+    }
+
     if (sv->sample_info.alt_consensus1_metrics.length > 0) {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AL", &(sv->sample_info.alt_consensus1_metrics.length), 1);
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "AAS", &(sv->sample_info.alt_consensus1_metrics.alt_score), 1);

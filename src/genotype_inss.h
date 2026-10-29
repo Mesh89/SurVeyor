@@ -410,6 +410,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
     };
 
     if (!consensus_cache.hit(0)) {
+        ins->sample_info.trimmed_alt_consensus1_len = alt_bp1_consensus_seq.length();
         ins->sample_info.ext_alt_consensus1_metrics.length = alt_bp1_consensus_seq.length();
         if (!alt_bp1_untrimmed_consensus_seq.empty()) {
             ins->sample_info.alt_consensus1_metrics = score_ins_consensus(alt_bp1_untrimmed_consensus_seq, true);
@@ -433,6 +434,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
         }
     }
     if (!consensus_cache.hit(1)) {
+        ins->sample_info.trimmed_alt_consensus2_len = alt_bp2_consensus_seq.length();
         ins->sample_info.ext_alt_consensus2_metrics.length = alt_bp2_consensus_seq.length();
         if (!alt_bp2_untrimmed_consensus_seq.empty()) {
             ins->sample_info.alt_consensus2_metrics = score_ins_consensus(alt_bp2_untrimmed_consensus_seq, false);

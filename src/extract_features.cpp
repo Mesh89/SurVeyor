@@ -369,9 +369,9 @@ void add_consensus_alignment_features(features_t& features, bcf_hdr_t* hdr, bcf1
         normalised_al1 = std::isfinite(al1) ? al1/factors[0] : NAN_VALUE;
         normalised_al2 = std::isfinite(al2) ? al2/factors[1] : NAN_VALUE;
     } else {
-        double unextended_al1 = get_format_number(hdr, record, "AL", NAN_VALUE), unextended_al2 = get_format_number(hdr, record, "AL2", NAN_VALUE);
-        normalised_al1 = std::isfinite(al1) && std::isfinite(unextended_al1) ? (al1-unextended_al1)/(2.0*GENOTYPE_CONSENSUS_EXTENSION) : NAN_VALUE;
-        normalised_al2 = std::isfinite(al2) && std::isfinite(unextended_al2) ? (al2-unextended_al2)/(2.0*GENOTYPE_CONSENSUS_EXTENSION) : NAN_VALUE;
+        double trimmed_al1 = get_format_number(hdr, record, "TAL", NAN_VALUE), trimmed_al2 = get_format_number(hdr, record, "TAL2", NAN_VALUE);
+        normalised_al1 = std::isfinite(al1) && std::isfinite(trimmed_al1) ? (al1-trimmed_al1)/(2.0*GENOTYPE_CONSENSUS_EXTENSION) : NAN_VALUE;
+        normalised_al2 = std::isfinite(al2) && std::isfinite(trimmed_al2) ? (al2-trimmed_al2)/(2.0*GENOTYPE_CONSENSUS_EXTENSION) : NAN_VALUE;
     }
     features[prefix+"AL1"] = normalised_al1;
     features[prefix+"AL2"] = normalised_al2;

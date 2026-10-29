@@ -439,6 +439,7 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     };
 
     if (!consensus_cache.hit(0)) {
+        dup->sample_info.trimmed_alt_consensus1_len = alt_consensus_seq.length();
         if (!alt_untrimmed_consensus_seq.empty()) {
             dup->sample_info.alt_consensus1_metrics = score_dup_consensus(alt_untrimmed_consensus_seq);
         }
@@ -638,6 +639,7 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     };
 
     if (!consensus_cache.hit(0)) {
+        dup->sample_info.trimmed_alt_consensus1_len = alt_consensus_seq.length();
         if (!alt_untrimmed_consensus_seq.empty()) {
             dup->sample_info.alt_consensus1_metrics = score_dup_consensus(alt_untrimmed_consensus_seq);
         }

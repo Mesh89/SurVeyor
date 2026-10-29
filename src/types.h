@@ -317,6 +317,7 @@ struct sv_t {
         int alt_ref_equal_reads = 0, alt_ref_equal_reads_highmq = 0;
         consensus_alignment_metrics_t alt_consensus1_metrics, alt_consensus2_metrics;
         consensus_alignment_metrics_t ext_alt_consensus1_metrics, ext_alt_consensus2_metrics;
+        int trimmed_alt_consensus1_len = 0, trimmed_alt_consensus2_len = 0; // Seeds immediately before extension; zero means unavailable.
         int ins_seq_prefix_cov = 0, ins_seq_suffix_cov = 0;
         bool too_deep = false;
         int alt1_hp_len_mode = NOT_COMPUTED, alt1_consistent_hp_len_mode = NOT_COMPUTED;
