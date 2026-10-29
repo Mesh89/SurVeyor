@@ -99,16 +99,14 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 	std::vector<std::vector<edge_t> > l_adj(n), l_adj_rev(n);
 
 	build_graph(read_seqs, order, out_edges, l_adj, l_adj_rev, config.max_seq_error, config.min_clip_len);
+	// High-quality mismatches likely join different repeat copies or haplotypes; low-quality mismatches may be sequencing errors.
+	remove_assembly_edges(out_edges, l_adj, l_adj_rev, [&read_contigs](int from, const edge_t& e) {
+		return e.score != e.overlap && count_hq_mismatches(read_contigs[from], read_contigs[e.next], e.overlap, 20) > 0;
+	});
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
 	if (rev_topological_order.size() < n) {
-		// A cycle means a repeat. An overlap with a mismatch where both bases have quality >= 20 likely joins different
-		// repeat copies or haplotypes, so remove it; low-quality mismatches are likely sequencing errors, so those overlaps stay.
-		remove_assembly_edges(out_edges, l_adj, l_adj_rev, [&read_contigs](int from, const edge_t& e) {
-			return e.score != e.overlap && count_hq_mismatches(read_contigs[from], read_contigs[e.next], e.overlap, 20) > 0;
-		});
-		rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 		auto prune_short_overlaps = [&]() {
 			for (int min_overlap = config.min_clip_len+10; rev_topological_order.size() < n && min_overlap <= stats.read_len/2; min_overlap += 10) {
 				remove_assembly_edges(out_edges, l_adj, l_adj_rev, [min_overlap](int from, const edge_t& e) { return e.overlap < min_overlap; });
