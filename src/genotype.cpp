@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <new>
 #include <sstream>
@@ -903,6 +904,64 @@ std::vector<std::vector<uint8_t>> get_genotyping_consensus_qualities(const std::
     return quals;
 }
 
+bool rescue_hp_consensus_alignment(const std::string& read_seq, bool is_reverse, const std::string& consensus_seq, ungapped_aln_t& aln, const std::vector<consensus_hp_region_t>& hp_regions, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds, const uint8_t* original_quals) {
+    if (hp_mismatch_rate_thresholds == nullptr) return false;
+    int read_len = read_seq.length(), consensus_len = consensus_seq.length();
+    // Keep the original placement bounds and the full reference overlap.
+    int max_ref_overflow = std::max(0, config.min_clip_len - 1);
+    int first_offset = -max_ref_overflow, last_offset = std::max(first_offset, consensus_len + max_ref_overflow - read_len);
+    // Match each consensus HP within same-base read runs, including longer runs,
+    // and group anchors that propose the same offset.
+    std::map<int, std::vector<const consensus_hp_region_t*>> hp_regions_by_offset;
+    for (int read_beg = 0; read_beg < read_len;) {
+        char base = uppercase_hp_base(read_seq[read_beg]);
+        int read_end = read_beg + 1;
+        while (read_end < read_len && uppercase_hp_base(read_seq[read_end]) == base) read_end++;
+        if (read_end - read_beg >= 5) {
+            for (const auto& hp : hp_regions) {
+                if (hp.period != 1 || hp.base != base || hp.length() > read_end - read_beg) continue;
+                for (int segment_beg = read_beg; segment_beg + hp.length() <= read_end; segment_beg++) {
+                    int offset = hp.beg - segment_beg;
+                    if (offset < first_offset || offset > last_offset || offset == aln.ref_begin - aln.query_begin) continue;
+                    int ref_beg = std::max(0, offset), ref_end = std::min(consensus_len, offset + read_len);
+                    if (hp.beg - ref_beg < config.min_clip_len || ref_end - hp.end < config.min_clip_len) continue;
+                    if (read_seq.compare(segment_beg, hp.length(), consensus_seq, hp.beg, hp.length()) != 0) continue;
+                    hp_regions_by_offset[offset].push_back(&hp);
+                }
+            }
+        }
+        read_beg = read_end;
+    }
+
+    bool found = false;
+    // Sorted, distinct offsets preserve the original search's lowest-offset score ties.
+    for (const auto& candidate : hp_regions_by_offset) {
+        int offset = candidate.first;
+        int ref_beg = std::max(0, offset), ref_end = std::min(consensus_len, offset + read_len);
+        for (const auto* hp : candidate.second) {
+            // Check the sequencing-5' flank plus HP first; only a clean core can
+            // use the original-quality allowance for this placement's 3' tail.
+            int core_beg = is_reverse ? hp->beg : ref_beg, core_end = is_reverse ? ref_end : hp->end;
+            int core_len = core_end - core_beg;
+            int core_mismatches = number_of_mismatches_fast(read_seq.c_str() + core_beg - offset, consensus_seq.c_str() + core_beg, core_len, core_len);
+            if (double(core_mismatches) / core_len > config.max_seq_error) continue;
+            int tail_beg = is_reverse ? ref_beg : hp->end, tail_end = is_reverse ? hp->beg : ref_end;
+            int tail_len = tail_end - tail_beg;
+            double average_quality = average_original_tail_quality(original_quals, tail_beg - offset, tail_end - offset);
+            char sequenced_hp_base = is_reverse ? complement_hp_base(hp->base) : hp->base;
+            double threshold = hp_mismatch_rate_thresholds->get_threshold(hp->length(), sequenced_hp_base, average_quality);
+            int tail_mismatches = number_of_mismatches_fast(read_seq.c_str() + tail_beg - offset, consensus_seq.c_str() + tail_beg, tail_len, tail_len);
+            if (double(tail_mismatches) / tail_len > threshold) continue;
+            int mismatches = core_mismatches + tail_mismatches;
+            int score = ref_end - ref_beg - mismatches; // The final classification uses match=1, mismatch=0.
+            if (!found || score > aln.score) aln = ungapped_aln_t(ref_beg - offset, ref_end - offset, ref_beg, ref_end, mismatches, score);
+            found = true;
+            break; // Other anchors at this offset have the same alignment and score.
+        }
+    }
+    return found;
+}
+
 // Returns a consistency mask over reads; is_exact_match uses the same index space.
 std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<std::shared_ptr<bam1_t>>& reads, std::vector<bool> revcomp_read, std::string& consensus_seq, double& avg_score, double& stddev_score, 
@@ -1031,7 +1090,9 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), evidence_consensus_seq.c_str(), evidence_consensus_seq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
 
             bool is_reverse = read_is_reverse[i];
-            if (passes_consensus_mismatch_filter(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds, config, original_quals[i])) {
+            // Keep accepted placements unchanged. Rescue only failures, then derive
+            // consistency, exactness and score features from the selected alignment.
+            if (passes_consensus_mismatch_filter(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds, config, original_quals[i]) || rescue_hp_consensus_alignment(read_seq, is_reverse, evidence_consensus_seq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds, original_quals[i])) {
                 is_consistent_read[i] = true;
                 is_exact_match[i] = ungapped_aln.mismatches == 0;
                 n_consistent_reads++;
