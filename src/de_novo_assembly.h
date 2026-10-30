@@ -307,9 +307,36 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 			break;
 		}
 	}
-	if (chosen_ins == NULL) { // cannot identify an SV insertion, check if it is an incomplete assembly
+	if (chosen_ins == NULL) {
 		if (assembled_sequences.size() == 1) return NULL;
 
+		for (int order = 0; order < 2 && chosen_ins == NULL; order++) {
+			const std::string& left = assembled_sequences[order];
+			const std::string& right = assembled_sequences[1-order];
+			int overlap = std::min(left.length(), right.length());
+			for (; overlap >= 30; overlap--) {
+				if (left.compare(left.length()-overlap, overlap, right, 0, overlap) == 0) break;
+			}
+			if (overlap < 30) continue;
+
+			std::string merged = left + right.substr(overlap);
+			extend = 2*merged.length();
+			remap_region_start = std::min(r_cluster->end, l_cluster->start)-extend;
+			remap_region_start = std::max(0, remap_region_start);
+			remap_region_end = std::max(r_cluster->end, l_cluster->start)+extend;
+			remap_region_end = std::min(remap_region_end, contig_len-1);
+			std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, merged, std::string(merged.length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
+			for (std::shared_ptr<sv_t> sv : svs) {
+				if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
+					chosen_ins = sv;
+					full_assembled_seq = merged;
+					break;
+				}
+			}
+		}
+	}
+
+	if (chosen_ins == NULL) { // cannot identify an SV insertion, check if it is an incomplete assembly
 		extend = 2*(assembled_sequence.length() + assembled_sequences[1].length());
 		remap_region_start = std::min(r_cluster->end, l_cluster->start)-extend;
 		if (remap_region_start < 0) remap_region_start = 0;
