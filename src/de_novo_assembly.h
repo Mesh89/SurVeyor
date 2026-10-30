@@ -337,6 +337,22 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		else if (!svs2.empty() && chosen_ins == svs2[0]) full_assembled_seq = assembled_sequences[1] + "-" + assembled_sequence;
 	}
 
+	if (chosen_ins == NULL) {
+		extend = 2*assembled_sequences[1].length();
+		remap_region_start = std::min(r_cluster->end, l_cluster->start)-extend;
+		remap_region_start = std::max(0, remap_region_start);
+		remap_region_end = std::max(r_cluster->end, l_cluster->start)+extend;
+		remap_region_end = std::min(remap_region_end, contig_len-1);
+		std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1], std::string(assembled_sequences[1].length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
+		for (std::shared_ptr<sv_t> sv : svs) {
+			if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
+				chosen_ins = sv;
+				full_assembled_seq = assembled_sequences[1];
+				break;
+			}
+		}
+	}
+
 	if (chosen_ins == NULL) return NULL;
 
 	int sep = chosen_ins->ins_seq.find("-");
