@@ -1080,12 +1080,11 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
     for (int i = 0; i < hp_indels.size(); i++) {
         for (int j = 0; j < alt_all_reads[i].size(); j++) {
             const bp_support_read_t& read = alt_all_reads[i][j];
+            bool consistent = alt_is_consistent[i][j];
+            bool hq = read.mate_mapq >= config.high_confidence_mapq;
+            bool exact = alt_is_exact_match[i][j];
+            evidence_map->record_assigned_alt_read(hp_indels[i], read, consistent, hq, exact);
             if (reassigns_evidence(evidence_mode)) {
-                bool consistent = alt_is_consistent[i][j];
-                bool hq = read.mate_mapq >= config.high_confidence_mapq;
-                bool exact = alt_is_exact_match[i][j];
-                evidence_map->record_assigned_alt_read(hp_indels[i], read, consistent, hq, exact);
-
                 std::string read_name = read_name_with_suffix(read);
                 auto assignment_it = evidence_map->read_assignments.find(read_name);
                 if (assignment_it == evidence_map->read_assignments.end() || assignment_it->second.hpid != hp_indels[i]->hpid) continue;

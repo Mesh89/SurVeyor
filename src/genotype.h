@@ -566,6 +566,9 @@ struct evidence_map_t {
     };
 
     std::unordered_map<std::string, read_assignment_t> read_assignments;
+    // Cached pass-1 sharing bookkeeping stays separate so owner annotations
+    // preserve the existing ALT/REF membership rules.
+    std::unordered_map<std::string, std::vector<read_assignment_t>> read_sharing_owners;
     std::unordered_map<std::string, read_alt_associations_t> read_alt_associations;
     std::unordered_map<std::string, std::vector<read_ref_association_t>> read_ref_associations;
     std::unordered_map<std::string, std::vector<sv_t*>> read_er_associations;
@@ -580,6 +583,7 @@ struct evidence_map_t {
 
     void load(const std::string& alt_reads_association_fname, const std::string& ref_reads_association_fname, const std::string& er_reads_association_fname, const std::vector<sv_t*>& svs, config_t& config, bool resolve_assignments) {
         read_assignments.clear();
+        read_sharing_owners.clear();
         read_alt_associations.clear();
         read_ref_associations.clear();
         read_er_associations.clear();
@@ -592,22 +596,18 @@ struct evidence_map_t {
         std::unordered_map<std::string, sv_t*> sv_by_exact_id;
         for (sv_t* sv : svs) {
             sv_by_exact_id[sv->id] = sv;
-            if (resolve_assignments) {
-                std::string id = remove_svid_dup_suffix(sv->id);
-                sv_epr_map[id] = sv->sample_info.epr;
-                sv_hpid_map[id] = sv->hpid;
-            }
+            std::string id = remove_svid_dup_suffix(sv->id);
+            sv_hpid_map[id] = sv->hpid;
+            if (resolve_assignments) sv_epr_map[id] = sv->sample_info.epr;
         }
 
-        if (resolve_assignments) {
-            for (const auto& entry : sv_hpid_map) {
-                uint32_t vid_idx = sv_id_by_idx.size();
-                sv_id_to_idx.emplace(entry.first, vid_idx);
-                sv_id_by_idx.push_back(entry.first);
-                vid_idxs_by_hpid[entry.second].push_back(vid_idx);
-            }
-            for (auto& entry : vid_idxs_by_hpid) std::sort(entry.second.begin(), entry.second.end());
+        for (const auto& entry : sv_hpid_map) {
+            uint32_t vid_idx = sv_id_by_idx.size();
+            sv_id_to_idx.emplace(entry.first, vid_idx);
+            sv_id_by_idx.push_back(entry.first);
+            vid_idxs_by_hpid[entry.second].push_back(vid_idx);
         }
+        for (auto& entry : vid_idxs_by_hpid) std::sort(entry.second.begin(), entry.second.end());
 
         std::map<std::vector<uint32_t>, uint32_t> vid_set_to_idx;
         auto intern_vid_set = [&](std::vector<uint32_t> vid_idxs) {
@@ -699,7 +699,24 @@ struct evidence_map_t {
             }
         }
 
-        if (!resolve_assignments) return;
+        // Pass-1 sharing owners are all haplotypes tied at the global maximum ALT score, independently of EPR.
+        // They retain their ALT memberships and can jointly contribute sharing evidence to losing haplotypes.
+        if (!resolve_assignments) {
+            for (const auto& entry : read_alt_associations) {
+                std::map<int, std::vector<uint32_t>> winning_vid_idxs_by_hpid;
+                for (const read_alt_association_t& association : entry.second.associations) {
+                    if (association.score != entry.second.max_score) continue;
+                    winning_vid_idxs_by_hpid[association.sv->hpid].push_back(sv_id_to_idx.at(remove_svid_dup_suffix(association.sv->id)));
+                }
+                for (auto& owner : winning_vid_idxs_by_hpid) {
+                    // Keep only each owner's winning VIDs, excluding its lower-scoring variants.
+                    uint32_t vid_set_idx = std::numeric_limits<uint32_t>::max();
+                    if (vid_idxs_by_hpid.at(owner.first).size() > 1) vid_set_idx = intern_vid_set(std::move(owner.second));
+                    read_sharing_owners[entry.first].push_back(read_assignment_t(owner.first, vid_set_idx));
+                }
+            }
+            return;
+        }
 
         // Now, for each SV, we calculate U, the number of reads with a unique best
         // association to that SV.
@@ -818,15 +835,17 @@ struct evidence_map_t {
 
     }
 
-    const std::vector<uint32_t>* get_assigned_vid_idxs(const std::string& read_name) const {
-        auto assignment_it = read_assignments.find(read_name);
-        if (assignment_it == read_assignments.end()) return NULL;
-        const read_assignment_t& assignment = assignment_it->second;
+    const std::vector<uint32_t>* get_assigned_vid_idxs(const read_assignment_t& assignment) const {
         if (assignment.vid_set_idx == std::numeric_limits<uint32_t>::max()) {
             auto hpid_vids_it = vid_idxs_by_hpid.find(assignment.hpid);
             return hpid_vids_it == vid_idxs_by_hpid.end() ? NULL : &hpid_vids_it->second;
         }
         return &interned_vid_sets[assignment.vid_set_idx];
+    }
+
+    const std::vector<uint32_t>* get_assigned_vid_idxs(const std::string& read_name) const {
+        auto assignment_it = read_assignments.find(read_name);
+        return assignment_it == read_assignments.end() ? NULL : get_assigned_vid_idxs(assignment_it->second);
     }
 
     bool is_read_assigned_to_different_sv(bam1_t* read, sv_t* sv) {
@@ -951,11 +970,23 @@ struct evidence_map_t {
         return sv_id_by_idx[vid_idx];
     }
 
-    // Once a variant has classified an owned ALT read, propagate its complete OAR contribution to every other ALT association.
+    // Classifying an owned ALT read contributes sharing evidence outside all owning haplotypes.
+    // Tied owners share one total read count and a cumulative union of their C/HQ/E observations.
     void record_assigned_alt_read(sv_t* assigned_sv, const std::string& read_name, bool consistent, bool hq, bool exact) {
+        const read_assignment_t* owners;
+        size_t n_owners;
         auto assignment_it = read_assignments.find(read_name);
-        if (assignment_it == read_assignments.end() || assignment_it->second.hpid != assigned_sv->hpid) return;
-        const std::vector<uint32_t>* supporting_vid_idxs = get_assigned_vid_idxs(read_name);
+        if (assignment_it != read_assignments.end()) {
+            owners = &assignment_it->second;
+            n_owners = 1;
+        } else {
+            auto sharing_it = read_sharing_owners.find(read_name);
+            if (sharing_it == read_sharing_owners.end()) return;
+            owners = sharing_it->second.data();
+            n_owners = sharing_it->second.size();
+        }
+        auto owns_hpid = [&](int hpid) { return std::any_of(owners, owners+n_owners, [hpid](const read_assignment_t& owner) { return owner.hpid == hpid; }); };
+        if (!owns_hpid(assigned_sv->hpid)) return;
         std::lock_guard<std::mutex> lock(other_read_support_mtx);
         auto associations_it = read_alt_associations.find(read_name);
         if (associations_it == read_alt_associations.end()) return;
@@ -971,7 +1002,7 @@ struct evidence_map_t {
         associations_it->second.exact |= consistent && exact;
         std::set<std::pair<sv_t*, int>> registered_targets;
         for (const read_alt_association_t& association : associations_it->second.associations) {
-            if (association.sv->hpid == assigned_sv->hpid || association.bp < 1 || association.bp > 2) continue;
+            if (owns_hpid(association.sv->hpid) || association.bp < 1 || association.bp > 2) continue;
             if (!registered_targets.insert({association.sv, association.bp}).second) continue;
             sv_t::sample_info_t& target_sample_info = association.sv->sample_info;
             if (target_sample_info.too_deep) continue;
@@ -979,14 +1010,17 @@ struct evidence_map_t {
                 std::unordered_map<std::string, int>* reads_by_vid;
                 if (association.bp == 1) {
                     target_sample_info.oar_bp1_reads++;
-                    target_sample_info.oar_bp1_reads_by_hpid[assignment_it->second.hpid]++;
                     reads_by_vid = &target_sample_info.oar_bp1_reads_by_vid;
                 } else {
                     target_sample_info.oar_bp2_reads++;
-                    target_sample_info.oar_bp2_reads_by_hpid[assignment_it->second.hpid]++;
                     reads_by_vid = &target_sample_info.oar_bp2_reads_by_vid;
                 }
-                if (supporting_vid_idxs) for (uint32_t vid_idx : *supporting_vid_idxs) (*reads_by_vid)[get_sv_id(vid_idx)]++;
+                for (size_t i = 0; i < n_owners; i++) {
+                    if (association.bp == 1) target_sample_info.oar_bp1_reads_by_hpid[owners[i].hpid]++;
+                    else target_sample_info.oar_bp2_reads_by_hpid[owners[i].hpid]++;
+                    const std::vector<uint32_t>* supporting_vid_idxs = get_assigned_vid_idxs(owners[i]);
+                    if (supporting_vid_idxs) for (uint32_t vid_idx : *supporting_vid_idxs) (*reads_by_vid)[get_sv_id(vid_idx)]++;
+                }
             }
             if (association.bp == 1) {
                 if (newly_consistent) target_sample_info.oar_bp1_consistent_reads++;
@@ -1000,7 +1034,7 @@ struct evidence_map_t {
         }
         std::set<std::pair<sv_t*, int>> registered_ref_targets;
         for (const read_ref_association_t& association : get_read_ref_associations(read_name)) {
-            if (association.sv->hpid == assigned_sv->hpid || association.bp < 1 || association.bp > 2) continue;
+            if (owns_hpid(association.sv->hpid) || association.bp < 1 || association.bp > 2) continue;
             if (!registered_ref_targets.insert({association.sv, association.bp}).second) continue;
             sv_t::sample_info_t& target_sample_info = association.sv->sample_info;
             if (target_sample_info.too_deep) continue;
