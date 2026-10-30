@@ -60,6 +60,7 @@ StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, false);
 
 std::vector<ext_mate_map_t> mateseqs_w_mapq;
 std::vector<int> active_threads_per_chr;
+std::vector<int> remaining_blocks_per_chr;
 std::vector<std::mutex> mutex_per_chr;
 std::vector<std::vector<sv_t*>> evidence_svs_by_contig;
 std::vector<std::unique_ptr<evidence_map_t>> evidence_maps_by_contig;
@@ -1134,7 +1135,7 @@ std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_i
 			mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
 		}
     }
-	if (load_evidence_maps && active_threads_per_chr[contig_id] == 0) {
+	if (load_evidence_maps && !evidence_maps_by_contig[contig_id]) {
         std::string contig_name = contig_map.get_name(contig_id);
         std::string alt_fname = reads_association_dir + "/" + contig_name + ".alt.txt";
         std::string ref_fname = reads_association_dir + "/" + contig_name + ".ref.txt";
@@ -1164,8 +1165,8 @@ void release_chromosome_data(int contig_id) {
 	active_threads_per_chr[contig_id]--;
 	if (active_threads_per_chr[contig_id] == 0) {
 		mateseqs_w_mapq[contig_id].clear();
-		evidence_maps_by_contig[contig_id].reset();
 	}
+	if (--remaining_blocks_per_chr[contig_id] == 0) evidence_maps_by_contig[contig_id].reset();
 	mutex_per_chr[contig_id].unlock();
 }
 
@@ -1336,6 +1337,8 @@ int main(int argc, char* argv[]) {
 
     mateseqs_w_mapq.resize(contig_map.size());
     active_threads_per_chr = std::vector<int>(contig_map.size());
+    // One scheduling reference keeps evidence alive until every block has been queued.
+    remaining_blocks_per_chr = std::vector<int>(contig_map.size(), 1);
 	mutex_per_chr = std::vector<std::mutex>(contig_map.size());
     evidence_svs_by_contig.resize(contig_map.size());
     evidence_maps_by_contig.resize(contig_map.size());
@@ -1414,6 +1417,10 @@ int main(int argc, char* argv[]) {
     ctpl::thread_pool thread_pool(config.threads);
     std::vector<std::future<void> > futures;
     const int BLOCK_SIZE = 20;
+    auto register_block = [&](int contig_id) {
+        std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
+        remaining_blocks_per_chr[contig_id]++;
+    };
 
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
 	    	std::string contig_name = contig_map.get_name(contig_id);
@@ -1429,6 +1436,7 @@ int main(int argc, char* argv[]) {
             block_hps.push_back(hps[i].get());
             if ((i == hps.size()-1 && !block_hps.empty()) 
             || (block_hps.size() >= BLOCK_SIZE && ref_hp_ranges[i].beg != ref_hp_ranges[i+1].beg)) {
+                register_block(contig_id);
                 std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool,
                         &global_crossing_isize_dist, evidence_mode);
@@ -1444,6 +1452,7 @@ int main(int argc, char* argv[]) {
                 block_dels.push_back(dels[i].get());
             }
             if (block_dels.size() == BLOCK_SIZE || (i == dels.size()-1 && !block_dels.empty())) {
+                register_block(contig_id);
                 std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
                 futures.push_back(std::move(future));
                 block_dels.clear();
@@ -1457,6 +1466,7 @@ int main(int argc, char* argv[]) {
                 block_dups.push_back(dups[i].get());
             }
             if (block_dups.size() == BLOCK_SIZE || (i == dups.size()-1 && !block_dups.empty())) {
+                register_block(contig_id);
                 std::future<void> future = thread_pool.push(genotype_dups, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_dups, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
                 futures.push_back(std::move(future));
                 block_dups.clear();
@@ -1470,6 +1480,7 @@ int main(int argc, char* argv[]) {
                 block_inss.push_back(inss[i].get());
             }
             if (block_inss.size() == BLOCK_SIZE || (i == inss.size()-1 && !block_inss.empty())) {
+                register_block(contig_id);
                 std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
                 futures.push_back(std::move(future));
                 block_inss.clear();
@@ -1483,6 +1494,7 @@ int main(int argc, char* argv[]) {
                 block_invs.push_back(invs[i].get());
             }
             if (block_invs.size() == BLOCK_SIZE || (i == invs.size()-1 && !block_invs.empty())) {
+                register_block(contig_id);
                 std::future<void> future = thread_pool.push(genotype_invs, contig_name, chr_seqs.get_seq(contig_name),
                         chr_seqs.get_len(contig_name), block_invs, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config),
                         std::ref(contig_map), bam_pool);
@@ -1490,6 +1502,8 @@ int main(int argc, char* argv[]) {
                 block_invs.clear();
             }
         }
+        std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
+        if (--remaining_blocks_per_chr[contig_id] == 0) evidence_maps_by_contig[contig_id].reset();
     }
     for (int i = 0; i < futures.size(); i++) {
         futures[i].get();
