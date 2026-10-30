@@ -56,8 +56,9 @@ const std::vector<std::string>& default_feature_names() {
         "AR1HP3PMR", "MAXARCD", "MAXARCED", "MAXARED", "RR1", "RR1C", "RR1CmQ", "RR1CMQ", "RR1C_HQ_RATIO", "RR1E", "RR1EmQ", "RR1EMQ", "RR1E_HQ_RATIO", "RR1E_RATIO", "RR1CE",
         "RR1CEmQ", "RR1CEMQ", "RR1CE_HQ_RATIO", "RR1CE_RATIO", "RR1HPMODE", "RR1CHPMODE", "RR1CHPIQR", "RR1HPMODE_RR1CHPMODE_DIFF", "RR1HPMODE_REFLEN_DIFF",
         "RR1CHPMODE_REFLEN_DIFF", "RR1CHPmQ", "RR1CHPMQ", "RR1CHPAQ", "RR1CHPSQ", "RR1HP5PMR", "RR1HP3PMR", "RR2", "RR2C", "RR2CmQ", "RR2CMQ", "RR2C_HQ_RATIO", "RR2E", "RR2EmQ",
-        "RR2EMQ", "RR2E_HQ_RATIO", "RR2E_RATIO", "RR2CE", "RR2CEmQ", "RR2CEMQ", "RR2CE_HQ_RATIO", "RR2CE_RATIO", "MAXRRCD", "MAXRRCED", "MAXRRED", "OAR1", "OAR2", "OAR1ALL",
-        "OAR2ALL", "OAR1_ALL_RATIO", "OAR2_ALL_RATIO", "OTHER_HP_GENOTYPED", "OTHER1_MIN_ARCHQ", "OTHER2_MIN_ARCHQ", "OTHER1_MIN_AR_OVER_NAR", "OTHER2_MIN_AR_OVER_NAR",
+        "RR2EMQ", "RR2E_HQ_RATIO", "RR2E_RATIO", "RR2CE", "RR2CEmQ", "RR2CEMQ", "RR2CE_HQ_RATIO", "RR2CE_RATIO", "MAXRRCD", "MAXRRCED", "MAXRRED", "OAR1", "OAR2",
+        "OAR1MAX_OVER_OAR1", "OAR2MAX_OVER_OAR2", "OAR1MAX_OVER_OTHER1_AR", "OAR2MAX_OVER_OTHER2_AR", "OTHER1_AR", "OTHER2_AR", "OTHER1_ARC", "OTHER2_ARC", "OTHER1_ARCHQ", "OTHER2_ARCHQ", "OTHER1_ARE", "OTHER2_ARE",
+        "OTHER_HP_GENOTYPED", "OTHER1_MIN_ARCHQ", "OTHER2_MIN_ARCHQ", "OTHER1_MIN_AR_OVER_NAR", "OTHER2_MIN_AR_OVER_NAR",
         "OTHER1_MIN_ARC_OVER_NARC", "OTHER2_MIN_ARC_OVER_NARC", "OTHER1_MIN_ARE_OVER_NARE", "OTHER2_MIN_ARE_OVER_NARE", "OTHER1_AAS_ARS_DIFF_TO_LEN", "OTHER2_AAS_ARS_DIFF_TO_LEN",
         "OTHER1_XAAS_XARS_DIFF_TO_LEN", "OTHER2_XAAS_XARS_DIFF_TO_LEN", "OAR1C", "OAR2C", "OAR1CHQ", "OAR2CHQ", "OAR1C_HQ_RATIO", "OAR2C_HQ_RATIO", "OAR1E", "OAR2E", "NAR1",
         "NAR2", "NAR1C", "NAR2C", "NAR1CHQ", "NAR2CHQ", "NAR1C_HQ_RATIO", "NAR2C_HQ_RATIO", "NAR1CE", "NAR2CE", "NAR1E", "NAR2E", "ER1_DEVIATION", "ER2_DEVIATION", "ER_HQ_RATIO",
@@ -87,7 +88,7 @@ struct alt_read_metrics_t {
     std::string chrom;
     int64_t start, stop;
     double rr1, rr2, rr1c, rr2c, rr1e, rr2e;
-    std::vector<std::string> oar1_vids, oar2_vids;
+    double oar1, oar2, oar1c, oar2c, oar1e, oar2e;
     double xaas_xars_diff_to_len;
     bool has_extension_evidence;
     double aas_ars_diff_to_len;
@@ -97,11 +98,10 @@ struct alt_read_metrics_t {
     double arc(int bp_idx) const { return bp_idx == 0 ? ar1c : ar2c; }
     double archq(int bp_idx) const { return bp_idx == 0 ? ar1chq : ar2chq; }
     double are(int bp_idx) const { return bp_idx == 0 ? ar1e : ar2e; }
-    const std::vector<std::string>& oar_vids(int bp_idx) const { return bp_idx == 0 ? oar1_vids : oar2_vids; }
 };
 
 struct selected_alt_read_metrics_t {
-    double oar, oarc, oarchq, oare, hp_genotyped, min_archq, min_ar_over_nar, min_arc_over_narc, min_are_over_nare, xaas_xars_diff_to_len, aas_ars_diff_to_len;
+    double ar, arc, archq, are, hp_genotyped, min_archq, min_ar_over_nar, min_arc_over_narc, min_are_over_nare, xaas_xars_diff_to_len, aas_ars_diff_to_len;
 };
 
 struct model_data_t {
@@ -462,23 +462,9 @@ selected_alt_read_metrics_t select_alt_read_metrics_for_oar_vids(bcf_hdr_t* hdr,
         return a.second < b.second;
     };
     const alt_read_metrics_t* selected = std::min_element(candidates.begin(), candidates.end(), better)->first;
-    const alt_read_metrics_t* selected_oars[2] = {NULL, NULL};
-    for (int oar_bp_idx = 0; oar_bp_idx < 2; oar_bp_idx++) {
-        std::vector<candidate_t> oar_candidates;
-        for (const std::string& vid : selected->oar_vids(oar_bp_idx)) {
-            auto it = alt_reads_by_vid.find(vid);
-            if (it != alt_reads_by_vid.end()) for (const alt_read_metrics_t& values : it->second) oar_candidates.push_back({&values, vid});
-        }
-        if (!oar_candidates.empty()) selected_oars[oar_bp_idx] = std::min_element(oar_candidates.begin(), oar_candidates.end(), [oar_bp_idx](const candidate_t& a, const candidate_t& b) {
-            if (a.first->ar(oar_bp_idx) != b.first->ar(oar_bp_idx)) return a.first->ar(oar_bp_idx) > b.first->ar(oar_bp_idx);
-            if (a.first->arc(oar_bp_idx) != b.first->arc(oar_bp_idx)) return a.first->arc(oar_bp_idx) > b.first->arc(oar_bp_idx);
-            if (a.first->are(oar_bp_idx) != b.first->are(oar_bp_idx)) return a.first->are(oar_bp_idx) > b.first->are(oar_bp_idx);
-            return a.second < b.second;
-        })->first;
-    }
-    double min_ar_over_nar = std::min(selected->ar1/std::max(1.0, selected->ar1+(selected_oars[0] ? selected_oars[0]->ar1 : 0)+selected->rr1), selected->ar2/std::max(1.0, selected->ar2+(selected_oars[1] ? selected_oars[1]->ar2 : 0)+selected->rr2));
-    double min_arc_over_narc = std::min(selected->ar1c/std::max(1.0, selected->ar1c+(selected_oars[0] ? selected_oars[0]->ar1c : 0)+selected->rr1c), selected->ar2c/std::max(1.0, selected->ar2c+(selected_oars[1] ? selected_oars[1]->ar2c : 0)+selected->rr2c));
-    double min_are_over_nare = std::min(selected->ar1e/std::max(1.0, selected->ar1e+(selected_oars[0] ? selected_oars[0]->ar1e : 0)+selected->rr1e), selected->ar2e/std::max(1.0, selected->ar2e+(selected_oars[1] ? selected_oars[1]->ar2e : 0)+selected->rr2e));
+    double min_ar_over_nar = std::min(selected->ar1/std::max(1.0, selected->ar1+selected->oar1+selected->rr1), selected->ar2/std::max(1.0, selected->ar2+selected->oar2+selected->rr2));
+    double min_arc_over_narc = std::min(selected->ar1c/std::max(1.0, selected->ar1c+selected->oar1c+selected->rr1c), selected->ar2c/std::max(1.0, selected->ar2c+selected->oar2c+selected->rr2c));
+    double min_are_over_nare = std::min(selected->ar1e/std::max(1.0, selected->ar1e+selected->oar1e+selected->rr1e), selected->ar2e/std::max(1.0, selected->ar2e+selected->oar2e+selected->rr2e));
     return {selected->ar(bp_idx), selected->arc(bp_idx), selected->archq(bp_idx), selected->are(bp_idx), (double)selected->hp_genotyped, std::min(selected->ar1chq, selected->ar2chq), min_ar_over_nar, min_arc_over_narc, min_are_over_nare, selected->has_extension_evidence ? selected->xaas_xars_diff_to_len : NAN_VALUE, selected->has_assembly_evidence ? selected->aas_ars_diff_to_len : NAN_VALUE};
 }
 
@@ -607,15 +593,20 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     features["AREF"] = ar1ef+ar2ef; features["ARER"] = ar1er+ar2er; features["MAXARED"] = std::max(features["AREF"], features["ARER"]);
 
     selected_alt_read_metrics_t other1 = select_alt_read_metrics_for_oar_vids(hdr, record, "OAR1VID", 0, alt_reads_by_vid), other2 = select_alt_read_metrics_for_oar_vids(hdr, record, "OAR2VID", 1, alt_reads_by_vid);
-    double oar1 = other1.oar, oar1c = other1.oarc, oar1chq = other1.oarchq, oar1e = other1.oare, oar1all = get_format_number(hdr, record, "OAR1ALL", 0);
-    double oar2 = other2.oar, oar2c = other2.oarc, oar2chq = other2.oarchq, oar2e = other2.oare, oar2all = get_format_number(hdr, record, "OAR2ALL", 0);
-    if (!has_ar2) other2 = other1, oar2 = oar1, oar2c = oar1c, oar2chq = oar1chq, oar2e = oar1e, oar2all = oar1all;
+    // OAR C/CHQ/E classify the target's shared reads relative to their assigned donors.
+    double oar1 = get_format_number(hdr, record, "OAR1", 0), oar1c = get_format_number(hdr, record, "OAR1C", 0), oar1chq = get_format_number(hdr, record, "OAR1CHQ", 0), oar1e = get_format_number(hdr, record, "OAR1E", 0), oar1max = get_format_number(hdr, record, "OAR1MAX", 0);
+    double oar2 = get_format_number(hdr, record, "OAR2", 0), oar2c = get_format_number(hdr, record, "OAR2C", 0), oar2chq = get_format_number(hdr, record, "OAR2CHQ", 0), oar2e = get_format_number(hdr, record, "OAR2E", 0), oar2max = get_format_number(hdr, record, "OAR2MAX", 0);
+    if (!has_ar2) other2 = other1, oar2 = oar1, oar2c = oar1c, oar2chq = oar1chq, oar2e = oar1e, oar2max = oar1max;
     features["OTHER_HP_GENOTYPED"] = std::max(other1.hp_genotyped, other2.hp_genotyped);
     for (int bp = 1; bp <= 2; bp++) {
         selected_alt_read_metrics_t other = bp == 1 ? other1 : other2;
-        double oar = bp == 1 ? oar1 : oar2, oarc = bp == 1 ? oar1c : oar2c, oarchq = bp == 1 ? oar1chq : oar2chq, oare = bp == 1 ? oar1e : oar2e, oarall = bp == 1 ? oar1all : oar2all;
+        double oar = bp == 1 ? oar1 : oar2, oarc = bp == 1 ? oar1c : oar2c, oarchq = bp == 1 ? oar1chq : oar2chq, oare = bp == 1 ? oar1e : oar2e, oarmax = bp == 1 ? oar1max : oar2max;
         std::string n = std::to_string(bp);
-        features["OAR"+n] = piecewise_normalise(oar, min_depth, max_depth); features["OAR"+n+"ALL"] = piecewise_normalise(oarall, min_depth, max_depth); features["OAR"+n+"_ALL_RATIO"] = oar/std::max(1.0, oarall);
+        // Ratios use raw counts. Support is uncapped: MAX spans donor breakpoints and assigned VID associations,
+        // whereas the selected donor's AR is classified support at this target breakpoint index.
+        features["OAR"+n+"MAX_OVER_OAR"+n] = oarmax/std::max(1.0, oar); features["OAR"+n+"MAX_OVER_OTHER"+n+"_AR"] = oarmax/std::max(1.0, other.ar);
+        features["OAR"+n] = piecewise_normalise(oar, min_depth, max_depth);
+        features["OTHER"+n+"_AR"] = piecewise_normalise(other.ar, min_depth, max_depth); features["OTHER"+n+"_ARC"] = piecewise_normalise(other.arc, min_depth, max_depth); features["OTHER"+n+"_ARCHQ"] = piecewise_normalise(other.archq, min_depth, max_depth); features["OTHER"+n+"_ARE"] = piecewise_normalise(other.are, min_depth, max_depth);
         features["OTHER"+n+"_MIN_ARCHQ"] = piecewise_normalise(other.min_archq, min_depth, max_depth); features["OTHER"+n+"_MIN_AR_OVER_NAR"] = other.min_ar_over_nar; features["OTHER"+n+"_MIN_ARC_OVER_NARC"] = other.min_arc_over_narc; features["OTHER"+n+"_MIN_ARE_OVER_NARE"] = other.min_are_over_nare;
         features["OTHER"+n+"_AAS_ARS_DIFF_TO_LEN"] = other.aas_ars_diff_to_len; features["OTHER"+n+"_XAAS_XARS_DIFF_TO_LEN"] = other.xaas_xars_diff_to_len;
         features["OAR"+n+"C"] = piecewise_normalise(oarc, min_depth, max_depth); features["OAR"+n+"CHQ"] = piecewise_normalise(oarchq, min_depth, max_depth); features["OAR"+n+"C_HQ_RATIO"] = oarchq/std::max(1.0, oarc); features["OAR"+n+"E"] = piecewise_normalise(oare, min_depth, max_depth);
@@ -660,6 +651,7 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     double rr2ef = has_rr2 ? get_format_number(hdr, record, "RR2EF", 0, std::max(1.0, rr2e)) : rr1ef, rr2er = has_rr2 ? get_format_number(hdr, record, "RR2ER", 0, std::max(1.0, rr2e)) : rr1er;
     features["RREF"] = rr1ef+rr2ef; features["RRER"] = rr1er+rr2er; features["MAXRRED"] = std::max(features["RREF"], features["RRER"]);
 
+    // Preserve the CE mixture: target RRCE plus donor-relative OARE, not OARC or a new OARCE.
     double nar1 = rr1+oar1, nar1c = rr1c+oar1c, nar1chq = rr1chq+oar1chq, nar1ce = rr1ce+oar1e, nar1e = rr1e+oar1e;
     double nar2 = rr2+oar2, nar2c = rr2c+oar2c, nar2chq = rr2chq+oar2chq, nar2ce = rr2ce+oar2e, nar2e = rr2e+oar2e;
     for (int bp = 1; bp <= 2; bp++) {
@@ -805,9 +797,11 @@ std::unordered_map<std::string, std::vector<alt_read_metrics_t>> load_alt_read_m
         double ar1 = get_format_number(hdr, record, "AR1", 0), ar2 = get_format_number(hdr, record, "AR2", ar1);
         double rr1 = get_format_number(hdr, record, "RR1", 0), rr2 = get_format_number(hdr, record, "RR2", rr1), rr1c = get_format_number(hdr, record, "RR1C", 0), rr2c = get_format_number(hdr, record, "RR2C", rr1c), rr1e = get_format_number(hdr, record, "RR1E", 0), rr2e = get_format_number(hdr, record, "RR2E", rr1e);
         double ar1c = get_format_number(hdr, record, "AR1C", 0), ar2c = get_format_number(hdr, record, "AR2C", ar1c), ar1chq = get_format_number(hdr, record, "AR1CHQ", 0), ar2chq = get_format_number(hdr, record, "AR2CHQ", ar1chq), ar1e = get_format_number(hdr, record, "AR1E", 0), ar2e = get_format_number(hdr, record, "AR2E", ar1e);
-        std::vector<std::string> oar1_vids = get_oar_vids(hdr, record, "OAR1VID"), oar2_vids = has_format(hdr, record, "AR2") ? get_oar_vids(hdr, record, "OAR2VID") : oar1_vids;
+        double oar1 = get_format_number(hdr, record, "OAR1", 0), oar1c = get_format_number(hdr, record, "OAR1C", 0), oar1e = get_format_number(hdr, record, "OAR1E", 0);
+        bool has_ar2 = has_format(hdr, record, "AR2");
+        double oar2 = has_ar2 ? get_format_number(hdr, record, "OAR2", 0) : oar1, oar2c = has_ar2 ? get_format_number(hdr, record, "OAR2C", 0) : oar1c, oar2e = has_ar2 ? get_format_number(hdr, record, "OAR2E", 0) : oar1e;
         std::string id = record->d.id == NULL ? "." : record->d.id;
-        alt_reads_by_vid[normalize_sv_id(id)].push_back({ar1, ar2, ar1c, ar2c, ar1chq, ar2chq, ar1e, ar2e, gt_as_homopolymer(hdr, record), bcf_seqname(hdr, record), record->pos, record_stop(record), rr1, rr2, rr1c, rr2c, rr1e, rr2e, oar1_vids, oar2_vids, consensus_alt_ref_score_diff_to_len(hdr, record, "X"), has_extension_evidence(hdr, record), consensus_alt_ref_score_diff_to_len(hdr, record, ""), has_assembly_evidence(hdr, record)});
+        alt_reads_by_vid[normalize_sv_id(id)].push_back({ar1, ar2, ar1c, ar2c, ar1chq, ar2chq, ar1e, ar2e, gt_as_homopolymer(hdr, record), bcf_seqname(hdr, record), record->pos, record_stop(record), rr1, rr2, rr1c, rr2c, rr1e, rr2e, oar1, oar2, oar1c, oar2c, oar1e, oar2e, consensus_alt_ref_score_diff_to_len(hdr, record, "X"), has_extension_evidence(hdr, record), consensus_alt_ref_score_diff_to_len(hdr, record, ""), has_assembly_evidence(hdr, record)});
     }
     bcf_sr_destroy(reader);
     return alt_reads_by_vid;
