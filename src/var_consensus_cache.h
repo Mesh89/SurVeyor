@@ -184,7 +184,8 @@ public:
     session_t(sv_t* sv, const std::vector<build_input_t>& inputs) : enabled(cache().active()) {
         if (!enabled) return;
         pending.start = sv->start; pending.end = sv->end;
-        std::string variant = sv->unique_key();
+        // Version the correction policy so older cached metrics cannot bypass support trimming.
+        std::string variant = "read-supported-ends-v2:" + sv->unique_key();
         pending.variant_hash = hash_bytes(variant.data(), variant.size());
         for (const auto& input : inputs) {
             build_t build;

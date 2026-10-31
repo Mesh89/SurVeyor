@@ -874,7 +874,10 @@ std::vector<std::string> gen_consensus_seqs(std::string ref_seq, std::vector<std
             return passes_consensus_mismatch_filter(seqs[i], read_is_reverse[i], consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, config, original_quals.empty() ? nullptr : original_quals[i]);
         };
         // Use ARC's placement scoring and acceptance policy before accumulating base-quality votes.
-        correct_contig(consensus_seq, seqs, config.min_clip_len, quals, accept_read, read_is_reverse, preferred_bases);
+        hts_pair_pos_t supported_bounds;
+        correct_contig(consensus_seq, seqs, config.min_clip_len, quals, accept_read, read_is_reverse, preferred_bases, &supported_bounds);
+        if (supported_bounds.beg < supported_bounds.end) consensus_seq = consensus_seq.substr(supported_bounds.beg, supported_bounds.end-supported_bounds.beg);
+        else consensus_seq.clear();
     }
 
     return consensus_seqs;
@@ -1048,7 +1051,8 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             }
         }
 
-        curr_cum_score /= log(cseq.length());
+        // Singleton consensuses use the same log(2) normalization as length-two candidates.
+        curr_cum_score /= log(std::max<size_t>(2, cseq.length()));
         if (curr_cum_score > cum_score) {
             consistent_reads = curr_consistent_reads;
             cum_score = curr_cum_score;
@@ -1116,7 +1120,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     }
 
     if (n_consistent_reads > 0) {
-        avg_score = cum_score / log(evidence_consensus_seq.length()) / n_consistent_reads;
+        avg_score = cum_score / log(std::max<size_t>(2, evidence_consensus_seq.length())) / n_consistent_reads;
     } else {
         avg_score = 0;
     }

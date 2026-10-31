@@ -291,8 +291,10 @@ void break_cycles(std::vector<int>& out_edges, std::vector<std::vector<edge_t> >
 }
 
 void correct_contig_with_alignments(std::string& contig, std::vector<std::string>& reads, const std::vector<ungapped_aln_t>& ungapped_alns, const std::vector<const uint8_t*>& quals,
-	const std::function<bool(int, const ungapped_aln_t&)>& accept_read, const std::vector<bool>& read_is_reverse, const std::string& preferred_bases) {
+	const std::function<bool(int, const ungapped_aln_t&)>& accept_read, const std::vector<bool>& read_is_reverse, const std::string& preferred_bases, hts_pair_pos_t* supported_bounds = nullptr) {
 
+	// Half-open bounds of positive-quality canonical votes; beg >= end means no support.
+	if (supported_bounds != nullptr) *supported_bounds = {HTS_POS_MAX, 0};
 	std::vector<base_votes_t> votes(contig.length());
 	std::vector<strand_base_scores_t> strand_scores(read_is_reverse.empty() ? 0 : contig.length());
 	for (int i = 0; i < reads.size(); i++) {
@@ -312,6 +314,10 @@ void correct_contig_with_alignments(std::string& contig, std::vector<std::string
 				int qual = quals.empty() ? 0 : quals[i][j];
 				if (!read_is_reverse.empty()) strand_scores[ref_pos].add(c, qual, read_is_reverse[i]);
 				votes[ref_pos].add(c, qual);
+				if (supported_bounds != nullptr && qual > 0 && base_to_index(c) >= 0) {
+					supported_bounds->beg = std::min<hts_pos_t>(supported_bounds->beg, ref_pos);
+					supported_bounds->end = std::max<hts_pos_t>(supported_bounds->end, ref_pos+1);
+				}
 			}
 		}
 	}
@@ -328,13 +334,13 @@ void correct_contig_with_alignments(std::string& contig, std::vector<std::string
 }
 
 void correct_contig(std::string& contig, std::vector<std::string>& reads, int min_clip_len, const std::vector<const uint8_t*>& quals,
-	const std::function<bool(int, const ungapped_aln_t&)>& accept_read, const std::vector<bool>& read_is_reverse, const std::string& preferred_bases) {
+	const std::function<bool(int, const ungapped_aln_t&)>& accept_read, const std::vector<bool>& read_is_reverse, const std::string& preferred_bases, hts_pair_pos_t* supported_bounds = nullptr) {
 
 	std::vector<ungapped_aln_t> ungapped_alns;
 	for (std::string& read : reads) {
 		ungapped_alns.push_back(best_ungapped_aln(read.c_str(), read.length(), contig.c_str(), contig.length(), min_clip_len - 1, 1, 0));
 	}
-	correct_contig_with_alignments(contig, reads, ungapped_alns, quals, accept_read, read_is_reverse, preferred_bases);
+	correct_contig_with_alignments(contig, reads, ungapped_alns, quals, accept_read, read_is_reverse, preferred_bases, supported_bounds);
 }
 
 bool is_contained(const std::string& s1, const std::string& s2, double max_seq_error) {
