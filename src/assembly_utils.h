@@ -101,9 +101,12 @@ struct assembly_sequence_t {
 	std::vector<int> offsets; // One start offset per vertex in path order.
 };
 
+// Keep base selection separate from confidence in contig ends: HP-tail recalibration
+// can shorten unreliable overhangs while raw qualities still determine assembled bases.
 struct assembly_consensus_t {
 	std::string seq;
 	std::vector<base_votes_t> votes;
+	std::vector<base_votes_t> trim_votes; // Trimming-only qualities; empty falls back to votes.
 };
 
 assembly_sequence_t reconstruct_assembly_path(const assembly_path_t& path, const std::vector<const assembly_consensus_t*>& contigs) {
@@ -126,19 +129,28 @@ void add_read_votes(assembly_consensus_t& contig, const uint8_t* quals) {
 	}
 }
 
-assembly_consensus_t make_read_contig(const std::string& seq, const uint8_t* quals) {
+assembly_consensus_t make_read_contig(const std::string& seq, const uint8_t* quals, const uint8_t* trim_quals = nullptr) {
 	assembly_consensus_t contig{seq, std::vector<base_votes_t>(seq.length())};
 	add_read_votes(contig, quals);
+	if (trim_quals != nullptr) {
+		contig.trim_votes.resize(seq.length());
+		for (int i = 0; i < seq.length(); i++) contig.trim_votes[i].add(seq[i], trim_quals[i]);
+	}
 	return contig;
 }
 
+// Preserve both kinds of support through successive joins. Inputs without separate
+// trimming evidence contribute their ordinary votes to the combined trim profile.
 assembly_consensus_t polish_assembly_path(const std::vector<const assembly_consensus_t*>& inputs, assembly_sequence_t assembly) {
 	assembly_consensus_t consensus{std::move(assembly.seq), {}};
 	consensus.votes.resize(consensus.seq.length());
+	if (std::any_of(inputs.begin(), inputs.end(), [](const assembly_consensus_t* contig) { return !contig->trim_votes.empty(); })) consensus.trim_votes.resize(consensus.seq.length());
 	for (int v = 0; v < inputs.size(); v++) {
 		const std::vector<base_votes_t>& input_votes = inputs[v]->votes;
+		const std::vector<base_votes_t>& input_trim_votes = inputs[v]->trim_votes.empty() ? input_votes : inputs[v]->trim_votes;
 		for (int i = 0; i < input_votes.size(); i++) {
 			consensus.votes[assembly.offsets[v]+i].merge(input_votes[i]);
+			if (!consensus.trim_votes.empty()) consensus.trim_votes[assembly.offsets[v]+i].merge(input_trim_votes[i]);
 		}
 	}
 	for (int i = 0; i < consensus.seq.length(); i++) {

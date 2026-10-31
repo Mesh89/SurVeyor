@@ -61,6 +61,7 @@ struct remap_info_t {
 
 struct remap_side_t {
     std::vector<remap_info_t> read_remap_infos;
+    std::vector<std::pair<int, int>> stable_read_spans; // Accepted pairs' stable-read spans on the corrected junction.
     std::unique_ptr<remap_info_t> clip_remap_info;
 };
 

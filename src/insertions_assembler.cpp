@@ -137,7 +137,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     // build corrected consensus sequence and realign reads to it
     std::vector<hts_pair_pos_t> assembled_contig_intervals;
     std::string corrected_consensus_sequence = generate_consensus_sequences(contig_name, contigs, contig_map, r_cluster, l_cluster, ro_remap_side, lo_remap_side,
-					best_region, is_rc, assembled_contig_intervals, mateseqs, matequals, aligner, harsh_aligner, config, stats);
+					best_region, is_rc, assembled_contig_intervals, mateseqs, matequals, aligner, harsh_aligner, config, stats, hp_tail_quality_model);
 
     /* == Try assembly == */
 	int rc_accepted_reads = 0, lc_accepted_reads = 0;
