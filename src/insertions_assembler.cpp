@@ -170,7 +170,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     return success;
 }
 
-std::vector<std::shared_ptr<insertion_cluster_t> > cluster_reads(open_samFile_t* dc_file, int contig_id, std::vector<std::shared_ptr<consensus_t>>& clip_consensuses) {
+std::vector<std::shared_ptr<insertion_cluster_t> > cluster_reads(open_samFile_t* dc_file, int contig_id) {
 
 	std::string contig_name = contig_map.get_name(contig_id);
     hts_itr_t* iter = sam_itr_querys(dc_file->idx, dc_file->header, contig_name.c_str());
@@ -203,59 +203,74 @@ std::vector<std::shared_ptr<insertion_cluster_t> > cluster_reads(open_samFile_t*
         if (clusters[i] != NULL) read_clusters.push_back(std::make_shared<insertion_cluster_t>(clusters[i]));
     }
 
-    if (!clip_consensuses.empty()) { // TODO: temporary, enhance logic
-        std::sort(clip_consensuses.begin(), clip_consensuses.end(), [](std::shared_ptr<consensus_t> c1, std::shared_ptr<consensus_t> c2) {
-            return c1->breakpoint < c2->breakpoint;
-        });
-
-        int curr_j = 0;
-        std::vector<std::shared_ptr<consensus_t>> clip_consensus_per_cluster(read_clusters.size(), NULL);
-
-        bool left_facing = clip_consensuses[0]->left_clipped;
-        if (left_facing) {
-            std::sort(read_clusters.begin(), read_clusters.end(), [](std::shared_ptr<insertion_cluster_t> rc1, std::shared_ptr<insertion_cluster_t> rc2) {
-                return rc1->end < rc2->end;
-            });
-
-            for (std::shared_ptr<consensus_t> clip_consensus : clip_consensuses) {
-                while (curr_j < read_clusters.size() && read_clusters[curr_j]->end < clip_consensus->breakpoint) curr_j++;
-
-                for (int j = curr_j; j < read_clusters.size(); j++) {
-                    if (read_clusters[j]->end - clip_consensus->breakpoint <= stats.max_is) {
-                        if (clip_consensus_per_cluster[j] == NULL || clip_consensus_per_cluster[j]->reads() < clip_consensus->reads()) {
-                            clip_consensus_per_cluster[j] = clip_consensus;
-                        }
-                    } else break;
-                }
-            }
-        } else {
-            std::sort(read_clusters.begin(), read_clusters.end(), [](std::shared_ptr<insertion_cluster_t> rc1, std::shared_ptr<insertion_cluster_t> rc2) {
-                return rc1->start < rc2->start;
-            });
-
-            for (std::shared_ptr<consensus_t> clip_consensus : clip_consensuses) {
-                while (curr_j < read_clusters.size() && clip_consensus->breakpoint-read_clusters[curr_j]->start > stats.max_is) curr_j++;
-
-                for (int j = curr_j; j < read_clusters.size(); j++) {
-                    if (clip_consensus->breakpoint - read_clusters[j]->start >= 0) {
-                        if (clip_consensus_per_cluster[j] == NULL || clip_consensus_per_cluster[j]->reads() < clip_consensus->reads()) {
-                            clip_consensus_per_cluster[j] = clip_consensus;
-                        }
-                    } else break;
-                }
-            }
-        }
-
-        for (int j = 0; j < read_clusters.size(); j++) {
-            read_clusters[j]->add_clip_cluster(clip_consensus_per_cluster[j]);
-        }
-    }
-
     std::sort(read_clusters.begin(), read_clusters.end(), [](const std::shared_ptr<insertion_cluster_t> rc1, const std::shared_ptr<insertion_cluster_t> rc2) {
     	return rc1->cluster->count > rc2->cluster->count;
     });
 
     return read_clusters;
+}
+
+void attach_clip_consensuses(std::vector<std::shared_ptr<insertion_cluster_t>>& clusters, std::vector<std::shared_ptr<consensus_t>>& consensuses, const std::unordered_map<std::string, std::string>& mates) {
+    std::sort(consensuses.begin(), consensuses.end(), [](const std::shared_ptr<consensus_t>& c1, const std::shared_ptr<consensus_t>& c2) {
+        return c1->breakpoint < c2->breakpoint;
+    });
+
+    const int K = 21;
+    for (const auto& cluster : clusters) {
+        bool left_clipped = cluster->cluster->la_rev;
+        hts_pos_t start = left_clipped ? cluster->end-stats.max_is : cluster->start;
+        hts_pos_t end = left_clipped ? cluster->end : cluster->start+stats.max_is;
+        auto begin = std::lower_bound(consensuses.begin(), consensuses.end(), start, [](const std::shared_ptr<consensus_t>& consensus, hts_pos_t pos) { return consensus->breakpoint < pos; });
+        auto finish = std::upper_bound(begin, consensuses.end(), end, [](hts_pos_t pos, const std::shared_ptr<consensus_t>& consensus) { return pos < consensus->breakpoint; });
+        if (begin == finish) continue;
+
+        std::unordered_set<std::string> mate_kmers;
+        for (const auto& read : cluster->cluster->reads) {
+            auto mate = mates.find(get_mate_lookup_qname(read.get()));
+            if (mate == mates.end()) continue;
+            std::string sequence = mate->second;
+            for (int strand = 0; strand < 2; strand++) {
+                for (size_t i = 0; i+K <= sequence.size(); i++) mate_kmers.insert(sequence.substr(i, K));
+                rc(sequence);
+            }
+        }
+        auto mate_share = [&](const std::shared_ptr<consensus_t>& consensus) {
+            std::string clip = consensus->clip_sequence();
+            if (clip.size() < K) return 0.0;
+            int shared = 0;
+            for (size_t i = 0; i+K <= clip.size(); i++) shared += mate_kmers.count(clip.substr(i, K));
+            return double(shared)/(clip.size()-K+1);
+        };
+
+        // Iteration is by breakpoint, so equal read counts keep the smaller breakpoint.
+        auto most_reads = *begin;
+        for (auto it = begin; it != finish; ++it) {
+            if ((*it)->reads() > most_reads->reads()) most_reads = *it;
+        }
+        auto selected = most_reads;
+        if (mate_share(most_reads) == 0) {
+            std::shared_ptr<consensus_t> best;
+            double best_share = 0;
+            for (auto it = begin; it != finish; ++it) {
+                const auto& candidate = *it;
+                if (std::abs(candidate->breakpoint-most_reads->breakpoint) <= 5 || candidate->reads() < 0.25*most_reads->reads()) continue;
+                double share = mate_share(candidate);
+                if (share >= 0.5 && (!best || share > best_share || (share == best_share && candidate->reads() > best->reads()))) {
+                    best = candidate;
+                    best_share = share;
+                }
+            }
+            if (best) {
+                selected = best;
+                // Choose support within B's fixed neighborhood, regardless of mate share.
+                for (auto it = begin; it != finish; ++it) {
+                    const auto& candidate = *it;
+                    if (std::abs(candidate->breakpoint-best->breakpoint) <= 5 && (candidate->reads() > selected->reads() || (candidate->reads() == selected->reads() && candidate->breakpoint < selected->breakpoint))) selected = candidate;
+                }
+            }
+        }
+        cluster->add_clip_cluster(selected);
+    }
 }
 
 bool is_semi_mapped(bam1_t* read) {
@@ -608,8 +623,25 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
         }
     }
 
-	std::vector<std::shared_ptr<insertion_cluster_t>> r_clusters = cluster_reads(r_dc_file, contig_id, rc_consensuses);
-	std::vector<std::shared_ptr<insertion_cluster_t>> l_clusters = cluster_reads(l_dc_file, contig_id, lc_consensuses);
+	std::vector<std::shared_ptr<insertion_cluster_t>> r_clusters = cluster_reads(r_dc_file, contig_id);
+	std::vector<std::shared_ptr<insertion_cluster_t>> l_clusters = cluster_reads(l_dc_file, contig_id);
+
+    {
+        std::unordered_set<std::string> retained_mate_names;
+        for (const auto* clusters : {&r_clusters, &l_clusters}) {
+            for (const auto& cluster : *clusters) {
+                for (const auto& read : cluster->cluster->reads) retained_mate_names.insert(get_mate_lookup_qname(read.get()));
+            }
+        }
+        std::unordered_map<std::string, std::string> mates;
+        std::ifstream mates_fin(workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt");
+        std::string qname, sequence, quality; int mapq;
+        while (mates_fin >> qname >> sequence >> quality >> mapq) {
+            if (retained_mate_names.count(qname)) mates[qname] = sequence;
+        }
+        attach_clip_consensuses(r_clusters, rc_consensuses, mates);
+        attach_clip_consensuses(l_clusters, lc_consensuses, mates);
+    }
 
 	std::string clipped_fname = workdir + "/workspace/sr/" + std::to_string(contig_id) + ".bam";
 	add_semi_mapped_pairs(clipped_fname, contig_id, r_clusters, l_clusters);
