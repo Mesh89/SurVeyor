@@ -527,6 +527,37 @@ inline bool reassigns_evidence(evidence_mode_t evidence_mode) {
     return evidence_mode == evidence_mode_t::REASSIGN;
 }
 
+inline int read_assignment_draw(int seed, const std::string& chr, const std::string& read_name, int total_U) {
+    // FNV-1a-64 over the seed modulo 2^64, then each string's byte length and
+    // bytes (including the mate suffix). Integers use eight little-endian bytes;
+    // length prefixes keep chromosome/read boundaries unambiguous.
+    uint64_t state = 14695981039346656037ULL;
+    auto hash_uint64 = [&](uint64_t value) {
+        for (int i = 0; i < 8; i++) {
+            state = (state ^ (value & 0xff)) * 1099511628211ULL;
+            value >>= 8;
+        }
+    };
+    hash_uint64(static_cast<uint64_t>(seed));
+    for (const std::string* part : {&chr, &read_name}) {
+        hash_uint64(part->size());
+        for (unsigned char byte : *part) state = (state ^ byte) * 1099511628211ULL;
+    }
+
+    // SplitMix64, with all arithmetic modulo 2^64. Reject the first 2^64 %
+    // total_U values so the accepted range has equal counts of every residue.
+    // total_U is positive here; retries advance only this read's local state.
+    uint64_t bound = total_U, threshold = -bound % bound, draw;
+    do {
+        state += 0x9e3779b97f4a7c15ULL;
+        draw = state;
+        draw = (draw ^ (draw >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        draw = (draw ^ (draw >> 27)) * 0x94d049bb133111ebULL;
+        draw ^= draw >> 31;
+    } while (draw < threshold);
+    return static_cast<int>(draw % bound) + 1;
+}
+
 struct evidence_map_t {
     struct read_alt_association_t {
         sv_t* sv;
@@ -581,7 +612,7 @@ struct evidence_map_t {
 
     evidence_map_t() {}
 
-    void load(const std::string& alt_reads_association_fname, const std::string& ref_reads_association_fname, const std::string& er_reads_association_fname, const std::vector<sv_t*>& svs, config_t& config, bool resolve_assignments) {
+    void load(const std::string& chr, const std::string& alt_reads_association_fname, const std::string& ref_reads_association_fname, const std::string& er_reads_association_fname, const std::vector<sv_t*>& svs, config_t& config, bool resolve_assignments) {
         read_assignments.clear();
         read_sharing_owners.clear();
         read_alt_associations.clear();
@@ -764,7 +795,6 @@ struct evidence_map_t {
         unique_read_vid_idxs.clear();
 
         // Now, assign non-uniquely assigned reads
-        std::mt19937 gen(config.seed);
         std::vector<std::string> read_names_with_multiple_svs;
         read_names_with_multiple_svs.reserve(read_to_multiple_svs.size());
         for (const auto& kv : read_to_multiple_svs) {
@@ -810,8 +840,7 @@ struct evidence_map_t {
                     // assign to the highest-ranked SV when both candidates have no usable U
                     assigned_hpid = sv_hpid_map[sv1.first];
                 } else {
-                    std::uniform_int_distribution<> dis(1, total_U);
-                    int r = dis(gen);
+                    int r = read_assignment_draw(config.seed, chr, read_name, total_U);
                     if (r <= U1) {
                         assigned_hpid = sv_hpid_map[sv1.first];
                     } else {

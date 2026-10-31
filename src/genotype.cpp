@@ -1151,7 +1151,7 @@ std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_i
         }
         if (has_alt || has_ref || has_er) {
             evidence_maps_by_contig[contig_id].reset(new evidence_map_t());
-            evidence_maps_by_contig[contig_id]->load(has_alt ? alt_fname : "", has_ref ? ref_fname : "", has_er ? er_fname : "", evidence_svs_by_contig[contig_id], config, reassigns_evidence(evidence_mode));
+            evidence_maps_by_contig[contig_id]->load(contig_name, has_alt ? alt_fname : "", has_ref ? ref_fname : "", has_er ? er_fname : "", evidence_svs_by_contig[contig_id], config, reassigns_evidence(evidence_mode));
         }
 	}
 	active_threads_per_chr[contig_id]++;
