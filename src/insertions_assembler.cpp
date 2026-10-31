@@ -284,6 +284,7 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 	if (!file_exists(clipped_fname)) return;
 
 	std::vector<bam1_t*> l_semi_mapped_pairs, r_semi_mapped_pairs;
+	std::vector<bam1_t*> l_junction_mates, r_junction_mates;
 
 	open_samFile_t* clipped_file = new open_samFile_t(clipped_fname.c_str());
 	std::string contig_name = contig_map.get_name(contig_id);
@@ -296,13 +297,21 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 			} else {
 				r_semi_mapped_pairs.push_back(bam_dup1(read));
 			}
+		} else if (is_proper_pair(read, stats.min_is, stats.max_is) && get_mq(read) >= config.min_stable_mapq && get_sequence(read).find("N") == std::string::npos) {
+			// Retain mates clipped only on the side expected at the insertion junction.
+			int left_clip = get_mate_left_clip_size(read), right_clip = get_mate_right_clip_size(read);
+			if (read->core.flag & BAM_FMREVERSE) {
+				if (left_clip >= config.min_clip_len && right_clip < config.min_clip_len) l_junction_mates.push_back(bam_dup1(read));
+			} else {
+				if (right_clip >= config.min_clip_len && left_clip < config.min_clip_len) r_junction_mates.push_back(bam_dup1(read));
+			}
 		}
 	}
 	delete clipped_file;
     hts_itr_destroy(iter);
     bam_destroy1(read);
 
-	// add semimapped pairs
+	// Attach ordinary semi-mapped reads first, using their full mate spans.
 	std::vector<Interval<bam1_t*>> r_iv, l_iv;
 	for (bam1_t* r : r_semi_mapped_pairs) {
 		r_iv.push_back(Interval<bam1_t*>(r->core.mpos, get_mate_endpos(r), r));
@@ -337,12 +346,54 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 			}
 		}
 	}
+
+	// Recruit clipped reads whose mates also cross the insertion junction: the mate's
+	// clipped boundary must agree with the cluster's attached clip consensus breakpoint.
+	// These reads supplement ordinary semi-mapped support even when their mates extend
+	// outside the cluster window.
+	std::multimap<hts_pos_t, bam1_t*> r_junction_mates_by_pos, l_junction_mates_by_pos;
+	for (bam1_t* r : r_junction_mates) r_junction_mates_by_pos.emplace(get_mate_endpos(r), r);
+	for (bam1_t* r : l_junction_mates) l_junction_mates_by_pos.emplace(r->core.mpos, r);
+	for (std::shared_ptr<insertion_cluster_t> rc : r_clusters) {
+		if (!rc->clip_consensus) continue;
+		hts_pos_t breakpoint = rc->clip_consensus->breakpoint;
+		auto end = r_junction_mates_by_pos.upper_bound(breakpoint+5);
+		for (auto it = r_junction_mates_by_pos.lower_bound(breakpoint-5); it != end; ++it) {
+			bam1_t* r = it->second;
+			if (!used_sm_reads.count(r)) {
+				size_t size_before = rc->semi_mapped_reads.size();
+				bam1_t* copy = bam_dup1(r);
+				rc->add_semi_mapped_reads(copy);
+				if (rc->semi_mapped_reads.size() > size_before) used_sm_reads.insert(r);
+				else bam_destroy1(copy);
+			}
+		}
+	}
+	for (std::shared_ptr<insertion_cluster_t> rc : l_clusters) {
+		if (!rc->clip_consensus) continue;
+		hts_pos_t breakpoint = rc->clip_consensus->breakpoint;
+		auto end = l_junction_mates_by_pos.upper_bound(breakpoint+5);
+		for (auto it = l_junction_mates_by_pos.lower_bound(breakpoint-5); it != end; ++it) {
+			bam1_t* r = it->second;
+			if (!used_sm_reads.count(r)) {
+				size_t size_before = rc->semi_mapped_reads.size();
+				bam1_t* copy = bam_dup1(r);
+				rc->add_semi_mapped_reads(copy);
+				if (rc->semi_mapped_reads.size() > size_before) used_sm_reads.insert(r);
+				else bam_destroy1(copy);
+			}
+		}
+	}
+
+	// Clusters own the attached duplicates; release the temporary candidate copies.
 	for (bam1_t* r : r_semi_mapped_pairs) {
 		bam_destroy1(r);
 	}
 	for (bam1_t* r : l_semi_mapped_pairs) {
 		bam_destroy1(r);
 	}
+	for (bam1_t* r : r_junction_mates) bam_destroy1(r);
+	for (bam1_t* r : l_junction_mates) bam_destroy1(r);
 }
 
 void add_assembly_pairs(const std::vector<std::string>& pairs_fnames, int contig_id, std::vector<std::shared_ptr<insertion_cluster_t>>& r_clusters, std::vector<std::shared_ptr<insertion_cluster_t>>& l_clusters,
