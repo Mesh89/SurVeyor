@@ -1003,36 +1003,25 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
 
     std::vector<const uint8_t*> quals, original_quals;
     for (const auto& read_quals : original_quals_storage) original_quals.push_back(read_quals.data());
-    std::vector<double> total_quals;
-    for (const std::vector<uint8_t>& read_quals : quals_storage) {
-        quals.push_back(read_quals.data());
-        double total_qual = 0;
-        for (uint8_t qual : read_quals) total_qual += qual;
-        total_quals.push_back(total_qual);
-    }
+    for (const auto& read_quals : quals_storage) quals.push_back(read_quals.data());
 
     avg_score = 0;
     std::vector<bool> read_is_reverse;
     for (int i = 0; i < reads.size(); i++) read_is_reverse.push_back(bam_is_rev(reads[i].get()) != revcomp_read[i]);
     std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs, quals, read_start_offsets, read_is_reverse, hp_mismatch_rate_thresholds, original_quals);
 
-    std::vector<std::shared_ptr<bam1_t>> consistent_reads;
     std::vector<int> start_positions, end_positions;
-    double cum_score = 0;
-    std::vector<double> aln_scores;
+    double best_ranking_score = 0;
     int chosen_cseq_idx = -1;
     for (int i = 0; i < consensus_seqs.size(); i++) {
         std::string cseq = consensus_seqs[i];
         if (cseq.empty()) continue;
         if (cseq == "HAS_CYCLE") continue;
 
-        std::vector<std::shared_ptr<bam1_t>> curr_consistent_reads;
         std::vector<int> curr_start_positions, curr_end_positions;
-        double curr_cum_score = 0;
-        std::vector<double> curr_aln_scores;
+        double ranking_score = 0;
         std::vector<consensus_hp_region_t> hp_regions = find_consensus_hp_regions(cseq);
         for (int j = 0; j < reads.size(); j++) {
-            std::shared_ptr<bam1_t> read = reads[j];
             const std::string& read_seq = seqs[j];
 
             ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(), cseq.c_str(), cseq.length(), std::max(0, config.min_clip_len - 1), 1, 0);
@@ -1040,23 +1029,20 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             for (int k = ungapped_aln.query_begin; k < ungapped_aln.query_end; k++) {
                 if (read_seq[k] == cseq[ungapped_aln.ref_begin + k - ungapped_aln.query_begin]) matching_qual += quals[j][k];
             }
-            if (total_quals[j] > 0) curr_cum_score += matching_qual/total_quals[j];
+            // Every read contributes its matching adjusted qualities, even if it is inconsistent.
+            ranking_score += matching_qual;
 
             bool is_reverse = read_is_reverse[j];
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds, config, original_quals[j])) {
-                curr_consistent_reads.push_back(read);
-                curr_aln_scores.push_back(double(ungapped_aln.score)/read_seq.length());
                 curr_start_positions.push_back(ungapped_aln.ref_begin);
                 curr_end_positions.push_back(ungapped_aln.ref_end);
             }
         }
 
         // Singleton consensuses use the same log(2) normalization as length-two candidates.
-        curr_cum_score /= log(std::max<size_t>(2, cseq.length()));
-        if (curr_cum_score > cum_score) {
-            consistent_reads = curr_consistent_reads;
-            cum_score = curr_cum_score;
-            aln_scores = curr_aln_scores;
+        ranking_score /= log(std::max<size_t>(2, cseq.length()));
+        if (ranking_score > best_ranking_score) {
+            best_ranking_score = ranking_score;
             start_positions = curr_start_positions;
             end_positions = curr_end_positions;
             consensus_seq = cseq;
@@ -1066,9 +1052,6 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
 
     std::sort(start_positions.begin(), start_positions.end());
     std::sort(end_positions.begin(), end_positions.end(), std::greater<int>());
-    if (!consistent_reads.empty()) avg_score = cum_score/consistent_reads.size();
-    else avg_score = 0;
-    stddev_score = stddev(aln_scores);
 
     // Save the selected consensus for alignment metrics before trimming the extension seed.
     if (untrimmed_consensus_seq != nullptr && chosen_cseq_idx >= 0) *untrimmed_consensus_seq = consensus_seq;
@@ -1096,8 +1079,8 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     // Recompute the returned evidence against the corrected consensus sequence.
     std::vector<bool> is_consistent_read(reads.size(), false);
     is_exact_match.assign(reads.size(), false);
-    aln_scores.clear();
-    cum_score = 0;
+    std::vector<double> aln_scores;
+    double cum_score = 0;
     int n_consistent_reads = 0;
     if (!evidence_consensus_seq.empty()) {
         std::vector<consensus_hp_region_t> hp_regions = find_consensus_hp_regions(evidence_consensus_seq);
