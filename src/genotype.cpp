@@ -1011,6 +1011,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     std::vector<std::string> consensus_seqs = gen_consensus_seqs(ref_seq, seqs, quals, read_start_offsets, read_is_reverse, hp_mismatch_rate_thresholds, original_quals);
 
     std::vector<int> start_positions, end_positions;
+    std::vector<std::pair<int, ungapped_aln_t>> rejected_placements;
     double best_ranking_score = 0;
     int chosen_cseq_idx = -1;
     for (int i = 0; i < consensus_seqs.size(); i++) {
@@ -1019,6 +1020,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
         if (cseq == "HAS_CYCLE") continue;
 
         std::vector<int> curr_start_positions, curr_end_positions;
+        std::vector<std::pair<int, ungapped_aln_t>> curr_rejected_placements;
         double ranking_score = 0;
         std::vector<consensus_hp_region_t> hp_regions = find_consensus_hp_regions(cseq);
         for (int j = 0; j < reads.size(); j++) {
@@ -1036,6 +1038,8 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             if (passes_consensus_mismatch_filter(read_seq, is_reverse, cseq, ungapped_aln, hp_regions, hp_mismatch_rate_thresholds, config, original_quals[j])) {
                 curr_start_positions.push_back(ungapped_aln.ref_begin);
                 curr_end_positions.push_back(ungapped_aln.ref_end);
+            } else {
+                curr_rejected_placements.push_back({j, ungapped_aln});
             }
         }
 
@@ -1045,8 +1049,23 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
             best_ranking_score = ranking_score;
             start_positions = curr_start_positions;
             end_positions = curr_end_positions;
+            rejected_placements = curr_rejected_placements;
             consensus_seq = cseq;
             chosen_cseq_idx = i;
+        }
+    }
+
+    // Include HP-rescued support in the extension seed's bounds, using only the
+    // selected consensus so rescue cannot influence candidate ranking.
+    if (chosen_cseq_idx >= 0) {
+        std::vector<consensus_hp_region_t> hp_regions = find_consensus_hp_regions(consensus_seq);
+        for (auto& rejected_placement : rejected_placements) {
+            int i = rejected_placement.first;
+            ungapped_aln_t& aln = rejected_placement.second;
+            if (rescue_hp_consensus_alignment(seqs[i], read_is_reverse[i], consensus_seq, aln, hp_regions, hp_mismatch_rate_thresholds, original_quals[i])) {
+                start_positions.push_back(aln.ref_begin);
+                end_positions.push_back(aln.ref_end);
+            }
         }
     }
 
