@@ -439,7 +439,7 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     merge_compatible_haplotypes_cmd = SURVEYOR_PATH + "/bin/merge_compatible_haplotypes %s/intermediate_results/out.norm.vcf.gz %s/intermediate_results/out.norm.merged.vcf.gz %s %d" % (workdir, workdir, reference_fname, cmd_args.threads)
     run_cmd(merge_compatible_haplotypes_cmd)
 
-    expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.merged.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s %d" % (workdir, workdir, reference_fname, cmd_args.threads)
+    expand_aux_haplotypes_cmd = SURVEYOR_PATH + "/bin/expand_aux_haplotypes %s/intermediate_results/out.norm.merged.vcf.gz %s/intermediate_results/calls-raw.vcf.gz %s %s %s %d" % (workdir, workdir, reference_fname, bam_fname, workdir, cmd_args.threads)
     run_cmd(expand_aux_haplotypes_cmd)
 
 
