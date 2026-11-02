@@ -572,6 +572,14 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* aas2_tag = "##FORMAT=<ID=AAS2,Number=1,Type=Integer,Description=\"Edit distance between the alternative allele consensus for the second breakpoint and the original alternative allele (the reference with the SV applied).\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, aas2_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "AJU");
+	const char* aju_tag = "##FORMAT=<ID=AJU,Number=1,Type=Integer,Description=\"Reads containing the exact ALT allele junction with repeat-aware distinguishing flanks.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, aju_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "RJU");
+	const char* rju_tag = "##FORMAT=<ID=RJU,Number=1,Type=Integer,Description=\"Reads containing an exact REF allele junction, with or without auxiliary flank variants, and no exact ALT junction.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, rju_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "IMAUX");
 	const char* imaux_tag = "##FORMAT=<ID=IMAUX,Number=1,Type=Integer,Description=\"Inferred missing auxiliary context for the first alternative allele consensus: differences shared by its ALT alignment and at least one REF+AUX alignment, identical in reference coordinates and sequence. Each distinct mismatch counts 1 and each gap counts its length. Shared flanking soft clipping counts its length once per consensus end when query boundaries and adjacent reference coordinates and orientations match outside the main variant. Both alignments must span both main breakpoints, with the full main edit represented and the entire ALT inserted interval aligned without deletions. Differences without an unambiguous reference mapping, including those inside inserted sequence, are excluded.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, imaux_tag, &len));

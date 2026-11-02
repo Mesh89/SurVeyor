@@ -431,6 +431,10 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     } else {
         bcf_update_format_int32(out_hdr, sv->vcf_entry, "MFAL", NULL, 0);
     }
+    if (sv->sample_info.alt_junction_reads != sv_t::sample_info_t::NOT_COMPUTED) bcf_update_format_int32(out_hdr, sv->vcf_entry, "AJU", &sv->sample_info.alt_junction_reads, 1);
+    else bcf_update_format_int32(out_hdr, sv->vcf_entry, "AJU", NULL, 0);
+    if (sv->sample_info.ref_junction_reads != sv_t::sample_info_t::NOT_COMPUTED) bcf_update_format_int32(out_hdr, sv->vcf_entry, "RJU", &sv->sample_info.ref_junction_reads, 1);
+    else bcf_update_format_int32(out_hdr, sv->vcf_entry, "RJU", NULL, 0);
 
     reset_record_bp_consensus_info(out_hdr, sv->vcf_entry, "A", 1);
     reset_record_bp_consensus_info(out_hdr, sv->vcf_entry, "A", 2);

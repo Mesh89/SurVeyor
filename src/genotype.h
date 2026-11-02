@@ -31,6 +31,47 @@ struct hp_mismatch_rate_thresholds_t;
 constexpr double MIN_EPR = 0.05;
 constexpr hts_pos_t GENOTYPE_CONSENSUS_EXTENSION = 500;
 
+inline void count_exact_junction_reads(sv_t* sv, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, hts_pos_t start, hts_pos_t end, std::string left, std::string right) {
+    sv->sample_info.alt_junction_reads = sv->sample_info.ref_junction_reads = sv_t::sample_info_t::NOT_COMPUTED;
+    hts_pos_t longest_allele_len = std::max(hts_pos_t(sv->ins_seq.length()), end-start);
+    if (longest_allele_len+24 >= 140 || left.length() < 12 || right.length() < 12 || start < 12 || end+12 > contig_len) return;
+
+    to_uppercase(&left[0]);
+    to_uppercase(&right[0]);
+    std::string inserted = sv->ins_seq;
+    to_uppercase(&inserted[0]);
+    std::string ref_allele(contig_seq+start, end-start);
+    to_uppercase(&ref_allele[0]);
+    hts_pos_t ref_start = std::max(hts_pos_t(0), start-hts_pos_t(left.length()));
+    hts_pos_t ref_end = std::min(contig_len, end+hts_pos_t(right.length()));
+    std::string ref_context(contig_seq+ref_start, ref_end-ref_start);
+    to_uppercase(&ref_context[0]);
+    std::string aux_ref_context = left+ref_allele+right, alt_context = left+inserted+right;
+
+    for (hts_pos_t k = 12; longest_allele_len+2*k < 140 && k <= left.length() && k <= right.length() && start-k >= 0 && end+k <= contig_len; k += 4) {
+        std::string alt = left.substr(left.length()-k)+inserted+right.substr(0, k);
+        std::string ref(contig_seq+start-k, end-start+2*k);
+        to_uppercase(&ref[0]);
+        std::string aux_ref = left.substr(left.length()-k)+ref_allele+right.substr(0, k);
+        if (ref_context.find(alt) != std::string::npos || aux_ref_context.find(alt) != std::string::npos || alt_context.find(ref) != std::string::npos || alt_context.find(aux_ref) != std::string::npos) continue;
+
+        sv->sample_info.alt_junction_reads = sv->sample_info.ref_junction_reads = 0;
+        std::stringstream region;
+        region << sv->chr << ":" << std::max(hts_pos_t(1), start) << "-" << end+1;
+        hts_itr_t* iter = sam_itr_querys(bam_file->idx, bam_file->header, region.str().c_str());
+        bam1_t* read = bam_init1();
+        while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+            if (is_unmapped(read) || !is_primary(read) || (read->core.flag & BAM_FDUP)) continue;
+            std::string seq = get_sequence(read);
+            if (seq.find(alt) != std::string::npos) sv->sample_info.alt_junction_reads++;
+            else if (seq.find(ref) != std::string::npos || seq.find(aux_ref) != std::string::npos) sv->sample_info.ref_junction_reads++;
+        }
+        bam_destroy1(read);
+        hts_itr_destroy(iter);
+        return;
+    }
+}
+
 struct alignment_targets_t {
     char* alt_seq = NULL;
     int alt_len = 0;

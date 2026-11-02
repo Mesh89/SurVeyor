@@ -298,6 +298,7 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
     del_read_alignment_sequences_t sequences = build_del_read_alignment_sequences(del, contig_seq, contig_len, del_start, del_end, stats);
     char* lh_seq = sequences.lh_seq.get();
     char* rh_seq = sequences.rh_seq.get();
+    count_exact_junction_reads(del, bam_file, contig_seq, contig_len, del_start, del_end, lh_seq, rh_seq);
     char* alt_seq = sequences.alt_seq.get();
     char* ref_bp1_seq = sequences.ref_bp1_seq.get();
     char* ref_bp2_seq = sequences.ref_bp2_seq.get();

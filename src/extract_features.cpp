@@ -48,7 +48,7 @@ const std::vector<std::string>& default_feature_names() {
         "INS_SEQ_COV_PREFIX_LEN", "INS_SEQ_COV_SUFFIX_LEN", "EXP_ALT_READS_FREQ1", "EXP_ALT_READS_FREQ2", "REF1_HP_LEN", "REF2_HP_LEN", "ALT1_HP_LEN", "ALT2_HP_LEN", "ASS1_LEFT_RATIO", "ASS1_RIGHT_RATIO",
         "ASS2_LEFT_RATIO", "ASS2_RIGHT_RATIO", "AAS_ARS_DIFF_TO_LEN", "AAS_AUXRS_DIFF_TO_LEN", "AAS_AUXRS_DIFF_TO_EAG", "EAG", "EAG2", "AAS_IMAUX_TO_LEN", "AL_MINUS_AAS_IMAUX", "ASSC1_IA_RATIO", "ASSC2_IA_RATIO", "ASSC1_IA_DIFF", "ASSC2_IA_DIFF", "AL1", "AL2", "AL", "XASS1_LEFT_RATIO",
         "XASS1_RIGHT_RATIO", "XASS2_LEFT_RATIO", "XASS2_RIGHT_RATIO", "XAAS_XARS_DIFF_TO_LEN", "XASSC1_IA_RATIO", "XASSC2_IA_RATIO", "XASSC1_IA_DIFF", "XASSC2_IA_DIFF", "XAL1",
-        "XAL2", "XAL", "MDLF", "MDSP", "MDSF", "MDRF", "MDSP_OVER_MDLF", "MDSF_OVER_MDRF", "MDLFHQ", "MDSPHQ", "MDSFHQ", "MDRFHQ", "MDSP_OVER_MDLF_HQ", "MDSF_OVER_MDRF_HQ",
+        "XAL2", "XAL", "AJU_OVER_DEPTH", "AJU_FRAC", "MDLF", "MDSP", "MDSF", "MDRF", "MDSP_OVER_MDLF", "MDSF_OVER_MDRF", "MDLFHQ", "MDSPHQ", "MDSFHQ", "MDRFHQ", "MDSP_OVER_MDLF_HQ", "MDSF_OVER_MDRF_HQ",
         "MDLC", "MDRC", "MDLCHQ", "MDRCHQ", "TD", "AR1", "AR1_ADJ", "AR1C", "AR1C_ADJ", "AR1C_RATIO", "AR1CmQ", "AR1CMQ", "AR1CHQ", "AR1C_HQ_RATIO", "AR2", "AR2_ADJ", "AR2C",
         "AR2C_ADJ", "AR2C_RATIO", "AR2CmQ", "AR2CMQ", "AR2CHQ", "AR2C_HQ_RATIO", "AR1E", "AR1EmQ", "AR1EMQ", "AR1E_HQ_RATIO", "AR1E_RATIO", "AR2E", "AR2EmQ", "AR2EMQ",
         "AR2E_HQ_RATIO", "AR2E_RATIO", "AR1CE", "AR1CEmQ", "AR1CEMQ", "AR1CE_HQ_RATIO", "AR1CE_RATIO", "AR2CE", "AR2CEmQ", "AR2CEMQ", "AR2CE_HQ_RATIO", "AR2CE_RATIO", "AR1HPMODE",
@@ -678,6 +678,9 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
 #undef ADD_RATIO
 
     std::vector<double> md = get_format_numbers(hdr, record, "MD", {0, 0, 0, 0});
+    double aju = get_format_number(hdr, record, "AJU", NAN_VALUE), rju = get_format_number(hdr, record, "RJU", NAN_VALUE);
+    features["AJU_OVER_DEPTH"] = std::isnan(aju) ? NAN_VALUE : aju/std::max(1.0, (md[0]+md[3])/2);
+    features["AJU_FRAC"] = std::isnan(aju) || std::isnan(rju) ? NAN_VALUE : aju/std::max(1.0, aju+rju);
     features["MDLF"] = piecewise_normalise(md[0], min_depth, max_depth); features["MDSP"] = piecewise_normalise(md[1], min_depth, max_depth); features["MDSF"] = piecewise_normalise(md[2], min_depth, max_depth); features["MDRF"] = piecewise_normalise(md[3], min_depth, max_depth);
     features["MDSP_OVER_MDLF"] = md[1]/std::max(1.0, md[0]); features["MDSF_OVER_MDRF"] = md[2]/std::max(1.0, md[3]);
     std::vector<double> mdhq = get_format_numbers(hdr, record, "MDHQ", {0, 0, 0, 0});
@@ -862,6 +865,19 @@ tbx_t* load_or_build_index(const std::string& vcf_fname, int n_threads) {
 }
 
 void extract_features(const std::string& vcf_fname, const std::string& stats_fname, const std::string& model_stage_dir, const std::string& output_fname, int n_threads) {
+    htsFile* vcf = bcf_open(vcf_fname.c_str(), "r");
+    if (vcf == NULL) throw std::runtime_error("Failed to open " + vcf_fname + ".");
+    bcf_hdr_t* hdr = bcf_hdr_read(vcf);
+    bcf_close(vcf);
+    if (hdr == NULL) throw std::runtime_error("Failed to read VCF header from " + vcf_fname + ".");
+    for (const char* tag : {"AJU", "RJU"}) {
+        int id = bcf_hdr_id2int(hdr, BCF_DT_ID, tag);
+        if (!bcf_hdr_idinfo_exists(hdr, BCF_HL_FMT, id)) {
+            bcf_hdr_destroy(hdr);
+            throw std::runtime_error(std::string("Input VCF header lacks FORMAT/") + tag + ".");
+        }
+    }
+    bcf_hdr_destroy(hdr);
     stats_t stats = load_stats(stats_fname);
     const std::map<std::string, model_data_t> model_definitions = load_model_features(model_stage_dir);
     std::map<std::string, model_data_t> models = model_definitions;

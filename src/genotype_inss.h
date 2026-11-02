@@ -13,7 +13,7 @@ struct ins_alignment_targets_t {
     hts_pos_t ref_bp1_start, ref_bp1_end, ref_bp1_len;
     hts_pos_t ref_bp2_start, ref_bp2_end, ref_bp2_len;
     hts_pos_t ref_bp1_len_with_aux, ref_bp1_pos_with_aux, ref_bp2_len_with_aux, ref_bp2_pos_with_aux;
-    std::unique_ptr<char[]> alt_bp1_seq, alt_bp2_seq, ref_bp1_seq_with_aux, ref_bp2_seq_with_aux;
+    std::unique_ptr<char[]> lf_seq, rf_seq, alt_bp1_seq, alt_bp2_seq, ref_bp1_seq_with_aux, ref_bp2_seq_with_aux;
 };
 
 ins_alignment_targets_t build_ins_alignment_targets(insertion_t* ins, char* contig_seq, hts_pos_t contig_len, stats_t& stats) {
@@ -26,22 +26,22 @@ ins_alignment_targets_t build_ins_alignment_targets(insertion_t* ins, char* cont
     hts_pos_t ins_lh_len = std::min(extend, hts_pos_t(ins->ins_seq.length()));
     hts_pos_t ins_rh_len = ins_lh_len;
 
-    std::unique_ptr<char[]> lf_seq(generate_haplotype_left(contig_seq, targets.ins_start-1, extend, ins->aux_indels, ins->aux_snps, nullptr, nullptr, ins->id, ins->chr));
-    std::unique_ptr<char[]> rf_seq(generate_haplotype_right(contig_seq, contig_len, targets.ins_end, extend, ins->aux_indels, ins->aux_snps, nullptr, nullptr, ins->id, ins->chr));
-    targets.alt_lf_len = strlen(lf_seq.get());
-    targets.alt_rf_len = strlen(rf_seq.get());
+    targets.lf_seq.reset(generate_haplotype_left(contig_seq, targets.ins_start-1, extend, ins->aux_indels, ins->aux_snps, nullptr, nullptr, ins->id, ins->chr));
+    targets.rf_seq.reset(generate_haplotype_right(contig_seq, contig_len, targets.ins_end, extend, ins->aux_indels, ins->aux_snps, nullptr, nullptr, ins->id, ins->chr));
+    targets.alt_lf_len = strlen(targets.lf_seq.get());
+    targets.alt_rf_len = strlen(targets.rf_seq.get());
 
     if (ins_lh_len < extend) {
         hts_pos_t extra = std::min(extend-ins_lh_len, targets.alt_rf_len);
         targets.alt_bp1_len = targets.alt_lf_len + ins_lh_len + extra;
         targets.alt_bp1_seq.reset(new char[targets.alt_bp1_len+1]);
-        strncpy(targets.alt_bp1_seq.get(), lf_seq.get(), targets.alt_lf_len);
+        strncpy(targets.alt_bp1_seq.get(), targets.lf_seq.get(), targets.alt_lf_len);
         strncpy(targets.alt_bp1_seq.get()+targets.alt_lf_len, ins->ins_seq.c_str(), ins_lh_len);
-        strncpy(targets.alt_bp1_seq.get()+targets.alt_lf_len+ins_lh_len, rf_seq.get(), extra);
+        strncpy(targets.alt_bp1_seq.get()+targets.alt_lf_len+ins_lh_len, targets.rf_seq.get(), extra);
     } else {
         targets.alt_bp1_len = targets.alt_lf_len + ins_lh_len;
         targets.alt_bp1_seq.reset(new char[targets.alt_bp1_len+1]);
-        strncpy(targets.alt_bp1_seq.get(), lf_seq.get(), targets.alt_lf_len);
+        strncpy(targets.alt_bp1_seq.get(), targets.lf_seq.get(), targets.alt_lf_len);
         strncpy(targets.alt_bp1_seq.get()+targets.alt_lf_len, ins->ins_seq.c_str(), ins_lh_len);
     }
     targets.alt_bp1_seq[targets.alt_bp1_len] = 0;
@@ -50,14 +50,14 @@ ins_alignment_targets_t build_ins_alignment_targets(insertion_t* ins, char* cont
         hts_pos_t extra = std::min(extend-ins_rh_len, targets.alt_lf_len);
         targets.alt_bp2_len = extra + ins_rh_len + targets.alt_rf_len;
         targets.alt_bp2_seq.reset(new char[targets.alt_bp2_len+1]);
-        strncpy(targets.alt_bp2_seq.get(), lf_seq.get()+(targets.alt_lf_len-extra), extra);
+        strncpy(targets.alt_bp2_seq.get(), targets.lf_seq.get()+(targets.alt_lf_len-extra), extra);
         strncpy(targets.alt_bp2_seq.get()+extra, ins->ins_seq.c_str(), ins_rh_len);
-        strncpy(targets.alt_bp2_seq.get()+extra+ins_rh_len, rf_seq.get(), targets.alt_rf_len);
+        strncpy(targets.alt_bp2_seq.get()+extra+ins_rh_len, targets.rf_seq.get(), targets.alt_rf_len);
     } else {
         targets.alt_bp2_len = ins_rh_len + targets.alt_rf_len;
         targets.alt_bp2_seq.reset(new char[targets.alt_bp2_len+1]);
         strncpy(targets.alt_bp2_seq.get(), ins->ins_seq.c_str()+(ins->ins_seq.length()-ins_rh_len), ins_rh_len);
-        strncpy(targets.alt_bp2_seq.get()+ins_rh_len, rf_seq.get(), targets.alt_rf_len);
+        strncpy(targets.alt_bp2_seq.get()+ins_rh_len, targets.rf_seq.get(), targets.alt_rf_len);
     }
     targets.alt_bp2_seq[targets.alt_bp2_len] = 0;
     to_uppercase(targets.alt_bp1_seq.get());
@@ -75,9 +75,9 @@ ins_alignment_targets_t build_ins_alignment_targets(insertion_t* ins, char* cont
     hts_pos_t ref_bp1_rh_len = std::min(targets.alt_rf_len, extend-ref_bp1_ref_len);
     targets.ref_bp1_len_with_aux = targets.alt_lf_len + ref_bp1_ref_len + ref_bp1_rh_len;
     targets.ref_bp1_seq_with_aux.reset(new char[targets.ref_bp1_len_with_aux+1]);
-    strncpy(targets.ref_bp1_seq_with_aux.get(), lf_seq.get(), targets.alt_lf_len);
+    strncpy(targets.ref_bp1_seq_with_aux.get(), targets.lf_seq.get(), targets.alt_lf_len);
     strncpy(targets.ref_bp1_seq_with_aux.get()+targets.alt_lf_len, contig_seq+targets.ins_start, ref_bp1_ref_len);
-    strncpy(targets.ref_bp1_seq_with_aux.get()+targets.alt_lf_len+ref_bp1_ref_len, rf_seq.get(), ref_bp1_rh_len);
+    strncpy(targets.ref_bp1_seq_with_aux.get()+targets.alt_lf_len+ref_bp1_ref_len, targets.rf_seq.get(), ref_bp1_rh_len);
     targets.ref_bp1_seq_with_aux[targets.ref_bp1_len_with_aux] = 0;
     targets.ref_bp1_pos_with_aux = targets.alt_lf_len;
 
@@ -85,9 +85,9 @@ ins_alignment_targets_t build_ins_alignment_targets(insertion_t* ins, char* cont
     hts_pos_t ref_bp2_lh_len = std::min(targets.alt_lf_len, extend-ref_bp2_ref_len);
     targets.ref_bp2_len_with_aux = ref_bp2_lh_len + ref_bp2_ref_len + targets.alt_rf_len;
     targets.ref_bp2_seq_with_aux.reset(new char[targets.ref_bp2_len_with_aux+1]);
-    strncpy(targets.ref_bp2_seq_with_aux.get(), lf_seq.get()+targets.alt_lf_len-ref_bp2_lh_len, ref_bp2_lh_len);
+    strncpy(targets.ref_bp2_seq_with_aux.get(), targets.lf_seq.get()+targets.alt_lf_len-ref_bp2_lh_len, ref_bp2_lh_len);
     strncpy(targets.ref_bp2_seq_with_aux.get()+ref_bp2_lh_len, contig_seq+targets.ins_end-ref_bp2_ref_len, ref_bp2_ref_len);
-    strncpy(targets.ref_bp2_seq_with_aux.get()+ref_bp2_lh_len+ref_bp2_ref_len, rf_seq.get(), targets.alt_rf_len);
+    strncpy(targets.ref_bp2_seq_with_aux.get()+ref_bp2_lh_len+ref_bp2_ref_len, targets.rf_seq.get(), targets.alt_rf_len);
     targets.ref_bp2_seq_with_aux[targets.ref_bp2_len_with_aux] = 0;
     targets.ref_bp2_pos_with_aux = ref_bp2_lh_len + ref_bp2_ref_len;
     targets.alt_bp1_pos = targets.alt_lf_len;
@@ -211,6 +211,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
 
     ins_alignment_targets_t alignment_targets = build_ins_alignment_targets(ins, contig_seq, contig_len, stats);
     hts_pos_t ins_start = alignment_targets.ins_start, ins_end = alignment_targets.ins_end;
+    count_exact_junction_reads(ins, bam_file, contig_seq, contig_len, ins_start, ins_end, alignment_targets.lf_seq.get(), alignment_targets.rf_seq.get());
     hts_pos_t alt_lf_len = alignment_targets.alt_lf_len, alt_rf_len = alignment_targets.alt_rf_len;
     hts_pos_t alt_bp1_len = alignment_targets.alt_bp1_len, alt_bp2_len = alignment_targets.alt_bp2_len;
     char* alt_bp1_seq = alignment_targets.alt_bp1_seq.get();
