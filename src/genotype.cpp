@@ -40,6 +40,7 @@
 #include "genotype_hp_indels.h"
 #include "consensus.h"
 #include "hp_mismatch_rate_thresholds.h"
+#include "aux_context_assignment.h"
 
 chr_seqs_map_t chr_seqs;
 config_t config;
@@ -1161,7 +1162,7 @@ std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_i
         }
         if (has_alt || has_ref || has_er) {
             evidence_maps_by_contig[contig_id].reset(new evidence_map_t());
-            evidence_maps_by_contig[contig_id]->load(contig_name, has_alt ? alt_fname : "", has_ref ? ref_fname : "", has_er ? er_fname : "", evidence_svs_by_contig[contig_id], config, reassigns_evidence(evidence_mode));
+            evidence_maps_by_contig[contig_id]->load(contig_name, has_alt ? alt_fname : "", has_ref ? ref_fname : "", has_er ? er_fname : "", evidence_svs_by_contig[contig_id], config, reassigns_evidence(evidence_mode), [&](evidence_map_t& evidence) { validate_aux_snp_contexts(evidence, contig_name, evidence_svs_by_contig[contig_id], chr_seqs, stats, config, bam_fname, reference_fname, aligner); });
         }
 	}
 	active_threads_per_chr[contig_id]++;

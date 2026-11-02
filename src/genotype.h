@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <list>
 #include <limits>
 #include <map>
@@ -606,6 +607,7 @@ struct evidence_map_t {
         int pos;
         int alt_idx;
         int score;
+        bool cached_owner = true;
 
         read_alt_association_t(sv_t* sv, int bp, int pos, int alt_idx, int score) : sv(sv), bp(bp), pos(pos), alt_idx(alt_idx), score(score) {}
     };
@@ -653,7 +655,7 @@ struct evidence_map_t {
 
     evidence_map_t() {}
 
-    void load(const std::string& chr, const std::string& alt_reads_association_fname, const std::string& ref_reads_association_fname, const std::string& er_reads_association_fname, const std::vector<sv_t*>& svs, config_t& config, bool resolve_assignments) {
+    void load(const std::string& chr, const std::string& alt_reads_association_fname, const std::string& ref_reads_association_fname, const std::string& er_reads_association_fname, const std::vector<sv_t*>& svs, config_t& config, bool resolve_assignments, const std::function<void(evidence_map_t&)>& validate_aux_contexts = {}) {
         read_assignments.clear();
         read_sharing_owners.clear();
         read_alt_associations.clear();
@@ -771,13 +773,20 @@ struct evidence_map_t {
             }
         }
 
-        // Pass-1 sharing owners are all haplotypes tied at the global maximum ALT score, independently of EPR.
+        // Pass-1 sharing owners are all haplotypes tied at the surviving global maximum ALT score, independently of EPR.
         // They retain their ALT memberships and can jointly contribute sharing evidence to losing haplotypes.
         if (!resolve_assignments) {
-            for (const auto& entry : read_alt_associations) {
-                std::map<int, std::vector<uint32_t>> winning_vid_idxs_by_hpid;
+            // The removable AUX validator only excludes contexts; ordinary ownership selects the remaining score ties.
+            if (validate_aux_contexts) validate_aux_contexts(*this);
+            for (auto& entry : read_alt_associations) {
+                entry.second.max_score = std::numeric_limits<int>::min();
                 for (const read_alt_association_t& association : entry.second.associations) {
-                    if (association.score != entry.second.max_score) continue;
+                    if (association.cached_owner) entry.second.max_score = std::max(entry.second.max_score, association.score);
+                }
+                std::map<int, std::vector<uint32_t>> winning_vid_idxs_by_hpid;
+                for (read_alt_association_t& association : entry.second.associations) {
+                    association.cached_owner = association.cached_owner && association.score == entry.second.max_score;
+                    if (!association.cached_owner) continue;
                     winning_vid_idxs_by_hpid[association.sv->hpid].push_back(sv_id_to_idx.at(remove_svid_dup_suffix(association.sv->id)));
                 }
                 for (auto& owner : winning_vid_idxs_by_hpid) {
@@ -1003,7 +1012,7 @@ struct evidence_map_t {
             return vid_it != sv_id_to_idx.end() && assigned_vid_idxs && std::binary_search(assigned_vid_idxs->begin(), assigned_vid_idxs->end(), vid_it->second);
         }
         auto associations_it = read_alt_associations.find(read_name);
-        return associations_it != read_alt_associations.end() && association.score == associations_it->second.max_score;
+        return associations_it != read_alt_associations.end() && association.cached_owner;
     }
 
     bool is_read_alt(const std::string& read_name, sv_t* sv) const {
