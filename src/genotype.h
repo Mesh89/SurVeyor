@@ -41,6 +41,7 @@ inline void count_exact_junction_reads(sv_t* sv, open_samFile_t* bam_file, char*
     to_uppercase(&right[0]);
     std::string inserted = sv->ins_seq;
     to_uppercase(&inserted[0]);
+    if (inserted.find_first_not_of("ACGT") != std::string::npos) return;
     std::string ref_allele(contig_seq+start, end-start);
     to_uppercase(&ref_allele[0]);
     hts_pos_t ref_start = std::max(hts_pos_t(0), start-hts_pos_t(left.length()));
