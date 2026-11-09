@@ -349,6 +349,14 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* hp_ref_range_tag = "##INFO=<ID=HP_REF_RANGE,Number=2,Type=Integer,Description=\"1-based half-open [start,end) coordinates of the reference homopolymer run used in homopolymer-specific genotyping.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_ref_range_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "HPRS");
+	const char* hp_run_s_tag = "##INFO=<ID=HPRS,Number=1,Type=Float,Description=\"Run-level diploid stutter score of this homopolymer allele: best log-likelihood of the run read-length histogram over genotypes containing the allele minus over genotypes without it, under the library stutter profile.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_run_s_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "HPAS");
+	const char* hp_stutter_alpha_tag = "##INFO=<ID=HPAS,Number=1,Type=Float,Description=\"Stutter-correction factor applied to this homopolymer record's ALT-support read counts (NNLS deconvolution of the run read-length histogram with the library stutter profile).\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_stutter_alpha_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_INFO, "REF1_HP_LEN");
 	const char* ref1_hp_len_tag = "##INFO=<ID=REF1_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longest homopolymer in the breakpoint 1 reference allele sequence.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ref1_hp_len_tag, &len));

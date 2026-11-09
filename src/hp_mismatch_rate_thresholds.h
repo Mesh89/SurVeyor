@@ -20,6 +20,7 @@
 
 static const char HP_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "hp_3p_mismatch_rate_thresholds.tsv";
 static const char HP_QUALITY_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "hp_3p_quality_mismatch_rate_thresholds.tsv";
+static const char HP_STUTTER_PROFILE_FILENAME[] = "hp_stutter_profile.tsv";
 static const char DNR_MISMATCH_RATE_THRESHOLDS_FILENAME[] = "dnr_3p_mismatch_rate_thresholds.tsv";
 const int HP_TAIL_QUALITY_BIN_SIZE = 5;
 const int HP_TAIL_QUALITY_BIN_COUNT = 255 / HP_TAIL_QUALITY_BIN_SIZE;
@@ -502,6 +503,29 @@ inline void collect_hp_5p_blocker_evidence(open_samFile_t* alignment_file, const
         for (auto run = first; run != hp_runs.end() && run->beg < bam_endpos(read.get()); run++) add_hp_5p_blocker_evidence(read.get(), *run, config, stats);
     }
     if (status < -1) throw std::runtime_error("Error while reading alignments for " + region + ".");
+}
+
+// Return usable direct-read HP length counts for run [beg, end) of base on contig_name.
+// f supplies alignments, contig_seq/contig_len the reference, and config/stats the discovery measurement settings.
+inline std::map<int,int> measure_hp_run_length_histogram(open_samFile_t* f, const std::string& contig_name, hts_pos_t beg, hts_pos_t end, char base, char* contig_seq, hts_pos_t contig_len, const config_t& config, const stats_t& stats) {
+    hp_run_context_t run(beg, end, base);
+    std::vector<hp_run_context_t> runs{run};
+    // Gather proper-pair blocker evidence before measuring all usable direct alignments.
+    collect_hp_5p_blocker_evidence(f, contig_name, runs, config, stats);
+    run = runs[0];
+    std::string region = contig_name + ":" + std::to_string(beg + 1) + "-" + std::to_string(end);
+    std::unique_ptr<hts_itr_t, decltype(&hts_itr_destroy)> iter(sam_itr_querys(f->idx, f->header, region.c_str()), &hts_itr_destroy);
+    if (!iter) throw std::runtime_error("Unable to query alignments for " + region + ".");
+    std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read(bam_init1(), &bam_destroy1);
+    std::map<int,int> hist;
+    int status;
+    while ((status = sam_itr_next(f->file, iter.get(), read.get())) >= 0) {
+        if (is_unmapped(read.get()) || !is_primary(read.get()) || read->core.l_qseq <= 0) continue;
+        hp_read_info_t info = estimate_hp_read_for_calibration(read.get(), run, contig_seq, contig_len, config);
+        if (is_usable_hp_read(info, config.min_clip_len, config.max_seq_error)) hist[info.hp_len]++;
+    }
+    if (status < -1) throw std::runtime_error("Error while reading alignments for " + region + ".");
+    return hist;
 }
 
 // Select the longest query HP (first on ties), then use the model's reference-anchored

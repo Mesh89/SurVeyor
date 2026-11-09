@@ -40,6 +40,7 @@
 #include "genotype_hp_indels.h"
 #include "consensus.h"
 #include "hp_mismatch_rate_thresholds.h"
+#include "hp_stutter.h"
 #include "aux_context_assignment.h"
 
 chr_seqs_map_t chr_seqs;
@@ -70,55 +71,69 @@ bool load_evidence_maps = false;
 evidence_mode_t evidence_mode = evidence_mode_t::CACHED;
 std::string reads_association_dir;
 
-void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_info_t bp_reads_info, std::string prefix, int bp_number) {
+void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_info_t bp_reads_info, std::string prefix, int bp_number, double count_scale) {
     if (!bp_reads_info.computed) return;
 
     std::string bp_number_str = std::to_string(bp_number);
     std::string read_fmt_prefix = prefix + "R" + bp_number_str;
 
-    bcf_update_format_int32(out_hdr, b, read_fmt_prefix.c_str(), &(bp_reads_info.reads), 1);
+    // Preserve tag presence from the original counts; scale only values written to the VCF.
+    int scaled_count = (int) std::nearbyint(bp_reads_info.reads * count_scale);
+    bcf_update_format_int32(out_hdr, b, read_fmt_prefix.c_str(), &scaled_count, 1);
 
     int consistent_reads = bp_reads_info.consistent_reads();
     int consistent_exact_reads = bp_reads_info.consistent_exact_reads();
     int exact_reads = bp_reads_info.exact_reads();
     if (bp_reads_info.reads) {
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "C").c_str(), &(consistent_reads), 1);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), &exact_reads, 1);
+        scaled_count = (int) std::nearbyint(consistent_reads * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "C").c_str(), &scaled_count, 1);
+        scaled_count = (int) std::nearbyint(exact_reads * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), &scaled_count, 1);
     }
     if (consistent_reads) {
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CE").c_str(), &consistent_exact_reads, 1);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CF").c_str(), &(bp_reads_info.consistent_fwd), 1);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CR").c_str(), &(bp_reads_info.consistent_rev), 1);
+        scaled_count = (int) std::nearbyint(consistent_exact_reads * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CE").c_str(), &scaled_count, 1);
+        scaled_count = (int) std::nearbyint(bp_reads_info.consistent_fwd * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CF").c_str(), &scaled_count, 1);
+        scaled_count = (int) std::nearbyint(bp_reads_info.consistent_rev * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CR").c_str(), &scaled_count, 1);
         float rcas = bp_reads_info.consistent_avg_score;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CAS").c_str(), &rcas, 1);
         float rcss = bp_reads_info.consistent_stddev_score;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CSS").c_str(), &rcss, 1);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CHQ").c_str(), &(bp_reads_info.consistent_high_mq), 1);
+        scaled_count = (int) std::nearbyint(bp_reads_info.consistent_high_mq * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CHQ").c_str(), &scaled_count, 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CmQ").c_str(), &(bp_reads_info.consistent_min_mq), 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CMQ").c_str(), &(bp_reads_info.consistent_max_mq), 1);
         float rcavmq = bp_reads_info.consistent_avg_mq;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CAQ").c_str(), &rcavmq, 1);
         float rcstdmq = bp_reads_info.consistent_stddev_mq;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CSQ").c_str(), &rcstdmq, 1);
-        int mate_cov_bps[] = {bp_reads_info.fwd_mate_cov_bps, bp_reads_info.rev_mate_cov_bps};
+        int mate_cov_bps[] = {(int) std::nearbyint(bp_reads_info.fwd_mate_cov_bps * count_scale), (int) std::nearbyint(bp_reads_info.rev_mate_cov_bps * count_scale)};
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CMSPAN").c_str(), mate_cov_bps, 2);
-        int hq_mate_cov_bps[] = {bp_reads_info.fwd_hq_mate_cov_bps, bp_reads_info.rev_hq_mate_cov_bps};
+        int hq_mate_cov_bps[] = {(int) std::nearbyint(bp_reads_info.fwd_hq_mate_cov_bps * count_scale), (int) std::nearbyint(bp_reads_info.rev_hq_mate_cov_bps * count_scale)};
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CMHQSPAN").c_str(), hq_mate_cov_bps, 2);
 
         if (consistent_exact_reads) {
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEHQ").c_str(), &(bp_reads_info.consistent_exact_high_mq), 1);
+            scaled_count = (int) std::nearbyint(bp_reads_info.consistent_exact_high_mq * count_scale);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEHQ").c_str(), &scaled_count, 1);
             bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEmQ").c_str(), &(bp_reads_info.consistent_exact_min_mq), 1);
             bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEMQ").c_str(), &(bp_reads_info.consistent_exact_max_mq), 1);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEF").c_str(), &(bp_reads_info.consistent_exact_fwd), 1);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CER").c_str(), &(bp_reads_info.consistent_exact_rev), 1);
+            scaled_count = (int) std::nearbyint(bp_reads_info.consistent_exact_fwd * count_scale);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEF").c_str(), &scaled_count, 1);
+            scaled_count = (int) std::nearbyint(bp_reads_info.consistent_exact_rev * count_scale);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CER").c_str(), &scaled_count, 1);
         }
     }
     if (exact_reads) {
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), &(bp_reads_info.exact_high_mq), 1);
+        scaled_count = (int) std::nearbyint(bp_reads_info.exact_high_mq * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), &scaled_count, 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EmQ").c_str(), &(bp_reads_info.exact_min_mq), 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EMQ").c_str(), &(bp_reads_info.exact_max_mq), 1);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), &(bp_reads_info.exact_fwd), 1);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), &(bp_reads_info.exact_rev), 1);
+        scaled_count = (int) std::nearbyint(bp_reads_info.exact_fwd * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), &scaled_count, 1);
+        scaled_count = (int) std::nearbyint(bp_reads_info.exact_rev * count_scale);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), &scaled_count, 1);
     }
 }
 
@@ -196,8 +211,8 @@ void reset_record_bp_pairs_info(bcf_hdr_t* out_hdr, bcf1_t* b, std::string prefi
     bcf_update_format_float(out_hdr, b, (pairs_fmt_prefix + "NMS").c_str(), NULL, 0);
 }
 
-void update_record_bp_consensus_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_consensus_info_t bp_consensus_info, std::string prefix, int bp_number) {
-    update_record_bp_reads_info(out_hdr, b, bp_consensus_info.reads_info, prefix, bp_number);
+void update_record_bp_consensus_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_consensus_info_t bp_consensus_info, std::string prefix, int bp_number, double count_scale) {
+    update_record_bp_reads_info(out_hdr, b, bp_consensus_info.reads_info, prefix, bp_number, count_scale);
     update_record_bp_pairs_info(out_hdr, b, bp_consensus_info.pairs_info, prefix, bp_number);
 }
 
@@ -238,8 +253,42 @@ int calculate_mh_len(sv_t* sv) {
     return mh_len;
 }
 
+struct hp_stutter_run_t {
+    char base;
+    hts_pair_pos_t range;
+    std::vector<std::pair<sv_t*, int>> records; // Record and its original allele length.
+    std::vector<int> allele_lengths;
+};
+
 bool genotype_when_reassigning_evidence(const sv_t* sv) {
     return config.training_mode || sv->sample_info.epr >= MIN_EPR;
+}
+
+// Write only hp_stutter_alpha and hp_run_s for the run groups in runs.
+// id selects a reader from bam_pool; contig_name/contig_seq/contig_len identify the reference.
+// profile supplies stutter rates; reassign_evidence skips groups with no records selected for pass 2.
+void annotate_hp_stutter(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::vector<const hp_stutter_run_t*> runs, const hp_stutter_profile_t* profile, bam_pool_t* bam_pool, bool reassign_evidence) {
+    open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
+    for (const hp_stutter_run_t* run : runs) {
+        if (run->range.end - run->range.beg < MIN_REF_HP_LEN) continue;
+        if (reassign_evidence) {
+            bool any_genotyped = false;
+            for (const auto& record : run->records) {
+                if (genotype_when_reassigning_evidence(record.first)) {
+                    any_genotyped = true;
+                    break;
+                }
+            }
+            if (!any_genotyped) continue;
+        }
+        std::map<int,int> h = measure_hp_run_length_histogram(bam_file, contig_name, run->range.beg, run->range.end, run->base, contig_seq, contig_len, config, stats);
+        if (h.empty()) continue;
+        std::vector<int> T = candidate_true_lengths(h, run->allele_lengths);
+        for (const auto& record : run->records) {
+            record.first->hp_run_s = hp_stutter_run_score(*profile, run->base, h, T, record.second);
+            record.first->hp_stutter_alpha = hp_stutter_alpha(*profile, run->base, h, run->allele_lengths, record.second);
+        }
+    }
 }
 
 void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const std::string& prefix, int bp_number, bool computed, int reads, int consistent, int consistent_hq, int exact) {
@@ -396,6 +445,14 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         bcf_update_info_int32(out_hdr, sv->vcf_entry, "MH_LEN", &mh_len, 1);
     }
     bcf_update_info_flag(out_hdr, sv->vcf_entry, "HP_GENOTYPED", "", sv->hp_genotyped);
+    if (!std::isnan(sv->hp_run_s)) {
+        float hprs = sv->hp_run_s;
+        bcf_update_info_float(out_hdr, sv->vcf_entry, "HPRS", &hprs, 1);
+    } else bcf_update_info_float(out_hdr, sv->vcf_entry, "HPRS", NULL, 0);
+    if (!std::isnan(sv->hp_stutter_alpha)) {
+        float hpas = sv->hp_stutter_alpha;
+        bcf_update_info_float(out_hdr, sv->vcf_entry, "HPAS", &hpas, 1);
+    } else bcf_update_info_float(out_hdr, sv->vcf_entry, "HPAS", NULL, 0);
     if (sv->hp_ref_beg != HTS_POS_MIN && sv->hp_ref_end != HTS_POS_MIN) {
         int hp_ref_range[] = {(int) sv->hp_ref_beg + 1, (int) sv->hp_ref_end + 1}; // convert to 1-based coordinates for VCF
         bcf_update_info_int32(out_hdr, sv->vcf_entry, "HP_REF_RANGE", hp_ref_range, 2);
@@ -446,10 +503,11 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     reset_record_bp_pairs_info(out_hdr, sv->vcf_entry, "S", 1);
     reset_record_bp_pairs_info(out_hdr, sv->vcf_entry, "S", 2);
 
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp1, "A", 1);
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp2, "A", 2);
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp1, "R", 1);
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp2, "R", 2);
+    double alt_count_scale = std::isnan(sv->hp_stutter_alpha) ? 1.0 : sv->hp_stutter_alpha;
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp1, "A", 1, alt_count_scale);
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp2, "A", 2, alt_count_scale);
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp1, "R", 1, 1.0);
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp2, "R", 2, 1.0);
     update_record_bp_pairs_info(out_hdr, sv->vcf_entry, sv->sample_info.neutral_bp1_pairs, "N", 1);
     update_record_bp_pairs_info(out_hdr, sv->vcf_entry, sv->sample_info.neutral_bp2_pairs, "N", 2);
     update_record_bp_pairs_info(out_hdr, sv->vcf_entry, sv->sample_info.bp1_stray_pairs, "S", 1);
@@ -1323,6 +1381,7 @@ int main(int argc, char* argv[]) {
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
     hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir);
+    hp_stutter_profile_t hp_stutter_profile(workdir + "/" + HP_STUTTER_PROFILE_FILENAME);
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
 
     chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
@@ -1400,6 +1459,32 @@ int main(int argc, char* argv[]) {
         if (retained) evidence_svs_by_contig[contig_map.get_id(sv->chr)].push_back(sv.get());
     }
 
+    // Group HP-tagged records by contig and reference-run start.
+    std::vector<std::map<hts_pos_t, hp_stutter_run_t>> hp_stutter_runs_by_contig(contig_map.size());
+    for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
+        std::string contig_name = contig_map.get_name(contig_id);
+        char* chr_seq = chr_seqs.get_seq(contig_name);
+        hts_pos_t chr_len = chr_seqs.get_len(contig_name);
+        for (sv_t* sv : evidence_svs_by_contig[contig_id]) {
+            if (!sv->hp_genotyped) continue;
+            char base = get_homopolymer_base(sv, chr_seq);
+            hts_pair_pos_t range = find_ref_hp_range_for_indel(sv, chr_seq, chr_len);
+            int R = range.end - range.beg;
+            int x = R + sv->svlen();
+            hp_stutter_run_t& run = hp_stutter_runs_by_contig[contig_id][range.beg];
+            run.base = base;
+            run.range = range;
+            run.records.push_back({sv, x});
+            run.allele_lengths.push_back(R);
+            run.allele_lengths.push_back(x);
+        }
+        for (auto& entry : hp_stutter_runs_by_contig[contig_id]) {
+            std::vector<int>& G = entry.second.allele_lengths;
+            std::sort(G.begin(), G.end());
+            G.erase(std::unique(G.begin(), G.end()), G.end());
+        }
+    }
+
     int* imap = NULL;
     htsFile* out_vcf_file = bcf_open(out_vcf_fname.c_str(), "wz");
     if (out_vcf_file == NULL) throw std::runtime_error("Unable to open file " + out_vcf_fname + ".");
@@ -1428,6 +1513,7 @@ int main(int argc, char* argv[]) {
     ctpl::thread_pool thread_pool(config.threads);
     std::vector<std::future<void> > futures;
     const int BLOCK_SIZE = 20;
+    const int HP_STUTTER_BLOCK_SIZE = 1000;
     auto register_block = [&](int contig_id) {
         std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
         remaining_blocks_per_chr[contig_id]++;
@@ -1512,6 +1598,14 @@ int main(int argc, char* argv[]) {
                 futures.push_back(std::move(future));
                 block_invs.clear();
             }
+        }
+        auto& hp_stutter_runs = hp_stutter_runs_by_contig[contig_id];
+        auto run = hp_stutter_runs.begin();
+        while (run != hp_stutter_runs.end()) {
+            std::vector<const hp_stutter_run_t*> block_runs;
+            for (int i = 0; i < HP_STUTTER_BLOCK_SIZE && run != hp_stutter_runs.end(); i++, run++) block_runs.push_back(&run->second);
+            std::future<void> future = thread_pool.push(annotate_hp_stutter, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_runs, &hp_stutter_profile, bam_pool, reassign_evidence);
+            futures.push_back(std::move(future));
         }
         std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
         if (--remaining_blocks_per_chr[contig_id] == 0) evidence_maps_by_contig[contig_id].reset();

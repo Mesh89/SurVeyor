@@ -227,6 +227,8 @@ struct sv_t {
     bool imprecise = false;
     hts_pos_t junction_remap_ref_beg = HTS_POS_MIN, junction_remap_ref_end = HTS_POS_MIN;
     bool hp_genotyped = false;
+    double hp_stutter_alpha = NAN; // NaN means no correction.
+    double hp_run_s = NAN;
     hts_pos_t hp_ref_beg = HTS_POS_MIN, hp_ref_end = HTS_POS_MIN;
     int ref1_hp_len = -1, ref2_hp_len = -1;
     int alt1_hp_len = -1, alt2_hp_len = -1;

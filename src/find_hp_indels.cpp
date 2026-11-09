@@ -47,6 +47,8 @@ using mate_map_t = std::unordered_map<std::string, mate_info_t>;
 struct hp_run_t : hp_run_context_t {
     int usable_reads = 0;
     std::unordered_map<int, int> hp_len_counts;
+    int direct_usable_reads = 0;
+    std::map<int,int> direct_hp_len_counts;
     std::unordered_map<int, std::vector<hp_read_observation_t>> observations_by_hp_len;
 
     hp_run_t(hts_pos_t beg, hts_pos_t end, char base) : hp_run_context_t(beg, end, base) {}
@@ -111,6 +113,8 @@ struct hp_chunk_result_t {
     hp_mismatch_rates_by_quality_t threshold_estimation_rates_by_quality;
     hp_tail_error_table_t tail_error_table;
     hp_candidate_chunk_t candidate_chunk;
+    long long stutter_tot[4][31] = {};
+    long long stutter_cnt[4][31][7] = {};
 };
 
 hp_positional_consensus_t build_hp_positional_consensus(const std::vector<hp_read_observation_t>& observations, int hp_len) {
@@ -370,6 +374,23 @@ void write_hp_tail_error_table(const hp_tail_error_table_t& table, const std::st
         auto key = unpack_hp_tail_error_key(packed_key);
         const auto& counts = table.at(packed_key);
         fout << "ACGT"[key[0]] << "\t" << key[1] << "\t" << key[2] << "\t" << key[3] << "\t" << counts.first << "\t" << counts.second << "\t" << double(counts.second) / counts.first << "\n";
+    }
+    fout.close();
+    if (!fout) throw std::runtime_error("Unable to write " + fname + ".");
+}
+
+void write_hp_stutter_profile(const long long stutter_tot[4][31], const long long stutter_cnt[4][31][7], const std::string& fname) {
+    std::ofstream fout(fname);
+    if (!fout) throw std::runtime_error("Unable to open " + fname + " for writing.");
+    fout << "BASE\tL\tDELTA\tREADS\tRATE\n" << std::fixed << std::setprecision(6);
+    for (int base = 0; base < 4; base++) {
+        for (int hp_len = MIN_REF_HP_LEN; hp_len <= 30; hp_len++) {
+            long long reads = stutter_tot[base][hp_len];
+            if (reads == 0) continue;
+            for (int delta = -3; delta <= 3; delta++) {
+                fout << "ACGT"[base] << "\t" << hp_len << "\t" << delta << "\t" << reads << "\t" << double(stutter_cnt[base][hp_len][delta + 3]) / reads << "\n";
+            }
+        }
     }
     fout.close();
     if (!fout) throw std::runtime_error("Unable to write " + fname + ".");
@@ -691,6 +712,8 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 if (!is_usable_hp_read(hp_read_info, config->min_clip_len, config->max_seq_error)) continue;
                 hp_run.usable_reads++;
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
+                hp_run.direct_usable_reads++;
+                hp_run.direct_hp_len_counts[hp_read_info.hp_len]++;
                 bool is_reverse = bam_is_rev(read.get());
                 int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
                 int right_tail_len = is_reverse ? hp_read_info.tail_5p_len : hp_read_info.tail_3p_len;
@@ -734,6 +757,23 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
         throw;
     }
     release_mates(contig_id);
+    for (const hp_run_t& hp_run : hp_runs) {
+        int n = hp_run.direct_usable_reads;
+        if (n < 10) continue;
+        int ref_hp_len = hp_run.end - hp_run.beg;
+        int max_nonref_count = 0;
+        for (const auto& hp_len_count : hp_run.direct_hp_len_counts) {
+            if (hp_len_count.first != ref_hp_len) max_nonref_count = std::max(max_nonref_count, hp_len_count.second);
+        }
+        if (max_nonref_count >= 0.25 * n) continue;
+        int base = base_to_index(hp_run.base);
+        int hp_len_bin = std::min(ref_hp_len, 30);
+        result.stutter_tot[base][hp_len_bin] += n;
+        for (const auto& hp_len_count : hp_run.direct_hp_len_counts) {
+            int delta = std::max(-3, std::min(3, hp_len_count.first - ref_hp_len));
+            result.stutter_cnt[base][hp_len_bin][delta + 3] += hp_len_count.second;
+        }
+    }
     if (keep_candidate_runs) {
         result.candidate_chunk.contig_name = contig_name;
         result.candidate_chunk.hp_runs = retain_candidate_hp_runs(hp_runs, 2 * stats->get_max_depth(contig_name), config->min_sv_size);
@@ -991,6 +1031,8 @@ int main(int argc, char* argv[]) {
     hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
     hp_mismatch_rates_by_quality_t threshold_estimation_rates_by_quality;
     hp_tail_error_table_t tail_error_table;
+    long long stutter_tot[4][31] = {};
+    long long stutter_cnt[4][31][7] = {};
     for (std::future<hp_chunk_result_t>& future : futures) {
         hp_chunk_result_t chunk_result = future.get();
         if (!chunk_result.candidate_chunk.hp_runs.empty()) candidate_chunks.push_back(std::move(chunk_result.candidate_chunk));
@@ -1010,6 +1052,10 @@ int main(int argc, char* argv[]) {
             for (int hp_len = 0; hp_len < chunk_threshold_estimation_rates_by_hp_len.size(); hp_len++) {
                 threshold_estimation_rates_by_hp_len[hp_len].insert(threshold_estimation_rates_by_hp_len[hp_len].end(), chunk_threshold_estimation_rates_by_hp_len[hp_len].begin(), chunk_threshold_estimation_rates_by_hp_len[hp_len].end());
             }
+            for (int hp_len = MIN_REF_HP_LEN; hp_len <= 30; hp_len++) {
+                stutter_tot[hp_base_idx][hp_len] += chunk_result.stutter_tot[hp_base_idx][hp_len];
+                for (int delta_idx = 0; delta_idx < 7; delta_idx++) stutter_cnt[hp_base_idx][hp_len][delta_idx] += chunk_result.stutter_cnt[hp_base_idx][hp_len][delta_idx];
+            }
         }
     }
     size_t hp_len_count = MIN_REF_HP_LEN + 1;
@@ -1021,6 +1067,7 @@ int main(int argc, char* argv[]) {
     auto hp_quality_mismatch_rate_thresholds = estimate_hp_quality_mismatch_rate_thresholds(threshold_estimation_rates_by_quality, hp_mismatch_rate_thresholds_by_base, config.max_seq_error);
     write_hp_quality_mismatch_rate_thresholds(hp_quality_mismatch_rate_thresholds, workdir + "/" + HP_QUALITY_MISMATCH_RATE_THRESHOLDS_FILENAME);
     write_hp_tail_error_table(tail_error_table, workdir + "/hp_3p_tail_error_probabilities.txt");
+    write_hp_stutter_profile(stutter_tot, stutter_cnt, workdir + "/" + HP_STUTTER_PROFILE_FILENAME);
 
     // Train DNR thresholds in a separate pass over the same chunks, including thresholds-only runs.
     std::vector<std::future<std::array<hp_mismatch_rates_by_len_t, 6>>> dnr_futures;
