@@ -447,12 +447,12 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     bcf_update_info_flag(out_hdr, sv->vcf_entry, "HP_GENOTYPED", "", sv->hp_genotyped);
     if (!std::isnan(sv->hp_run_s)) {
         float hprs = sv->hp_run_s;
-        bcf_update_info_float(out_hdr, sv->vcf_entry, "HPRS", &hprs, 1);
-    } else bcf_update_info_float(out_hdr, sv->vcf_entry, "HPRS", NULL, 0);
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "HPRS", &hprs, 1);
+    } else bcf_update_format_float(out_hdr, sv->vcf_entry, "HPRS", NULL, 0);
     if (!std::isnan(sv->hp_stutter_alpha)) {
         float hpas = sv->hp_stutter_alpha;
-        bcf_update_info_float(out_hdr, sv->vcf_entry, "HPAS", &hpas, 1);
-    } else bcf_update_info_float(out_hdr, sv->vcf_entry, "HPAS", NULL, 0);
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "HPAS", &hpas, 1);
+    } else bcf_update_format_float(out_hdr, sv->vcf_entry, "HPAS", NULL, 0);
     if (sv->hp_ref_beg != HTS_POS_MIN && sv->hp_ref_end != HTS_POS_MIN) {
         int hp_ref_range[] = {(int) sv->hp_ref_beg + 1, (int) sv->hp_ref_end + 1}; // convert to 1-based coordinates for VCF
         bcf_update_info_int32(out_hdr, sv->vcf_entry, "HP_REF_RANGE", hp_ref_range, 2);
