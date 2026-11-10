@@ -270,7 +270,6 @@ bool genotype_when_reassigning_evidence(const sv_t* sv) {
 void annotate_hp_stutter(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::vector<const hp_stutter_run_t*> runs, const hp_stutter_profile_t* profile, bam_pool_t* bam_pool, bool reassign_evidence) {
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
     for (const hp_stutter_run_t* run : runs) {
-        if (run->range.end - run->range.beg < MIN_REF_HP_LEN) continue;
         if (reassign_evidence) {
             bool any_genotyped = false;
             for (const auto& record : run->records) {
@@ -1470,6 +1469,7 @@ int main(int argc, char* argv[]) {
             char base = get_homopolymer_base(sv, chr_seq);
             hts_pair_pos_t range = find_ref_hp_range_for_indel(sv, chr_seq, chr_len);
             int R = range.end - range.beg;
+            if (R < MIN_REF_HP_LEN) continue;
             int x = R + sv->svlen();
             hp_stutter_run_t& run = hp_stutter_runs_by_contig[contig_id][range.beg];
             run.base = base;
