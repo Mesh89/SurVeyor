@@ -7,6 +7,7 @@
 #include "sam_utils.h"
 #include "clustering_utils.h"
 #include <memory>
+#include <set>
 
 struct insertion_cluster_t {
 
@@ -36,12 +37,8 @@ struct insertion_cluster_t {
     }
     void add_semi_mapped_reads(bam1_t* read) {
         if (clip_consensus) {
-            bool sm_left_clipped = is_left_clipped(read, 1);
-            bool sm_right_clipped = is_right_clipped(read, 1);
-            if (sm_left_clipped && clip_consensus->left_clipped && read->core.pos == clip_consensus->breakpoint && get_left_clip_size(read) <= clip_consensus->clip_len) {
-                return;
-            } else if (sm_right_clipped && !clip_consensus->left_clipped && bam_endpos(read) == clip_consensus->breakpoint && get_right_clip_size(read) <= clip_consensus->clip_len) {
-                return;
+            for (auto clipped_read : clip_consensus->clipped_reads) {
+                if (get_read_key(read) == get_read_key(clipped_read.get())) return;
             }
         }
     	semi_mapped_reads.push_back(read);
@@ -73,6 +70,47 @@ struct insertion_cluster_t {
 
     bool empty() {
     	return this->size() == 0;
+    }
+};
+
+size_t count_assembly_reads(std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster) {
+    std::set<std::pair<std::string, int>> reads;
+    for (auto cluster : {r_cluster, l_cluster}) {
+        if (cluster->clip_consensus) {
+            for (auto read : cluster->clip_consensus->clipped_reads) reads.insert(get_read_key(read.get()));
+        }
+        for (auto read : cluster->cluster->reads) {
+            reads.insert(get_read_key(read.get()));
+            reads.insert(get_read_key(read.get(), true));
+        }
+        for (bam1_t* read : cluster->semi_mapped_reads) reads.insert(get_read_key(read));
+    }
+    return reads.size();
+}
+
+struct assembly_read_filter_t {
+    std::set<std::pair<std::string, int>> clipped_reads, bam_reads, used_reads;
+
+    assembly_read_filter_t(std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster) {
+        for (auto cluster : {r_cluster, l_cluster}) {
+            if (cluster->clip_consensus) {
+                for (auto read : cluster->clip_consensus->clipped_reads) clipped_reads.insert(get_read_key(read.get()));
+            }
+            for (auto read : cluster->cluster->reads) bam_reads.insert(get_read_key(read.get()));
+            for (bam1_t* read : cluster->semi_mapped_reads) bam_reads.insert(get_read_key(read));
+        }
+        bam_reads.insert(clipped_reads.begin(), clipped_reads.end());
+    }
+
+    bool add_read(bam1_t* read, bool clipped = false) {
+        auto key = get_read_key(read);
+        if (!clipped && clipped_reads.count(key)) return false;
+        return used_reads.insert(key).second;
+    }
+
+    bool add_mate(bam1_t* read) {
+        auto key = get_read_key(read, true);
+        return !bam_reads.count(key) && used_reads.insert(key).second;
     }
 };
 

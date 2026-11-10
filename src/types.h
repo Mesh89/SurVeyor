@@ -2,6 +2,7 @@
 #define TYPES_H
 
 #include "htslib/hts.h"
+#include "htslib/sam.h"
 #include "utils.h"
 #include <algorithm>
 #include <array>
@@ -51,6 +52,7 @@ struct consensus_t {
     hts_pos_t start, breakpoint, end;
     hts_pos_t orig_start, orig_end;
     std::string sequence, qual;
+    std::vector<std::shared_ptr<bam1_t>> clipped_reads;
     std::set<int> cigar_indel_lengths; // Accepted construction reads: insertions positive, deletions negative.
     int fwd_reads, rev_reads;
     uint8_t max_mapq;

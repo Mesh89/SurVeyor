@@ -140,10 +140,12 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 std::vector<std::string> assemble_sequences(std::string contig_name, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model) {
 
-	enum observation_source_t { STABLE_READ, CACHED_MATE, SEMI_MAPPED_READ, CLIP_CONSENSUS };
+	const int TOO_MANY_READS = stats.get_max_depth(contig_name) * stats.max_is / stats.read_len;
+	if (count_assembly_reads(r_cluster, l_cluster) >= TOO_MANY_READS) return {"TOO_MANY_READS"};
+
+	enum observation_source_t { STABLE_READ, CACHED_MATE, SEMI_MAPPED_READ };
 	struct observation_t {
 		bam1_t* read;
-		const std::string* clip_qual;
 		observation_source_t source;
 		bool reverse;
 	};
@@ -153,38 +155,49 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 		observation_t observation;
 	};
 	std::vector<input_t> left_stable, unstable, right_stable;
+	assembly_read_filter_t read_filter(r_cluster, l_cluster);
 	if (r_cluster->clip_consensus) {
-		left_stable.push_back({r_cluster->clip_consensus->sequence, {true, false}, {nullptr, &r_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}});
+		for (std::shared_ptr<bam1_t> read : r_cluster->clip_consensus->clipped_reads) {
+			if (!read_filter.add_read(read.get(), true)) continue;
+			left_stable.push_back({get_sequence(read.get()), {true, false}, {read.get(), STABLE_READ, false}});
+		}
 	}
 	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
-		std::string seq = get_sequence(read.get());
-		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
-		rc(mate_seq);
-		left_stable.push_back({seq, {!is_left_clipped(read.get(), 1), true}, {read.get(), nullptr, STABLE_READ, false}});
-		unstable.push_back({mate_seq, {true, true}, {read.get(), nullptr, CACHED_MATE, true}});
+		if (read_filter.add_read(read.get())) {
+			left_stable.push_back({get_sequence(read.get()), {!is_left_clipped(read.get(), 1), true}, {read.get(), STABLE_READ, false}});
+		}
+		if (read_filter.add_mate(read.get())) {
+			std::string mate_seq = get_mate_seq(read.get(), mateseqs);
+			rc(mate_seq);
+			unstable.push_back({mate_seq, {true, true}, {read.get(), CACHED_MATE, true}});
+		}
 	}
 	for (std::shared_ptr<bam1_t> read : l_cluster->cluster->reads) {
-		std::string seq = get_sequence(read.get());
-		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
-		right_stable.push_back({seq, {true, !is_right_clipped(read.get(), 1)}, {read.get(), nullptr, STABLE_READ, false}});
-		unstable.push_back({mate_seq, {true, true}, {read.get(), nullptr, CACHED_MATE, false}});
+		if (read_filter.add_read(read.get())) {
+			right_stable.push_back({get_sequence(read.get()), {true, !is_right_clipped(read.get(), 1)}, {read.get(), STABLE_READ, false}});
+		}
+		if (read_filter.add_mate(read.get())) {
+			unstable.push_back({get_mate_seq(read.get(), mateseqs), {true, true}, {read.get(), CACHED_MATE, false}});
+		}
 	}
 	if (l_cluster->clip_consensus) {
-		right_stable.push_back({l_cluster->clip_consensus->sequence, {false, true}, {nullptr, &l_cluster->clip_consensus->qual, CLIP_CONSENSUS, false}});
+		for (std::shared_ptr<bam1_t> read : l_cluster->clip_consensus->clipped_reads) {
+			if (!read_filter.add_read(read.get(), true)) continue;
+			right_stable.push_back({get_sequence(read.get()), {false, true}, {read.get(), STABLE_READ, false}});
+		}
 	}
 
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
+		if (!read_filter.add_read(read)) continue;
 		std::string read_seq = get_sequence(read, true);
 		rc(read_seq);
-		unstable.push_back({read_seq, {!is_left_clipped(read, 1), !is_right_clipped(read, 1)}, {read, nullptr, SEMI_MAPPED_READ, true}});
+		unstable.push_back({read_seq, {!is_left_clipped(read, 1), !is_right_clipped(read, 1)}, {read, SEMI_MAPPED_READ, true}});
 	}
 	for (bam1_t* read : l_cluster->semi_mapped_reads) {
+		if (!read_filter.add_read(read)) continue;
 		std::string read_seq = get_sequence(read, true);
-		unstable.push_back({read_seq, {!is_left_clipped(read, 1), !is_right_clipped(read, 1)}, {read, nullptr, SEMI_MAPPED_READ, false}});
+		unstable.push_back({read_seq, {!is_left_clipped(read, 1), !is_right_clipped(read, 1)}, {read, SEMI_MAPPED_READ, false}});
 	}
-
-	const int TOO_MANY_READS = stats.get_max_depth(contig_name) * stats.max_is / stats.read_len;
-	if (unstable.size() + left_stable.size() + right_stable.size() >= TOO_MANY_READS) return {"TOO_MANY_READS"};
 
 	std::vector<assembly_consensus_t> read_contigs;
 	std::vector<path_permission_t> path_permissions;
@@ -200,7 +213,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 			if (observation.source == STABLE_READ || observation.source == SEMI_MAPPED_READ) {
 				quals = recalibrate_clip_read_qualities(observation.read, config, hp_tail_quality_model, quality_cache);
 				if (observation.source == SEMI_MAPPED_READ && bam_is_rev(observation.read) != observation.reverse) std::reverse(quals.begin(), quals.end());
-			} else if (observation.source == CACHED_MATE) {
+			} else {
 				quals = decode_qualities(get_mate_qual(observation.read, matequals));
 				if (observation.reverse) std::reverse(quals.begin(), quals.end());
 				hts_pair_pos_t hp = longest_homopolymer(contig.seq.c_str(), contig.seq.length());
@@ -210,7 +223,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 					recalibrate_hp_3p_tail_qualities(observations, hp_len, contig.seq[hp.beg], hp_tail_quality_model, quality_cache);
 					quals = std::move(observations[0].quals);
 				}
-			} else quals = decode_qualities(*observation.clip_qual);
+			}
 			add_read_votes(contig, quals.empty() ? nullptr : quals.data());
 			read_contigs.push_back(std::move(contig));
 			path_permissions.push_back(input.permissions);

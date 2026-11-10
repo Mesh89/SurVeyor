@@ -82,7 +82,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
                    std::ostream& failed_no_seq, std::ostream& failed_cycle, std::ostream& failed_too_many_reads) {
 
 	const int TOO_MANY_READS = stats.get_max_depth(contig_map.get_name(contig_id)) * stats.max_is / stats.read_len;
-	if (l_cluster->cluster->count + r_cluster->cluster->count + l_cluster->semi_mapped_reads.size() + r_cluster->semi_mapped_reads.size() > TOO_MANY_READS) return false;
+	if (count_assembly_reads(r_cluster, l_cluster) > TOO_MANY_READS) return false;
 
     std::vector<region_t> regions;
 
@@ -285,12 +285,35 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 
 	std::vector<bam1_t*> l_semi_mapped_pairs, r_semi_mapped_pairs;
 	std::vector<bam1_t*> l_junction_mates, r_junction_mates;
+	std::multimap<hts_pos_t, std::shared_ptr<consensus_t>> lc_consensuses, rc_consensuses;
+	std::unordered_set<consensus_t*> seen_consensuses;
+	for (auto* clusters : {&r_clusters, &l_clusters}) {
+		for (auto cluster : *clusters) {
+			auto consensus = cluster->clip_consensus;
+			if (!consensus || !seen_consensuses.insert(consensus.get()).second) continue;
+			if (consensus->left_clipped) lc_consensuses.emplace(consensus->breakpoint, consensus);
+			else rc_consensuses.emplace(consensus->breakpoint, consensus);
+		}
+	}
 
 	open_samFile_t* clipped_file = new open_samFile_t(clipped_fname.c_str());
 	std::string contig_name = contig_map.get_name(contig_id);
 	hts_itr_t* iter = sam_itr_querys(clipped_file->idx, clipped_file->header, contig_name.c_str());
 	bam1_t* read = bam_init1();
 	while (sam_itr_next(clipped_file->file, iter, read) >= 0) {
+		if (is_left_clipped(read, config.min_clip_len)) {
+			auto end = lc_consensuses.upper_bound(read->core.pos+5);
+			for (auto it = lc_consensuses.lower_bound(read->core.pos-5); it != end; ++it) {
+				it->second->clipped_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+			}
+		}
+		if (is_right_clipped(read, config.min_clip_len)) {
+			hts_pos_t endpos = bam_endpos(read);
+			auto end = rc_consensuses.upper_bound(endpos+5);
+			for (auto it = rc_consensuses.lower_bound(endpos-5); it != end; ++it) {
+				it->second->clipped_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
+			}
+		}
 		if (is_semi_mapped(read) && get_sequence(read).find("N") == std::string::npos) {
             if (read->core.flag & BAM_FMREVERSE) {
 				l_semi_mapped_pairs.push_back(bam_dup1(read));
@@ -328,8 +351,10 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 			bam1_t* r = i.value;
 			if (!used_sm_reads.count(r)) {
 				size_t size_before = rc->semi_mapped_reads.size();
-				rc->add_semi_mapped_reads(bam_dup1(r));
+				bam1_t* copy = bam_dup1(r);
+				rc->add_semi_mapped_reads(copy);
 				if (rc->semi_mapped_reads.size() > size_before) used_sm_reads.insert(r);
+				else bam_destroy1(copy);
 			}
 		}
 	}
@@ -341,8 +366,10 @@ void add_semi_mapped_pairs(std::string clipped_fname, int contig_id, std::vector
 			bam1_t* r = i.value;
 			if (!used_sm_reads.count(r)) {
 				size_t size_before = rc->semi_mapped_reads.size();
-				rc->add_semi_mapped_reads(bam_dup1(r));
+				bam1_t* copy = bam_dup1(r);
+				rc->add_semi_mapped_reads(copy);
 				if (rc->semi_mapped_reads.size() > size_before) used_sm_reads.insert(r);
+				else bam_destroy1(copy);
 			}
 		}
 	}

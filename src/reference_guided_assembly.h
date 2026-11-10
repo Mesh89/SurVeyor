@@ -374,73 +374,91 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 
 	// Build raw base-voting and recalibrated trimming evidence for the same inputs.
 	// Each quality stream follows its sequence's assembly orientation, so HP 3' tails
-	// stay on the correct end; clip consensuses keep their builder qualities.
+	// stay on the correct end.
 	std::vector<std::string> seqs_lf, seqs_is, seqs_rf;
 	std::vector<const uint8_t*> quals_lf, quals_is, quals_rf;
 	std::vector<const uint8_t*> trim_quals_lf, trim_quals_is, trim_quals_rf;
 	std::vector<std::vector<uint8_t>> quals_storage;
 	std::vector<std::vector<uint8_t>> trim_quals_storage;
-	size_t n_inputs = 2*(r_cluster->cluster->reads.size()+l_cluster->cluster->reads.size())+r_cluster->semi_mapped_reads.size()+l_cluster->semi_mapped_reads.size()+2;
+	size_t n_inputs = count_assembly_reads(r_cluster, l_cluster);
 	quals_storage.reserve(n_inputs);
 	trim_quals_storage.reserve(n_inputs);
 	hp_tail_quality_table_t quality_cache;
+	assembly_read_filter_t read_filter(r_cluster, l_cluster);
 	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
-		std::string read_seq = get_sequence(read.get());
-		seqs_lf.push_back(read_seq);
-		quals_storage.push_back(get_qual(read.get()));
-		quals_lf.push_back(quals_storage.back().data());
-		trim_quals_storage.push_back(recalibrate_clip_read_qualities(read.get(), config, hp_tail_quality_model, quality_cache));
-		trim_quals_lf.push_back(trim_quals_storage.back().data());
-		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
-		quals_storage.push_back(decode_qualities(get_mate_qual(read.get(), matequals)));
-		rc(mate_seq);
-		std::reverse(quals_storage.back().begin(), quals_storage.back().end());
-		seqs_is.push_back(mate_seq);
-		quals_is.push_back(quals_storage.back().data());
-		trim_quals_storage.push_back(quals_storage.back());
-		hts_pair_pos_t hp = longest_homopolymer(mate_seq.c_str(), mate_seq.length());
-		int hp_len = hp.end-hp.beg;
-		if (!trim_quals_storage.back().empty() && hp_len >= MIN_REF_HP_LEN) {
-			std::vector<hp_read_observation_t> observations{{mate_seq, std::move(trim_quals_storage.back()), int(hp.beg), true, 0.0, int(mate_seq.length()-hp.end)}};
-			recalibrate_hp_3p_tail_qualities(observations, hp_len, mate_seq[hp.beg], hp_tail_quality_model, quality_cache);
-			trim_quals_storage.back() = std::move(observations[0].quals);
+		if (read_filter.add_read(read.get())) {
+			std::string read_seq = get_sequence(read.get());
+			seqs_lf.push_back(read_seq);
+			quals_storage.push_back(get_qual(read.get()));
+			quals_lf.push_back(quals_storage.back().data());
+			trim_quals_storage.push_back(recalibrate_clip_read_qualities(read.get(), config, hp_tail_quality_model, quality_cache));
+			trim_quals_lf.push_back(trim_quals_storage.back().data());
 		}
-		trim_quals_is.push_back(trim_quals_storage.back().data());
+		if (read_filter.add_mate(read.get())) {
+			std::string mate_seq = get_mate_seq(read.get(), mateseqs);
+			quals_storage.push_back(decode_qualities(get_mate_qual(read.get(), matequals)));
+			rc(mate_seq);
+			std::reverse(quals_storage.back().begin(), quals_storage.back().end());
+			seqs_is.push_back(mate_seq);
+			quals_is.push_back(quals_storage.back().data());
+			trim_quals_storage.push_back(quals_storage.back());
+			hts_pair_pos_t hp = longest_homopolymer(mate_seq.c_str(), mate_seq.length());
+			int hp_len = hp.end-hp.beg;
+			if (!trim_quals_storage.back().empty() && hp_len >= MIN_REF_HP_LEN) {
+				std::vector<hp_read_observation_t> observations{{mate_seq, std::move(trim_quals_storage.back()), int(hp.beg), true, 0.0, int(mate_seq.length()-hp.end)}};
+				recalibrate_hp_3p_tail_qualities(observations, hp_len, mate_seq[hp.beg], hp_tail_quality_model, quality_cache);
+				trim_quals_storage.back() = std::move(observations[0].quals);
+			}
+			trim_quals_is.push_back(trim_quals_storage.back().data());
+		}
 	}
 	for (std::shared_ptr<bam1_t> read : l_cluster->cluster->reads) {
-		std::string read_seq = get_sequence(read.get());
-		seqs_rf.push_back(read_seq);
-		quals_storage.push_back(get_qual(read.get()));
-		quals_rf.push_back(quals_storage.back().data());
-		trim_quals_storage.push_back(recalibrate_clip_read_qualities(read.get(), config, hp_tail_quality_model, quality_cache));
-		trim_quals_rf.push_back(trim_quals_storage.back().data());
-		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
-		quals_storage.push_back(decode_qualities(get_mate_qual(read.get(), matequals)));
-		seqs_is.push_back(mate_seq);
-		quals_is.push_back(quals_storage.back().data());
-		trim_quals_storage.push_back(quals_storage.back());
-		hts_pair_pos_t hp = longest_homopolymer(mate_seq.c_str(), mate_seq.length());
-		int hp_len = hp.end-hp.beg;
-		if (!trim_quals_storage.back().empty() && hp_len >= MIN_REF_HP_LEN) {
-			std::vector<hp_read_observation_t> observations{{mate_seq, std::move(trim_quals_storage.back()), int(hp.beg), false, 0.0, int(mate_seq.length()-hp.end)}};
-			recalibrate_hp_3p_tail_qualities(observations, hp_len, mate_seq[hp.beg], hp_tail_quality_model, quality_cache);
-			trim_quals_storage.back() = std::move(observations[0].quals);
+		if (read_filter.add_read(read.get())) {
+			std::string read_seq = get_sequence(read.get());
+			seqs_rf.push_back(read_seq);
+			quals_storage.push_back(get_qual(read.get()));
+			quals_rf.push_back(quals_storage.back().data());
+			trim_quals_storage.push_back(recalibrate_clip_read_qualities(read.get(), config, hp_tail_quality_model, quality_cache));
+			trim_quals_rf.push_back(trim_quals_storage.back().data());
 		}
-		trim_quals_is.push_back(trim_quals_storage.back().data());
+		if (read_filter.add_mate(read.get())) {
+			std::string mate_seq = get_mate_seq(read.get(), mateseqs);
+			quals_storage.push_back(decode_qualities(get_mate_qual(read.get(), matequals)));
+			seqs_is.push_back(mate_seq);
+			quals_is.push_back(quals_storage.back().data());
+			trim_quals_storage.push_back(quals_storage.back());
+			hts_pair_pos_t hp = longest_homopolymer(mate_seq.c_str(), mate_seq.length());
+			int hp_len = hp.end-hp.beg;
+			if (!trim_quals_storage.back().empty() && hp_len >= MIN_REF_HP_LEN) {
+				std::vector<hp_read_observation_t> observations{{mate_seq, std::move(trim_quals_storage.back()), int(hp.beg), false, 0.0, int(mate_seq.length()-hp.end)}};
+				recalibrate_hp_3p_tail_qualities(observations, hp_len, mate_seq[hp.beg], hp_tail_quality_model, quality_cache);
+				trim_quals_storage.back() = std::move(observations[0].quals);
+			}
+			trim_quals_is.push_back(trim_quals_storage.back().data());
+		}
 	}
 	if (r_cluster->clip_consensus) {
-		seqs_lf.push_back(r_cluster->clip_consensus->sequence);
-		quals_storage.push_back(decode_qualities(r_cluster->clip_consensus->qual));
-		quals_lf.push_back(quals_storage.back().data());
-		trim_quals_lf.push_back(quals_storage.back().data());
+		for (std::shared_ptr<bam1_t> read : r_cluster->clip_consensus->clipped_reads) {
+			if (!read_filter.add_read(read.get(), true)) continue;
+			seqs_lf.push_back(get_sequence(read.get()));
+			quals_storage.push_back(get_qual(read.get()));
+			quals_lf.push_back(quals_storage.back().data());
+			trim_quals_storage.push_back(recalibrate_clip_read_qualities(read.get(), config, hp_tail_quality_model, quality_cache));
+			trim_quals_lf.push_back(trim_quals_storage.back().data());
+		}
 	}
 	if (l_cluster->clip_consensus) {
-		seqs_rf.push_back(l_cluster->clip_consensus->sequence);
-		quals_storage.push_back(decode_qualities(l_cluster->clip_consensus->qual));
-		quals_rf.push_back(quals_storage.back().data());
-		trim_quals_rf.push_back(quals_storage.back().data());
+		for (std::shared_ptr<bam1_t> read : l_cluster->clip_consensus->clipped_reads) {
+			if (!read_filter.add_read(read.get(), true)) continue;
+			seqs_rf.push_back(get_sequence(read.get()));
+			quals_storage.push_back(get_qual(read.get()));
+			quals_rf.push_back(quals_storage.back().data());
+			trim_quals_storage.push_back(recalibrate_clip_read_qualities(read.get(), config, hp_tail_quality_model, quality_cache));
+			trim_quals_rf.push_back(trim_quals_storage.back().data());
+		}
 	}
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
+		if (!read_filter.add_read(read)) continue;
 		std::string read_seq = get_sequence(read, true);
 		rc(read_seq);
 		quals_storage.push_back(get_qual(read, true));
@@ -452,6 +470,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		trim_quals_is.push_back(trim_quals_storage.back().data());
 	}
 	for (bam1_t* read : l_cluster->semi_mapped_reads) {
+		if (!read_filter.add_read(read)) continue;
 		std::string read_seq = get_sequence(read, true);
 		quals_storage.push_back(get_qual(read, true));
 		seqs_is.push_back(read_seq);
@@ -472,15 +491,27 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 void reestimate_junction_homopolymers(std::string& junction, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
 		std::unordered_map<std::string, std::string>& mateseqs, std::vector<hts_pair_pos_t>& assembled_contig_intervals) {
 	std::vector<std::pair<std::string, bool>> voters; // Sequence and whether its 3' end is on the left.
+	assembly_read_filter_t read_filter(r_cluster, l_cluster);
 	for (auto cluster : {r_cluster, l_cluster}) {
 		bool right_cluster = cluster == r_cluster;
-		for (const auto& read : cluster->cluster->reads) {
-			voters.push_back({get_sequence(read.get()), bam_is_rev(read.get()) != 0});
-			std::string mate = get_mate_seq(read.get(), mateseqs);
-			if (right_cluster) rc(mate);
-			voters.push_back({std::move(mate), right_cluster});
+		if (cluster->clip_consensus) {
+			for (auto read : cluster->clip_consensus->clipped_reads) {
+				if (read_filter.add_read(read.get(), true)) voters.push_back({get_sequence(read.get()), bam_is_rev(read.get()) != 0});
+			}
 		}
+		for (const auto& read : cluster->cluster->reads) {
+			if (read_filter.add_read(read.get())) voters.push_back({get_sequence(read.get()), bam_is_rev(read.get()) != 0});
+			if (read_filter.add_mate(read.get())) {
+				std::string mate = get_mate_seq(read.get(), mateseqs);
+				if (right_cluster) rc(mate);
+				voters.push_back({std::move(mate), right_cluster});
+			}
+		}
+	}
+	for (auto cluster : {r_cluster, l_cluster}) {
+		bool right_cluster = cluster == r_cluster;
 		for (bam1_t* read : cluster->semi_mapped_reads) {
+			if (!read_filter.add_read(read)) continue;
 			std::string seq = get_sequence(read, true);
 			if (right_cluster) rc(seq);
 			voters.push_back({std::move(seq), right_cluster});

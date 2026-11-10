@@ -46,6 +46,12 @@ bool is_first_read(bam1_t* r) {
     return r->core.flag & BAM_FREAD1;
 }
 
+std::pair<std::string, int> get_read_key(bam1_t* read, bool mate = false) {
+    int end = read->core.flag & (BAM_FREAD1 | BAM_FREAD2);
+    if (mate) end = is_first_read(read) ? BAM_FREAD2 : BAM_FREAD1;
+    return {bam_get_qname(read), end};
+}
+
 std::string get_mate_lookup_qname(bam1_t* read) {
     std::string qname = bam_get_qname(read);
     if (is_samechr(read)) {
