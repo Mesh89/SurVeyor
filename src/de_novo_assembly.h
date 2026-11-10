@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <htslib/sam.h>
 
@@ -15,6 +16,7 @@
 #include "types.h"
 #include "dc_remapper.h"
 #include "hp_mismatch_rate_thresholds.h"
+#include "read_correction.h"
 
 std::mutex failed_assembly_mtx;
 
@@ -138,7 +140,7 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 }
 
 std::vector<std::string> assemble_sequences(std::string contig_name, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
-		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model) {
+		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam) {
 
 	const int TOO_MANY_READS = stats.get_max_depth(contig_name) * stats.max_is / stats.read_len;
 	if (count_assembly_reads(r_cluster, l_cluster) >= TOO_MANY_READS) return {"TOO_MANY_READS"};
@@ -200,6 +202,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 	}
 
 	std::vector<assembly_consensus_t> read_contigs;
+	std::vector<read_correction::correction_input_t> correction_inputs;
 	std::vector<path_permission_t> path_permissions;
 	std::vector<int> order;
 	hp_tail_quality_table_t quality_cache;
@@ -225,11 +228,47 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 				}
 			}
 			add_read_votes(contig, quals.empty() ? nullptr : quals.data());
+			correction_inputs.push_back({contig.seq, quals, !quals.empty()});
 			read_contigs.push_back(std::move(contig));
 			path_permissions.push_back(input.permissions);
 			order.push_back(group_order);
 		}
 		group_order++;
+	}
+	if (std::any_of(correction_inputs.begin(), correction_inputs.end(), [](const read_correction::correction_input_t& input) { return input.target; })) {
+		std::size_t graph_input_count = correction_inputs.size();
+		std::unordered_set<std::string> graph_sequences;
+		for (const read_correction::correction_input_t& input : correction_inputs) graph_sequences.insert(input.seq);
+		hts_pos_t beg = std::max(hts_pos_t(0), std::min(r_cluster->start, l_cluster->start)), end = std::max(r_cluster->end, l_cluster->end);
+		hts_pos_t max_flank = stats.get_max_depth(contig_name) * (end-beg+stats.read_len) / stats.read_len, kept_flank = 0;
+		int tid = bam_name2id(flank_bam->header, contig_name.c_str());
+		hts_itr_t* flank_iter = sam_itr_queryi(flank_bam->idx, tid, beg, end);
+		if (flank_iter) {
+			bam1_t* flank_read = bam_init1();
+			while (sam_itr_next(flank_bam->file, flank_iter, flank_read) >= 0) {
+				if (flank_read->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP | BAM_FQCFAIL)) continue;
+				std::string seq = get_sequence(flank_read);
+				if (graph_sequences.count(seq)) continue;
+				std::string reverse_seq = seq;
+				rc(reverse_seq);
+				if (graph_sequences.count(reverse_seq)) continue;
+				correction_inputs.push_back({std::move(seq), get_qual(flank_read), false});
+				if (++kept_flank > max_flank) {
+					correction_inputs.resize(graph_input_count);
+					break;
+				}
+			}
+			bam_destroy1(flank_read);
+			sam_itr_destroy(flank_iter);
+		}
+		std::vector<read_correction::correction_flip_t> flips = read_correction::correct_reads(correction_inputs);
+		for (const read_correction::correction_flip_t& flip : flips) {
+			const read_correction::correction_input_t& in = correction_inputs[flip.input];
+			int qual = in.quals.size() == in.seq.size() ? in.quals[flip.pos] : read_correction::DEFAULT_QUAL;
+			read_contigs[flip.input].seq[flip.pos] = flip.new_base;
+			read_contigs[flip.input].votes[flip.pos] = base_votes_t();
+			read_contigs[flip.input].votes[flip.pos].add(flip.new_base, qual);
+		}
 	}
 	std::vector<assembly_consensus_t> contigs = assemble_contigs(read_contigs, path_permissions, order, config, stats);
 	for (assembly_consensus_t& contig : contigs) {
@@ -270,9 +309,9 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
 		std::ostream& assembly_failed_no_seq, std::ostream& assembly_failed_cycle_writer, std::ostream& assembly_failed_too_many_reads_writer,
 		StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
-		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model) {
+		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam) {
 
-	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats, hp_tail_quality_model);
+	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats, hp_tail_quality_model, flank_bam);
 
 	std::string ins_full_id = "NO_ID";
 	if (assembled_sequences.empty()) {

@@ -427,7 +427,7 @@ def call_candidate_variants(bam_fname, workdir, reference_fname, sample_name):
     dp_clusterer = SURVEYOR_PATH + "/bin/dp_clusterer %s %s %s %s" % (bam_fname, workdir, reference_fname, sample_name)
     run_cmd(dp_clusterer)
 
-    ins_assembler_cmd = SURVEYOR_PATH + "/bin/insertions_assembler %s %s %s" % (workdir, reference_fname, sample_name)
+    ins_assembler_cmd = SURVEYOR_PATH + "/bin/insertions_assembler %s %s %s %s" % (workdir, reference_fname, sample_name, bam_fname)
     run_cmd(ins_assembler_cmd)
 
     concat_cmd = SURVEYOR_PATH + "/bin/concat_vcf %s/intermediate_results/sr_dp.vcf.gz %s/intermediate_results/assembled_ins.vcf.gz %s/intermediate_results/out.vcf.gz" % (workdir, workdir, workdir)

@@ -7,6 +7,7 @@
 #include <map>
 #include <algorithm>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <unistd.h>
@@ -79,7 +80,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
                    StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& permissive_aligner,
                    StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
                    stats_t& stats, std::vector<std::shared_ptr<sv_t>>& found,
-                   std::ostream& failed_no_seq, std::ostream& failed_cycle, std::ostream& failed_too_many_reads) {
+                   std::ostream& failed_no_seq, std::ostream& failed_cycle, std::ostream& failed_too_many_reads, open_samFile_t* flank_bam) {
 
 	const int TOO_MANY_READS = stats.get_max_depth(contig_map.get_name(contig_id)) * stats.max_is / stats.read_len;
 	if (count_assembly_reads(r_cluster, l_cluster) > TOO_MANY_READS) return false;
@@ -113,7 +114,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     std::string contig_name = contig_map.get_name(contig_id);
     if (regions.empty()) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam);
                 
         if (ins != NULL) {
             found.push_back(ins);
@@ -150,7 +151,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 	int tot_reads = r_cluster->cluster->reads.size() + l_cluster->cluster->reads.size();
 	if (rc_accepted_reads == 0 || lc_accepted_reads == 0 || double(rc_accepted_reads+lc_accepted_reads)/tot_reads < 0.5) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam);
 
 		if (ins != NULL) {
             found.push_back(ins);
@@ -582,7 +583,7 @@ int dfs(int curr_idx, std::vector<std::vector<int> >& dependencies, std::vector<
 
 void find_insertions(int id, int contig_id, int comp_id, std::vector<cc_v_distance_t> cc_v_distances, bam_hdr_t* hdr,
                      std::shared_ptr<std::unordered_map<std::string, std::string>> mateseqs,
-                     std::shared_ptr<std::unordered_map<std::string, std::string>> matequals) {
+                     std::shared_ptr<std::unordered_map<std::string, std::string>> matequals, bam_pool_t& flank_bam_pool) {
 
     if (cc_v_distances.size() < 64) {
         StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
@@ -596,8 +597,8 @@ void find_insertions(int id, int contig_id, int comp_id, std::vector<cc_v_distan
             if (c1->cluster->used || c2->cluster->used) continue;
 
             pair_eval_t eval;
-            spec_thread_pool->push([&](int) {
-                eval.success = find_insertion_from_cluster_pair(c1, c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads);
+            spec_thread_pool->push([&](int id) {
+                eval.success = find_insertion_from_cluster_pair(c1, c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads, flank_bam_pool.get_bam_reader(id));
             }).get();
             commit_pair_eval(eval);
             if (eval.success) {
@@ -618,14 +619,14 @@ void find_insertions(int id, int contig_id, int comp_id, std::vector<cc_v_distan
                 evals[i].reset(new pair_eval_t());
                 // Reserve the queue entry before submitting so every task is tracked if allocation fails.
                 in_flight.emplace_back(i, std::future<void>());
-                in_flight.back().second = spec_thread_pool->push([&, i](int) {
+                in_flight.back().second = spec_thread_pool->push([&, i](int id) {
                     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
                     StripedSmithWaterman::Aligner permissive_aligner(2, 2, 4, 1, false);
                     StripedSmithWaterman::Aligner aligner_to_base(1, 4, 6, 1, true);
                     StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, true);
                     pair_eval_t& eval = *evals[i];
                     cc_v_distance_t& cc_v_distance = cc_v_distances[i];
-                    eval.success = find_insertion_from_cluster_pair(cc_v_distance.c1, cc_v_distance.c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads);
+                    eval.success = find_insertion_from_cluster_pair(cc_v_distance.c1, cc_v_distance.c2, contig_id, hdr, *mateseqs.get(), *matequals.get(), aligner, permissive_aligner, aligner_to_base, harsh_aligner, stats, eval.found, eval.failed_no_seq, eval.failed_cycle, eval.failed_too_many_reads, flank_bam_pool.get_bam_reader(id));
                 });
             }
         };
@@ -661,7 +662,7 @@ void find_insertions(int id, int contig_id, int comp_id, std::vector<cc_v_distan
     }
 }
 
-void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::vector<std::future<void> >& futures) {
+void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::vector<std::future<void> >& futures, bam_pool_t& flank_bam_pool) {
 
     std::string r_dc_fname = workdir + "/workspace/fwd-stable/" + std::to_string(contig_id) + ".noremap.bam";
     std::string l_dc_fname = workdir + "/workspace/rev-stable/" + std::to_string(contig_id) + ".noremap.bam";
@@ -838,7 +839,7 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
         curr_batch.insert(curr_batch.end(), cc_v_distances_component.begin(), cc_v_distances_component.end());
         if (curr_batch.size() > MIN_COMP_SIZE || comp_id == cc_v_distances_components.size()-1) {
             std::future<void> future = thread_pool.push(find_insertions, contig_id, comp_id, curr_batch, header,
-                mateseqs, matequals);
+                mateseqs, matequals, std::ref(flank_bam_pool));
             futures.push_back(std::move(future));
             batches.push_back(std::vector<cc_v_distance_t>());
         }
@@ -850,10 +851,13 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
 
 int main(int argc, char* argv[]) {
 
+    if (argc != 5) throw std::runtime_error("Usage: insertions_assembler <workdir> <reference> <sample> <bam>");
+
     workdir = std::string(argv[1]);
     std::string workspace = workdir + "/workspace";
     std::string reference_fname  = argv[2];
     std::string sample_name  = argv[3];
+    std::string bam_fname = argv[4];
 
     std::string full_cmd_fname = workdir + "/cmd.txt";
     std::ifstream full_cmd_fin(full_cmd_fname);
@@ -871,12 +875,15 @@ int main(int argc, char* argv[]) {
     assembly_failed_cycle_writer.open(workdir + "/intermediate_results/assembly_failed.w_cycle.sv");
     assembly_failed_too_many_reads_writer.open(workdir + "/intermediate_results/assembly_failed.too_many_reads.sv");
 
+    bam_pool_t flank_bam_pool(config.threads, bam_fname, reference_fname);
+    for (open_samFile_t* reader : flank_bam_pool.pool) hts_set_cache_size(reader->file, config.bam_reader_cache_size);
+
     spec_thread_pool = new ctpl::thread_pool(config.threads);
     ctpl::thread_pool thread_pool(config.threads);
     std::vector<std::future<void> > futures;
 
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
-        find_contig_insertions(contig_id, thread_pool, futures);
+        find_contig_insertions(contig_id, thread_pool, futures, flank_bam_pool);
     }
     thread_pool.stop(true);
     for (int i = 0; i < futures.size(); i++) {
