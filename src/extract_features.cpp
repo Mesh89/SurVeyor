@@ -703,11 +703,15 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
         std::string key = std::to_string((int)std::min<double>(max_is, svinslen));
         min_disc_pairs = stats.at("min_disc_pairs_by_insertion_size").at(key); max_disc_pairs = stats.at("max_disc_pairs_by_insertion_size").at(key);
     } else min_disc_pairs = min_pairs_crossing_point, max_disc_pairs = max_pairs_crossing_point;
+    double min_ref_pairs = min_disc_pairs, max_ref_pairs = max_disc_pairs;
     double min_neutral_pairs = min_disc_pairs, max_neutral_pairs = max_disc_pairs;
     if (svtype == "DEL") {
         double deletion_len = std::abs(get_main_svlen(hdr, record));
         std::string key = std::to_string((int)std::min<double>(max_is, std::max(0.0, get_stat(stats, "min_is", ".")+deletion_len)));
         min_neutral_pairs = stats.at("min_pairs_crossing_gap").at(key); max_neutral_pairs = stats.at("max_pairs_crossing_gap").at(key);
+        // Convert the strict RSP insert-size cutoff to an inclusive prefix bound.
+        key = std::to_string((int)std::min<double>(max_is, std::max(0.0, get_stat(stats, "min_is", ".")+deletion_len-1)));
+        min_ref_pairs = stats.at("min_pairs_crossing_isize_leq").at(key); max_ref_pairs = stats.at("max_pairs_crossing_isize_leq").at(key);
     } else if (svtype == "INS") {
         double insertion_len = get_main_svlen(hdr, record);
         std::string key = std::to_string((int)std::min<double>(max_is, std::max(0.0, max_is-insertion_len)));
@@ -719,8 +723,8 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     double nsp1, nsp1nma1, nsp1nma2, nsp1nms1, nsp1nms2, nsp2, nsp2nma1, nsp2nma2, nsp2nms1, nsp2nms2;
     add_read_pair_features(features, hdr, record, "ASP1", min_disc_pairs, max_disc_pairs, asp1, asp1nma1, asp1nma2, asp1nms1, asp1nms2);
     add_read_pair_features(features, hdr, record, "ASP2", min_disc_pairs, max_disc_pairs, asp2, asp2nma1, asp2nma2, asp2nms1, asp2nms2);
-    add_read_pair_features(features, hdr, record, "RSP1", min_disc_pairs, max_disc_pairs, rsp1, rsp1nma1, rsp1nma2, rsp1nms1, rsp1nms2);
-    add_read_pair_features(features, hdr, record, "RSP2", min_disc_pairs, max_disc_pairs, rsp2, rsp2nma1, rsp2nma2, rsp2nms1, rsp2nms2);
+    add_read_pair_features(features, hdr, record, "RSP1", min_ref_pairs, max_ref_pairs, rsp1, rsp1nma1, rsp1nma2, rsp1nms1, rsp1nms2);
+    add_read_pair_features(features, hdr, record, "RSP2", min_ref_pairs, max_ref_pairs, rsp2, rsp2nma1, rsp2nma2, rsp2nms1, rsp2nms2);
     add_read_pair_features(features, hdr, record, "NSP1", min_neutral_pairs, max_neutral_pairs, nsp1, nsp1nma1, nsp1nma2, nsp1nms1, nsp1nms2);
     add_read_pair_features(features, hdr, record, "NSP2", min_neutral_pairs, max_neutral_pairs, nsp2, nsp2nma1, nsp2nma2, nsp2nms1, nsp2nms2);
     features["ASP1_ASP2_RATIO"] = std::max(asp1, asp2)/std::max(1.0, asp1+asp2);
