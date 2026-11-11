@@ -353,6 +353,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* hp_run_s_tag = "##FORMAT=<ID=HPRS,Number=1,Type=Float,Description=\"Run-level diploid stutter score of this homopolymer allele: best log-likelihood of the run read-length histogram over genotypes containing the allele minus over genotypes without it, under the library stutter profile.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_run_s_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "HPRSN");
+	const char* hp_run_s_norm_tag = "##FORMAT=<ID=HPRSN,Number=1,Type=Float,Description=\"HPRS divided by the HPRS a heterozygous genotype of the reference run and this allele would give with the run's read count under the library stutter profile.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_run_s_norm_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "HPAS");
 	const char* hp_stutter_alpha_tag = "##FORMAT=<ID=HPAS,Number=1,Type=Float,Description=\"Stutter-correction factor applied to this homopolymer record's ALT-support read counts (NNLS deconvolution of the run read-length histogram with the library stutter profile).\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_stutter_alpha_tag, &len));

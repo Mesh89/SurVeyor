@@ -243,7 +243,8 @@ inline double hp_stutter_alpha(const hp_stutter_profile_t& profile, char b, cons
 
 // Return the best diploid log-likelihood among genotypes containing x minus the best gt excluding x, over candidate lengths T.
 // Use histogram h and raw profile probabilities for HP base b; clamp to +/-1e4, or return 1e4 if no pair excludes x.
-inline double hp_stutter_run_score(const hp_stutter_profile_t& profile, char b, const std::map<int,int>& h, const std::vector<int>& T, int x) {
+template<typename C = int>
+inline double hp_stutter_run_score(const hp_stutter_profile_t& profile, char b, const std::map<int,C>& h, const std::vector<int>& T, int x) {
     double best_with = -std::numeric_limits<double>::infinity();
     double best_without = -std::numeric_limits<double>::infinity();
     for (size_t i = 0; i < T.size(); i++) {
@@ -258,6 +259,13 @@ inline double hp_stutter_run_score(const hp_stutter_profile_t& profile, char b, 
     }
     if (best_without == -std::numeric_limits<double>::infinity()) return 1e4;
     return std::max(-1e4, std::min(1e4, best_with - best_without));
+}
+
+// Return the run score expected for n reads from a heterozygous (R, x) genotype over allele lengths G.
+inline double hp_stutter_expected_run_score(const hp_stutter_profile_t& profile, char b, int R, const std::vector<int>& G, int x, double n) {
+    std::map<int,double> e;
+    for (int o = std::max(0, G.front() - 3); o <= G.back() + 3; o++) e[o] = n * (0.5 * profile.K(o, R, b) + 0.5 * profile.K(o, x, b));
+    return hp_stutter_run_score(profile, b, e, G, x);
 }
 
 #endif

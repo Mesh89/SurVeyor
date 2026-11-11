@@ -264,7 +264,7 @@ bool genotype_when_reassigning_evidence(const sv_t* sv) {
     return config.training_mode || sv->sample_info.epr >= MIN_EPR;
 }
 
-// Write only hp_stutter_alpha and hp_run_s for the run groups in runs.
+// Write only hp_stutter_alpha, hp_run_s and hp_run_s_norm for the run groups in runs.
 // id selects a reader from bam_pool; contig_name/contig_seq/contig_len identify the reference.
 // profile supplies stutter rates; reassign_evidence skips groups with no records selected for pass 2.
 void annotate_hp_stutter(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::vector<const hp_stutter_run_t*> runs, const hp_stutter_profile_t* profile, bam_pool_t* bam_pool, bool reassign_evidence) {
@@ -282,9 +282,13 @@ void annotate_hp_stutter(int id, std::string contig_name, char* contig_seq, hts_
         }
         std::map<int,int> h = measure_hp_run_length_histogram(bam_file, contig_name, run->range.beg, run->range.end, run->base, contig_seq, contig_len, config, stats);
         if (h.empty()) continue;
+        int R = run->range.end - run->range.beg;
+        double n = 0;
+        for (const auto& observation : h) n += observation.second;
         std::vector<int> T = candidate_true_lengths(h, run->allele_lengths);
         for (const auto& record : run->records) {
             record.first->hp_run_s = hp_stutter_run_score(*profile, run->base, h, T, record.second);
+            record.first->hp_run_s_norm = record.first->hp_run_s / std::max(hp_stutter_expected_run_score(*profile, run->base, R, run->allele_lengths, record.second, n), 1e-3);
             record.first->hp_stutter_alpha = hp_stutter_alpha(*profile, run->base, h, run->allele_lengths, record.second);
         }
     }
@@ -448,6 +452,10 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
         float hprs = sv->hp_run_s;
         bcf_update_format_float(out_hdr, sv->vcf_entry, "HPRS", &hprs, 1);
     } else bcf_update_format_float(out_hdr, sv->vcf_entry, "HPRS", NULL, 0);
+    if (!std::isnan(sv->hp_run_s_norm)) {
+        float hprsn = sv->hp_run_s_norm;
+        bcf_update_format_float(out_hdr, sv->vcf_entry, "HPRSN", &hprsn, 1);
+    } else bcf_update_format_float(out_hdr, sv->vcf_entry, "HPRSN", NULL, 0);
     if (!std::isnan(sv->hp_stutter_alpha)) {
         float hpas = sv->hp_stutter_alpha;
         bcf_update_format_float(out_hdr, sv->vcf_entry, "HPAS", &hpas, 1);
