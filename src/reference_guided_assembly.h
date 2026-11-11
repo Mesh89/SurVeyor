@@ -567,6 +567,63 @@ void reestimate_junction_homopolymers(std::string& junction, std::shared_ptr<ins
 	junction = std::move(corrected);
 }
 
+void remap_reference_guided_junction(const std::string& junction_seq, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
+		remap_side_t& rc_remap_side, remap_side_t& lc_remap_side, std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
+		StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config, stats_t& stats) {
+	StripedSmithWaterman::Alignment aln;
+	StripedSmithWaterman::Filter filter;
+	rc_remap_side.read_remap_infos.clear();
+	rc_remap_side.stable_read_spans.clear();
+	rc_remap_side.clip_remap_info.reset();
+	for (int i = 0; i < r_cluster->cluster->reads.size(); i++) {
+		std::shared_ptr<bam1_t> read = r_cluster->cluster->reads[i];
+		std::string read_seq = get_sequence(read.get());
+		std::string read_qual = get_qual_ascii(read.get());
+		std::string mateseq = get_mate_seq(read.get(), mateseqs);
+		std::string matequal = get_mate_qual(read.get(), matequals);
+		rc(mateseq);
+		matequal = std::string(matequal.rbegin(), matequal.rend());
+		
+		aligner.Align(read_seq.c_str(), junction_seq.c_str(), junction_seq.length(), filter, &aln, 0);
+		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error, read_qual, stats.min_avg_base_qual);
+		std::pair<int, int> stable_span{aln.ref_begin, aln.ref_end};
+		aligner.Align(mateseq.c_str(), junction_seq.c_str(), junction_seq.length(), filter, &aln, 0);
+		accepted &= accept(aln, config.min_clip_len, config.max_seq_error, matequal, stats.min_avg_base_qual);
+		rc_remap_side.read_remap_infos.push_back(remap_info_t(aln, accepted, config.min_clip_len));
+		if (accepted) rc_remap_side.stable_read_spans.push_back(stable_span);
+	}
+	if (r_cluster->clip_consensus) {
+		harsh_aligner.Align(r_cluster->clip_consensus->sequence.c_str(), junction_seq.c_str(), junction_seq.length(), filter, &aln, 0);
+		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error);
+		rc_remap_side.clip_remap_info.reset(new remap_info_t(aln, accepted, config.min_clip_len));
+	}
+
+	lc_remap_side.read_remap_infos.clear();
+	lc_remap_side.stable_read_spans.clear();
+	lc_remap_side.clip_remap_info.reset();
+	for (int i = 0; i < l_cluster->cluster->reads.size(); i++) {
+		std::shared_ptr<bam1_t> read = l_cluster->cluster->reads[i];
+		std::string read_seq = get_sequence(read.get());
+		std::string read_qual = get_qual_ascii(read.get());
+		std::string mateseq = get_mate_seq(read.get(), mateseqs);
+		std::string matequal = get_mate_qual(read.get(), matequals);
+
+		aligner.Align(read_seq.c_str(), junction_seq.c_str(), junction_seq.length(), filter, &aln, 0);
+		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error, read_qual, stats.min_avg_base_qual);
+		std::pair<int, int> stable_span{aln.ref_begin, aln.ref_end};
+		aligner.Align(mateseq.c_str(), junction_seq.c_str(), junction_seq.length(), filter, &aln, 0);
+		accepted &= accept(aln, config.min_clip_len, config.max_seq_error, matequal, stats.min_avg_base_qual);
+		lc_remap_side.read_remap_infos.push_back(remap_info_t(aln, accepted, config.min_clip_len));
+		if (accepted) lc_remap_side.stable_read_spans.push_back(stable_span);
+	}
+	if (l_cluster->clip_consensus) {
+		harsh_aligner.Align(l_cluster->clip_consensus->sequence.c_str(), junction_seq.c_str(), junction_seq.length(), filter, &aln, 0);
+		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error);
+		lc_remap_side.clip_remap_info.reset(new remap_info_t(aln, accepted, config.min_clip_len));
+	}
+
+}
+
 std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t& contigs, contig_map_t& contig_map, 
 			std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster, 
 	        remap_side_t& rc_remap_side, remap_side_t& lc_remap_side, region_t& best_region, bool is_rc, 
@@ -691,57 +748,7 @@ std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t
 	// Resolve HP-length errors in the completed junction before recomputing read placements.
 	reestimate_junction_homopolymers(corrected_junction_seq, r_cluster, l_cluster, mateseqs, assembled_contig_intervals);
 
-	StripedSmithWaterman::Alignment aln;
-	StripedSmithWaterman::Filter filter;
-	rc_remap_side.read_remap_infos.clear();
-	rc_remap_side.stable_read_spans.clear();
-	rc_remap_side.clip_remap_info.reset();
-	for (int i = 0; i < r_cluster->cluster->reads.size(); i++) {
-		std::shared_ptr<bam1_t> read = r_cluster->cluster->reads[i];
-		std::string read_seq = get_sequence(read.get());
-		std::string read_qual = get_qual_ascii(read.get());
-		std::string mateseq = get_mate_seq(read.get(), mateseqs);
-		std::string matequal = get_mate_qual(read.get(), matequals);
-		rc(mateseq);
-		matequal = std::string(matequal.rbegin(), matequal.rend());
-		
-		aligner.Align(read_seq.c_str(), corrected_junction_seq.c_str(), corrected_junction_seq.length(), filter, &aln, 0);
-		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error, read_qual, stats.min_avg_base_qual);
-		std::pair<int, int> stable_span{aln.ref_begin, aln.ref_end};
-		aligner.Align(mateseq.c_str(), corrected_junction_seq.c_str(), corrected_junction_seq.length(), filter, &aln, 0);
-		accepted &= accept(aln, config.min_clip_len, config.max_seq_error, matequal, stats.min_avg_base_qual);
-		rc_remap_side.read_remap_infos.push_back(remap_info_t(aln, accepted, config.min_clip_len));
-		if (accepted) rc_remap_side.stable_read_spans.push_back(stable_span);
-	}
-	if (r_cluster->clip_consensus) {
-		harsh_aligner.Align(r_cluster->clip_consensus->sequence.c_str(), corrected_junction_seq.c_str(), corrected_junction_seq.length(), filter, &aln, 0);
-		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error);
-		rc_remap_side.clip_remap_info.reset(new remap_info_t(aln, accepted, config.min_clip_len));
-	}
-
-	lc_remap_side.read_remap_infos.clear();
-	lc_remap_side.stable_read_spans.clear();
-	lc_remap_side.clip_remap_info.reset();
-	for (int i = 0; i < l_cluster->cluster->reads.size(); i++) {
-		std::shared_ptr<bam1_t> read = l_cluster->cluster->reads[i];
-		std::string read_seq = get_sequence(read.get());
-		std::string read_qual = get_qual_ascii(read.get());
-		std::string mateseq = get_mate_seq(read.get(), mateseqs);
-		std::string matequal = get_mate_qual(read.get(), matequals);
-
-		aligner.Align(read_seq.c_str(), corrected_junction_seq.c_str(), corrected_junction_seq.length(), filter, &aln, 0);
-		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error, read_qual, stats.min_avg_base_qual);
-		std::pair<int, int> stable_span{aln.ref_begin, aln.ref_end};
-		aligner.Align(mateseq.c_str(), corrected_junction_seq.c_str(), corrected_junction_seq.length(), filter, &aln, 0);
-		accepted &= accept(aln, config.min_clip_len, config.max_seq_error, matequal, stats.min_avg_base_qual);
-		lc_remap_side.read_remap_infos.push_back(remap_info_t(aln, accepted, config.min_clip_len));
-		if (accepted) lc_remap_side.stable_read_spans.push_back(stable_span);
-	}
-	if (l_cluster->clip_consensus) {
-		harsh_aligner.Align(l_cluster->clip_consensus->sequence.c_str(), corrected_junction_seq.c_str(), corrected_junction_seq.length(), filter, &aln, 0);
-		bool accepted = accept(aln, config.min_clip_len, config.max_seq_error);
-		lc_remap_side.clip_remap_info.reset(new remap_info_t(aln, accepted, config.min_clip_len));
-	}
+	remap_reference_guided_junction(corrected_junction_seq, r_cluster, l_cluster, rc_remap_side, lc_remap_side, mateseqs, matequals, aligner, harsh_aligner, config, stats);
 
 	return corrected_junction_seq;
 }
@@ -761,10 +768,10 @@ void update_read(bam1_t* read, region_t& chosen_region, remap_info_t& remap_info
     bam_aux_append(read, "MS", 'i', 4, (const uint8_t*) &remap_info.score);
 }
 
-std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::string& junction_seq,
+std::shared_ptr<insertion_t> detect_reference_guided_insertion_from_junction(std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::string& junction_seq,
 			std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster, 
 			remap_side_t& ro_remap_side, remap_side_t& lo_remap_side,
-			region_t& best_region, bool is_rc, const std::vector<hts_pair_pos_t>& assembled_contig_intervals,
+			const std::vector<hts_pair_pos_t>& assembled_contig_intervals,
 			StripedSmithWaterman::Aligner& aligner, stats_t& stats, config_t& config) {
 
 	int remap_start = std::max(hts_pos_t(0), r_cluster->start-50);
@@ -873,6 +880,14 @@ std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::str
 	insertion->mh_len = 0; // current value is just a temporary approximation, reset it. genotype will calculate it correctly
 
 	return insertion;
+}
+
+std::shared_ptr<insertion_t> detect_reference_guided_assembly_insertion(std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::string& junction_seq,
+			std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
+			remap_side_t& ro_remap_side, remap_side_t& lo_remap_side,
+			region_t& best_region, bool is_rc, const std::vector<hts_pair_pos_t>& assembled_contig_intervals,
+			StripedSmithWaterman::Aligner& aligner, stats_t& stats, config_t& config) {
+	return detect_reference_guided_insertion_from_junction(contig_name, contig_seq, contig_len, junction_seq, r_cluster, l_cluster, ro_remap_side, lo_remap_side, assembled_contig_intervals, aligner, stats, config);
 }
 
 #endif // GUIDED_REFERENCE_ASSEMBLE_H

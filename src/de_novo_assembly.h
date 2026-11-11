@@ -304,13 +304,105 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 	return assembled_sequences;
 }
 
+std::shared_ptr<sv_t> finalize_de_novo_insertion_from_junction(std::shared_ptr<sv_t> chosen_ins, const std::string& full_assembled_seq,
+		std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
+		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config) {
+
+	int sep = chosen_ins->ins_seq.find("-");
+	if (sep != std::string::npos && (sep < config.min_clip_len || chosen_ins->ins_seq.length()-sep-1 < config.min_clip_len)) return NULL; // "-" is too close to the edge
+
+	int assembled_reads_count = 0;
+
+	StripedSmithWaterman::Filter filter;
+	if (r_cluster->clip_consensus) {
+		ungapped_aln_t ungapped_aln = best_ungapped_aln(r_cluster->clip_consensus->sequence.c_str(), r_cluster->clip_consensus->sequence.length(),
+			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+			chosen_ins->rc_consensus = r_cluster->clip_consensus;
+		}
+	}
+	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
+		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
+		std::string mate_qual = get_mate_qual(read.get(), matequals);
+		rc(mate_seq);
+		mate_qual = std::string(mate_qual.rbegin(), mate_qual.rend());
+		StripedSmithWaterman::Alignment aln;
+		ungapped_aln_t ungapped_aln = best_ungapped_aln(mate_seq.c_str(), mate_seq.length(),
+			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+			assembled_reads_count++;
+		}
+	}
+	for (std::shared_ptr<bam1_t> read : l_cluster->cluster->reads) {
+		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
+		std::string mate_qual = get_mate_qual(read.get(), matequals);
+		StripedSmithWaterman::Alignment aln;
+		ungapped_aln_t ungapped_aln = best_ungapped_aln(mate_seq.c_str(), mate_seq.length(),
+			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+			assembled_reads_count++;
+		}
+	}
+	if (l_cluster->clip_consensus) {
+		ungapped_aln_t ungapped_aln = best_ungapped_aln(l_cluster->clip_consensus->sequence.c_str(), l_cluster->clip_consensus->sequence.length(),
+			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+			chosen_ins->lc_consensus = l_cluster->clip_consensus;
+		}
+	}
+
+	// start and end of inserted sequence within the full assembled sequence
+	for (bam1_t* read : r_cluster->semi_mapped_reads) {
+		std::string read_seq = get_sequence(read, true);
+		rc(read_seq);
+		ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
+			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+			assembled_reads_count++;
+		}
+	}
+	for (bam1_t* read : l_cluster->semi_mapped_reads) {
+		std::string read_seq = get_sequence(read, true);
+		ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
+			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
+			assembled_reads_count++;
+		}
+	}
+
+	chosen_ins->source = "DE_NOVO_ASSEMBLY";
+	if (assembled_reads_count <= 2) {
+		return NULL;
+	}
+	chosen_ins->mh_len = 0; // current value is just a temporary approximation, reset it. genotype will calculate it correctly
+	return chosen_ins;
+}
+
+std::shared_ptr<sv_t> detect_de_novo_insertion_from_junction(std::string& contig_name, chr_seqs_map_t& contigs, const std::string& junction_seq,
+		std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
+		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
+		StripedSmithWaterman::Aligner& aligner_to_base, config_t& config, stats_t& stats) {
+
+	int extend = 2*(junction_seq.length()-(junction_seq.find('-') != std::string::npos));
+	int remap_region_start = std::max(0, int(std::min(r_cluster->end, l_cluster->start)-extend));
+	int remap_region_end = std::min(int(std::max(r_cluster->end, l_cluster->start)+extend), int(contigs.get_len(contig_name))-1);
+	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contigs.get_seq(contig_name), junction_seq, std::string(junction_seq.length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
+	for (std::shared_ptr<sv_t> sv : svs) {
+		if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
+			return finalize_de_novo_insertion_from_junction(sv, junction_seq, r_cluster, l_cluster, mateseqs, matequals, config);
+		}
+	}
+	return NULL;
+}
+
 std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seqs_map_t& contigs,
 		std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
 		std::ostream& assembly_failed_no_seq, std::ostream& assembly_failed_cycle_writer, std::ostream& assembly_failed_too_many_reads_writer,
 		StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
-		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam) {
+		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam, std::string& junction_seq) {
 
+	junction_seq.clear(); // Set only when the selected insertion passes the support checks.
 	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats, hp_tail_quality_model, flank_bam);
 
 	std::string ins_full_id = "NO_ID";
@@ -434,73 +526,8 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 
 	if (chosen_ins == NULL) return NULL;
 
-	int sep = chosen_ins->ins_seq.find("-");
-	if (sep != std::string::npos && (sep < config.min_clip_len || chosen_ins->ins_seq.length()-sep-1 < config.min_clip_len)) return NULL; // "-" is too close to the edge
-
-	int assembled_reads_count = 0;
-
-	StripedSmithWaterman::Filter filter;
-	if (r_cluster->clip_consensus) {
-		ungapped_aln_t ungapped_aln = best_ungapped_aln(r_cluster->clip_consensus->sequence.c_str(), r_cluster->clip_consensus->sequence.length(),
-			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
-		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
-			chosen_ins->rc_consensus = r_cluster->clip_consensus;
-		}
-	}
-	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
-		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
-		std::string mate_qual = get_mate_qual(read.get(), matequals);
-		rc(mate_seq);
-		mate_qual = std::string(mate_qual.rbegin(), mate_qual.rend());
-		StripedSmithWaterman::Alignment aln;
-		ungapped_aln_t ungapped_aln = best_ungapped_aln(mate_seq.c_str(), mate_seq.length(),
-			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
-		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
-			assembled_reads_count++;
-		}
-	}
-	for (std::shared_ptr<bam1_t> read : l_cluster->cluster->reads) {
-		std::string mate_seq = get_mate_seq(read.get(), mateseqs);
-		std::string mate_qual = get_mate_qual(read.get(), matequals);
-		StripedSmithWaterman::Alignment aln;
-		ungapped_aln_t ungapped_aln = best_ungapped_aln(mate_seq.c_str(), mate_seq.length(),
-			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
-		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
-			assembled_reads_count++;
-		}
-	}
-	if (l_cluster->clip_consensus) {
-		ungapped_aln_t ungapped_aln = best_ungapped_aln(l_cluster->clip_consensus->sequence.c_str(), l_cluster->clip_consensus->sequence.length(),
-			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
-		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
-			chosen_ins->lc_consensus = l_cluster->clip_consensus;
-		}
-	}
-
-	// start and end of inserted sequence within the full assembled sequence
-	for (bam1_t* read : r_cluster->semi_mapped_reads) {
-		std::string read_seq = get_sequence(read, true);
-		rc(read_seq);
-		ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
-			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
-		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
-			assembled_reads_count++;
-		}
-	}
-	for (bam1_t* read : l_cluster->semi_mapped_reads) {
-		std::string read_seq = get_sequence(read, true);
-		ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
-			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
-		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
-			assembled_reads_count++;
-		}
-	}
-
-	chosen_ins->source = "DE_NOVO_ASSEMBLY";
-	if (assembled_reads_count <= 2) {
-		return NULL;
-	}
-	chosen_ins->mh_len = 0; // current value is just a temporary approximation, reset it. genotype will calculate it correctly
+	chosen_ins = finalize_de_novo_insertion_from_junction(chosen_ins, full_assembled_seq, r_cluster, l_cluster, mateseqs, matequals, config);
+	if (chosen_ins) junction_seq = full_assembled_seq;
 	return chosen_ins;
 }
 

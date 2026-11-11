@@ -20,6 +20,7 @@
 #include "../libs/ssw_selected.h"
 #include "../libs/IntervalTree.h"
 #include "dc_remapper.h"
+#include "diploid_insertions.h"
 #include "htslib/vcf.h"
 #include "sam_utils.h"
 #include "clustering_utils.h"
@@ -112,12 +113,29 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     }
 
     std::string contig_name = contig_map.get_name(contig_id);
+    std::string primary_junction_seq;
+    auto add_alternatives = [&](const std::string& primary_junction, const std::vector<hts_pair_pos_t>* intervals) {
+        std::vector<insertion_fragment_evidence_t> fragments = collect_insertion_read_evidence(r_cluster, l_cluster, mateseqs, matequals);
+        std::vector<reconstructed_insertion_junction_t> alternatives = reconstruct_polished_insertion_junctions(primary_junction, fragments, aligner, intervals ? *intervals : std::vector<hts_pair_pos_t>{});
+        for (auto& alternative : alternatives) {
+            std::shared_ptr<sv_t> candidate;
+            if (intervals) {
+                remap_side_t alt_ro_remap_side, alt_lo_remap_side;
+                remap_reference_guided_junction(alternative.seq, r_cluster, l_cluster, alt_ro_remap_side, alt_lo_remap_side, mateseqs, matequals, aligner, harsh_aligner, config, stats);
+                candidate = detect_reference_guided_insertion_from_junction(contig_name, contigs.get_seq(contig_name), contigs.get_len(contig_name), alternative.seq, r_cluster, l_cluster, alt_ro_remap_side, alt_lo_remap_side, alternative.assembled_contig_intervals, aligner, stats, config);
+            } else {
+                candidate = detect_de_novo_insertion_from_junction(contig_name, contigs, alternative.seq, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, config, stats);
+            }
+            if (candidate != NULL) append_distinct_insertion_candidate(found, candidate, contigs.get_seq(contig_name));
+        }
+    };
     if (regions.empty()) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq);
                 
         if (ins != NULL) {
             found.push_back(ins);
+            add_alternatives(primary_junction_seq, nullptr);
             return true;
 		}
 		return false;
@@ -151,10 +169,11 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 	int tot_reads = r_cluster->cluster->reads.size() + l_cluster->cluster->reads.size();
 	if (rc_accepted_reads == 0 || lc_accepted_reads == 0 || double(rc_accepted_reads+lc_accepted_reads)/tot_reads < 0.5) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq);
 
 		if (ins != NULL) {
             found.push_back(ins);
+			add_alternatives(primary_junction_seq, nullptr);
 			return true;
 		}
 	}
@@ -166,6 +185,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
         corrected_consensus_sequence, r_cluster, l_cluster, ro_remap_side, lo_remap_side, best_region, is_rc, assembled_contig_intervals, aligner, stats, config);
     if (insertion != NULL) {
         found.push_back(insertion);
+        add_alternatives(corrected_consensus_sequence, &assembled_contig_intervals);
         success = true;
     }
     return success;
