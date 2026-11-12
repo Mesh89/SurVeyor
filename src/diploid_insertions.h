@@ -77,6 +77,7 @@ std::vector<insertion_fragment_evidence_t> collect_insertion_read_evidence(std::
 struct junction_edit_t {
 	int begin, end; // Zero-based, half-open; equal for an insertion.
 	std::string alt;
+	bool correction; // Application priority; not part of the edit identity.
 
 	bool operator<(const junction_edit_t& other) const { return std::tie(begin, end, alt) < std::tie(other.begin, other.end, other.alt); }
 	bool operator==(const junction_edit_t& other) const { return begin == other.begin && end == other.end && alt == other.alt; }
@@ -318,7 +319,11 @@ struct reconstructed_insertion_junction_t {
 };
 
 bool build_reconstructed_insertion_junction(const std::string& primary, std::vector<junction_edit_t> edits, const std::vector<hts_pair_pos_t>& intervals, reconstructed_insertion_junction_t& result) {
-	std::sort(edits.begin(), edits.end());
+	std::sort(edits.begin(), edits.end(), [](const junction_edit_t& first, const junction_edit_t& second) {
+		if (first.begin != second.begin) return first.begin < second.begin;
+		if (first.correction != second.correction) return first.correction;
+		return first < second;
+	});
 	result.seq.clear();
 	result.before.assign(primary.length()+1, 0);
 	result.after.assign(primary.length()+1, 0);
@@ -326,7 +331,7 @@ bool build_reconstructed_insertion_junction(const std::string& primary, std::vec
 	result.haplotype = false;
 	int pos = 0, previous_insertion = -1;
 	for (const auto& edit : edits) {
-		if (edit.begin < pos || (edit.begin == edit.end && edit.begin == previous_insertion)) return false;
+		if (edit.begin < pos || (edit.begin == edit.end && edit.begin == previous_insertion)) continue;
 		while (pos < edit.begin) {
 			result.seq += primary[pos++];
 			result.before[pos] = result.after[pos] = result.seq.length();
@@ -388,7 +393,11 @@ std::vector<reconstructed_insertion_junction_t> reconstruct_insertion_junctions(
 	for (int mask : masks) {
 		std::vector<junction_edit_t> edits;
 		for (int i = 0; i < differences.differences.size(); i++) {
-			if (mask&(1<<i)) edits.push_back(differences.differences[i].edit);
+			if (mask&(1<<i)) {
+				junction_edit_t edit = differences.differences[i].edit;
+				edit.correction = differences.differences[i].correction;
+				edits.push_back(std::move(edit));
+			}
 		}
 		reconstructed_insertion_junction_t junction;
 		if (!build_reconstructed_insertion_junction(primary, std::move(edits), intervals, junction)) continue;
@@ -415,7 +424,11 @@ bool polish_insertion_junction(const std::string& primary, const std::vector<ins
 		insertion_junction_differences_t residual = identify_insertion_junction_differences(alternative.seq, selected, aligner, 75);
 		if (residual.too_many_differences) return false;
 		std::vector<junction_edit_t> edits;
-		for (const auto& difference : residual.differences) edits.push_back(difference.edit);
+		for (const auto& difference : residual.differences) {
+			junction_edit_t edit = difference.edit;
+			edit.correction = difference.correction;
+			edits.push_back(std::move(edit));
+		}
 		if (edits.empty()) break;
 		reconstructed_insertion_junction_t polished;
 		if (!build_reconstructed_insertion_junction(alternative.seq, std::move(edits), alternative.assembled_contig_intervals, polished)) return false;

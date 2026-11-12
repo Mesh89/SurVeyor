@@ -400,9 +400,10 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
 		std::ostream& assembly_failed_no_seq, std::ostream& assembly_failed_cycle_writer, std::ostream& assembly_failed_too_many_reads_writer,
 		StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
-		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam, std::string& junction_seq) {
+		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam, std::string& junction_seq, std::vector<std::string>& selected_contigs) {
 
 	junction_seq.clear(); // Set only when the selected insertion passes the support checks.
+	selected_contigs.clear();
 	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats, hp_tail_quality_model, flank_bam);
 
 	std::string ins_full_id = "NO_ID";
@@ -425,6 +426,8 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		failed_assembly_mtx.unlock();
 		return NULL;
 	}
+
+	selected_contigs = assembled_sequences;
 
 	// remap assembled sequences to find breakpoints
 	char* contig_seq = contigs.get_seq(contig_name);

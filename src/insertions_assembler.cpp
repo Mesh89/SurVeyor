@@ -75,6 +75,46 @@ bool operator < (const cc_v_distance_t& ccd1, const cc_v_distance_t& ccd2) { // 
     return ccd1.distance < ccd2.distance;
 }
 
+void add_de_novo_contig_insertions(std::string& contig_name, const std::string& primary_junction, const std::vector<std::string>& selected_contigs,
+                   std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
+                   std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
+                   StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& aligner_to_base,
+                   stats_t& stats, std::vector<std::shared_ptr<sv_t>>& found) {
+    if (primary_junction.empty() || !std::all_of(primary_junction.begin(), primary_junction.end(), junction_canonical_base)) return;
+    std::vector<insertion_fragment_evidence_t> fragments = collect_insertion_read_evidence(r_cluster, l_cluster, mateseqs, matequals);
+    StripedSmithWaterman::Filter score_filter(false, false, 0, 0);
+    std::vector<std::pair<const insertion_read_evidence_t*, int>> primary_scores;
+    for (const auto& fragment : fragments) {
+        for (const auto& read : fragment.reads) {
+            if (read.seq.length() < 50 || read.quals.size() != read.seq.length()) continue;
+            StripedSmithWaterman::Alignment alignment;
+            if (aligner.Align(read.seq.c_str(), primary_junction.c_str(), primary_junction.length(), score_filter, &alignment, 0)) primary_scores.push_back({&read, alignment.sw_score});
+        }
+    }
+    std::set<std::string> examined{primary_junction};
+    auto add_junction = [&](const std::string& junction) {
+        if (!examined.insert(junction).second) return;
+        std::shared_ptr<sv_t> candidate = detect_de_novo_insertion_from_junction(contig_name, contigs, junction, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, config, stats);
+        if (candidate == NULL || candidate->incomplete_ins_seq() || candidate->svlen() < 50) return;
+        for (const auto& anchor : {candidate->left_anchor_aln, candidate->right_anchor_aln}) {
+            if (!anchor || anchor->best_score < 50 || anchor->seq_len < 50 || anchor->end-anchor->start+1 < 50) return;
+        }
+        int support = 0, clean = 0;
+        for (const auto& primary_score : primary_scores) {
+            junction_read_alignment_t alignment;
+            if (!align_insertion_junction_read(junction, *primary_score.first, aligner, alignment) || alignment.score <= primary_score.second) continue;
+            support++;
+            clean += alignment.clean;
+        }
+        if (clean >= 3 && clean*5 >= support*2) append_distinct_insertion_candidate(found, candidate, contigs.get_seq(contig_name));
+    };
+    for (const std::string& junction : selected_contigs) {
+        if (junction == primary_junction || junction.empty() || !std::all_of(junction.begin(), junction.end(), junction_canonical_base)) continue;
+        add_junction(junction);
+        for (const auto& alternative : reconstruct_polished_insertion_junctions(junction, fragments, aligner)) add_junction(alternative.seq);
+    }
+}
+
 bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
                    int contig_id, bam_hdr_t* header, std::unordered_map<std::string, std::string>& mateseqs,
 				   std::unordered_map<std::string, std::string>& matequals,
@@ -114,7 +154,8 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 
     std::string contig_name = contig_map.get_name(contig_id);
     std::string primary_junction_seq;
-    auto add_alternatives = [&](const std::string& primary_junction, const std::vector<hts_pair_pos_t>* intervals) {
+    std::vector<std::string> selected_contigs;
+    auto add_alternatives = [&](const std::string& primary_junction, const std::vector<hts_pair_pos_t>* intervals, const std::vector<std::string>* other_contigs) {
         std::vector<insertion_fragment_evidence_t> fragments = collect_insertion_read_evidence(r_cluster, l_cluster, mateseqs, matequals);
         std::vector<reconstructed_insertion_junction_t> alternatives = reconstruct_polished_insertion_junctions(primary_junction, fragments, aligner, intervals ? *intervals : std::vector<hts_pair_pos_t>{});
         for (auto& alternative : alternatives) {
@@ -128,14 +169,15 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
             }
             if (candidate != NULL) append_distinct_insertion_candidate(found, candidate, contigs.get_seq(contig_name));
         }
+        if (other_contigs) add_de_novo_contig_insertions(contig_name, primary_junction, *other_contigs, r_cluster, l_cluster, mateseqs, matequals, aligner, aligner_to_base, stats, found);
     };
     if (regions.empty()) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq, selected_contigs);
                 
         if (ins != NULL) {
             found.push_back(ins);
-            add_alternatives(primary_junction_seq, nullptr);
+            add_alternatives(primary_junction_seq, nullptr, ins->incomplete_ins_seq() ? nullptr : &selected_contigs);
             return true;
 		}
 		return false;
@@ -169,11 +211,11 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 	int tot_reads = r_cluster->cluster->reads.size() + l_cluster->cluster->reads.size();
 	if (rc_accepted_reads == 0 || lc_accepted_reads == 0 || double(rc_accepted_reads+lc_accepted_reads)/tot_reads < 0.5) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq, selected_contigs);
 
 		if (ins != NULL) {
             found.push_back(ins);
-			add_alternatives(primary_junction_seq, nullptr);
+			add_alternatives(primary_junction_seq, nullptr, ins->incomplete_ins_seq() ? nullptr : &selected_contigs);
 			return true;
 		}
 	}
@@ -185,7 +227,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
         corrected_consensus_sequence, r_cluster, l_cluster, ro_remap_side, lo_remap_side, best_region, is_rc, assembled_contig_intervals, aligner, stats, config);
     if (insertion != NULL) {
         found.push_back(insertion);
-        add_alternatives(corrected_consensus_sequence, &assembled_contig_intervals);
+        add_alternatives(corrected_consensus_sequence, &assembled_contig_intervals, nullptr);
         success = true;
     }
     return success;
