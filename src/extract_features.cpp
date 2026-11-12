@@ -77,7 +77,7 @@ const std::vector<std::string>& default_feature_names() {
         "ASP1_NSP1_1_NM_Z_SCORE", "ASP1_NSP1_2_NM_Z_SCORE", "ASP2_NSP2_1_NM_Z_SCORE", "ASP2_NSP2_2_NM_Z_SCORE", "SSP1HQ_1", "SSP1HQ_2", "SSP2HQ_1", "SSP2HQ_2", "SSP1mQ_1",
         "SSP1mQ_2", "SSP1MQ_1", "SSP1MQ_2", "SSP2mQ_1", "SSP2mQ_2", "SSP2MQ_1", "SSP2MQ_2", "SSP1_RSP1_1_NM_Z_SCORE", "SSP1_RSP1_2_NM_Z_SCORE", "SSP2_RSP2_1_NM_Z_SCORE",
         "SSP2_RSP2_2_NM_Z_SCORE",
-        "HP_RUN_S",
+        "HP_RUN_S_NORM",
     };
     return names;
 }
@@ -753,7 +753,7 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
 #undef ADD_Z
     add_consensus_alignment_features(features, hdr, record, "", read_len);
     add_consensus_alignment_features(features, hdr, record, "X", read_len);
-    features["HP_RUN_S"] = get_format_number(hdr, record, "HPRS", NAN_VALUE);
+    features["HP_RUN_S_NORM"] = get_format_number(hdr, record, "HPRSN", NAN_VALUE);
 
     std::vector<double> values;
     values.reserve(feature_names.size());
