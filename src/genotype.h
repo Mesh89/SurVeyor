@@ -888,8 +888,10 @@ struct evidence_map_t {
                 if (sv1_passes_min_epr != sv2_passes_min_epr) {
                     assigned_hpid = sv_hpid_map[sv1.first];
                 } else if (total_U == 0) {
-                    // assign to the highest-ranked SV when both candidates have no usable U
-                    assigned_hpid = sv_hpid_map[sv1.first];
+                    // both sides have no usable unique reads, so the higher pass-1 EPR wins
+                    float e1 = std::get<2>(sv_U_vec[0].first);
+                    float e2 = std::get<2>(sv_U_vec[sv2_idx].first);
+                    assigned_hpid = e2 > e1 ? sv_hpid_map[sv2.first] : sv_hpid_map[sv1.first];
                 } else {
                     int r = read_assignment_draw(config.seed, chr, read_name, total_U);
                     if (r <= U1) {
