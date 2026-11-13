@@ -411,7 +411,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_aln(bam1_t* read, std::string
 std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_name, char* contig_seq, std::string junction_seq, std::string junction_qual,
 		hts_pos_t ref_remap_lh_start, hts_pos_t ref_remap_lh_end, hts_pos_t ref_remap_rh_start, hts_pos_t ref_remap_rh_end, 
 		StripedSmithWaterman::Aligner& aligner, int lowq_junction_prefix, int lowq_junction_suffix,
-	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000, bool split_only = false, const std::set<int>* cigar_indel_lengths = nullptr, const std::vector<hts_pair_pos_t>* assembled_contig_intervals = nullptr) {
+	stats_t& stats, config_t& config, hts_pos_t contig_len = -1, hts_pos_t normalization_extend = 1000, bool split_only = false, const std::set<int>* cigar_indel_lengths = nullptr, const std::vector<hts_pair_pos_t>* assembled_contig_intervals = nullptr, bool perfect_repeat_as_insertion = false) {
 		// do not find aux SNPs in low-quality regions of the junction sequence
 
 	const int MAX_REF_REMAP_LEN = 100000;
@@ -566,8 +566,9 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 		if (middle_part.size() < mh_len && middle_part.size() + mh_len > 50) {
 			bool one_time_perfect_repeat = lp_suffix_score.first == mh_len && rp_prefix_score.first == mh_len && middle_part.empty() &&
 				!is_right_clipped(left_part_aln) && !is_left_clipped(right_part_aln);
-			if (right_anchor_end - left_anchor_end < config.min_clip_len || right_anchor_start - left_anchor_start < config.min_clip_len ||
-				one_time_perfect_repeat) { // it's a duplication
+			// One exact extra copy fixes the haplotype: callers that only report insertions get it as the equivalent insertion below.
+			if ((right_anchor_end - left_anchor_end < config.min_clip_len || right_anchor_start - left_anchor_start < config.min_clip_len ||
+				one_time_perfect_repeat) && !(one_time_perfect_repeat && perfect_repeat_as_insertion)) { // it's a duplication
 				std::shared_ptr<duplication_t> sv = std::make_shared<duplication_t>(contig_name, right_bp, left_bp, middle_part, nullptr, nullptr, left_part_anchor_aln, right_part_anchor_aln);
 				sv->cn_unresolved = !one_time_perfect_repeat;
 				svs.push_back(sv);

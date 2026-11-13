@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <mutex>
@@ -312,6 +313,18 @@ std::shared_ptr<sv_t> finalize_de_novo_insertion_from_junction(std::shared_ptr<s
 	if (sep != std::string::npos && (sep < config.min_clip_len || chosen_ins->ins_seq.length()-sep-1 < config.min_clip_len)) return NULL; // "-" is too close to the edge
 
 	int assembled_reads_count = 0;
+	// Reads already counted (through their mate, or as half-mapped reads), so that a clipped read is not counted twice.
+	std::set<std::pair<std::string, bool> > counted_reads;
+	auto count_clipped_reads = [&](std::shared_ptr<consensus_t> consensus) {
+		if (!consensus) return;
+		for (std::shared_ptr<bam1_t> read : consensus->clipped_reads) {
+			if (!counted_reads.insert({bam_get_qname(read.get()), bool(read->core.flag & BAM_FREAD1)}).second) continue;
+			std::string read_seq = get_sequence(read.get());
+			ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
+				full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+			if (ungapped_aln.mismatch_rate() <= config.max_seq_error) assembled_reads_count++;
+		}
+	};
 
 	StripedSmithWaterman::Filter filter;
 	if (r_cluster->clip_consensus) {
@@ -329,6 +342,7 @@ std::shared_ptr<sv_t> finalize_de_novo_insertion_from_junction(std::shared_ptr<s
 		StripedSmithWaterman::Alignment aln;
 		ungapped_aln_t ungapped_aln = best_ungapped_aln(mate_seq.c_str(), mate_seq.length(),
 			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		counted_reads.insert({bam_get_qname(read.get()), !(read->core.flag & BAM_FREAD1)});
 		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
 			assembled_reads_count++;
 		}
@@ -339,6 +353,7 @@ std::shared_ptr<sv_t> finalize_de_novo_insertion_from_junction(std::shared_ptr<s
 		StripedSmithWaterman::Alignment aln;
 		ungapped_aln_t ungapped_aln = best_ungapped_aln(mate_seq.c_str(), mate_seq.length(),
 			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		counted_reads.insert({bam_get_qname(read.get()), !(read->core.flag & BAM_FREAD1)});
 		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
 			assembled_reads_count++;
 		}
@@ -357,6 +372,7 @@ std::shared_ptr<sv_t> finalize_de_novo_insertion_from_junction(std::shared_ptr<s
 		rc(read_seq);
 		ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
 			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		counted_reads.insert({bam_get_qname(read), bool(read->core.flag & BAM_FREAD1)});
 		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
 			assembled_reads_count++;
 		}
@@ -365,9 +381,16 @@ std::shared_ptr<sv_t> finalize_de_novo_insertion_from_junction(std::shared_ptr<s
 		std::string read_seq = get_sequence(read, true);
 		ungapped_aln_t ungapped_aln = best_ungapped_aln(read_seq.c_str(), read_seq.length(),
 			full_assembled_seq.c_str(), full_assembled_seq.length(), config.min_clip_len - 1);
+		counted_reads.insert({bam_get_qname(read), bool(read->core.flag & BAM_FREAD1)});
 		if (ungapped_aln.mismatch_rate() <= config.max_seq_error) {
 			assembled_reads_count++;
 		}
+	}
+
+	// A complete insertion is also supported by the reads clipped at its breakpoints; for an incomplete one they only show the breakpoints.
+	if (sep == std::string::npos) {
+		count_clipped_reads(r_cluster->clip_consensus);
+		count_clipped_reads(l_cluster->clip_consensus);
 	}
 
 	chosen_ins->source = "DE_NOVO_ASSEMBLY";
@@ -386,7 +409,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion_from_junction(std::string& contig
 	int extend = 2*(junction_seq.length()-(junction_seq.find('-') != std::string::npos));
 	int remap_region_start = std::max(0, int(std::min(r_cluster->end, l_cluster->start)-extend));
 	int remap_region_end = std::min(int(std::max(r_cluster->end, l_cluster->start)+extend), int(contigs.get_len(contig_name))-1);
-	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contigs.get_seq(contig_name), junction_seq, std::string(junction_seq.length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
+	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contigs.get_seq(contig_name), junction_seq, std::string(junction_seq.length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config, -1, 1000, false, nullptr, nullptr, true);
 	for (std::shared_ptr<sv_t> sv : svs) {
 		if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
 			return finalize_de_novo_insertion_from_junction(sv, junction_seq, r_cluster, l_cluster, mateseqs, matequals, config);
@@ -445,7 +468,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 	StripedSmithWaterman::Alignment aln;
 	std::string full_assembled_seq;
 	std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequence, std::string(assembled_sequence.length(), 'I'), remap_region_start, remap_region_end, 
-		remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
+		remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config, -1, 1000, false, nullptr, nullptr, true);
 	std::shared_ptr<sv_t> chosen_ins = NULL;
 	for (std::shared_ptr<sv_t> sv : svs) {
 		if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
@@ -472,7 +495,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 			remap_region_start = std::max(0, remap_region_start);
 			remap_region_end = std::max(r_cluster->end, l_cluster->start)+extend;
 			remap_region_end = std::min(remap_region_end, contig_len-1);
-			std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, merged, std::string(merged.length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
+			std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, merged, std::string(merged.length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config, -1, 1000, false, nullptr, nullptr, true);
 			for (std::shared_ptr<sv_t> sv : svs) {
 				if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
 					chosen_ins = sv;
@@ -517,7 +540,7 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		remap_region_start = std::max(0, remap_region_start);
 		remap_region_end = std::max(r_cluster->end, l_cluster->start)+extend;
 		remap_region_end = std::min(remap_region_end, contig_len-1);
-		std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1], std::string(assembled_sequences[1].length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config);
+		std::vector<std::shared_ptr<sv_t>> svs = detect_svs_from_junction(contig_name, contig_seq, assembled_sequences[1], std::string(assembled_sequences[1].length(), 'I'), remap_region_start, remap_region_end, remap_region_start, remap_region_end, aligner_to_base, 0, 0, stats, config, -1, 1000, false, nullptr, nullptr, true);
 		for (std::shared_ptr<sv_t> sv : svs) {
 			if (sv->svtype() == "INS" && sv->svsize() >= config.min_assembled_ins_size) {
 				chosen_ins = sv;
