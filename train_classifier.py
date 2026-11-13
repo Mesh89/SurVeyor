@@ -7,7 +7,7 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import xgboost as xgb
-from run_classifier import Classifier
+from run_classifier import Classifier, CNU_MODELS
 from training_manifest import build_training_manifest, write_training_manifest
 
 cmd_parser = argparse.ArgumentParser(description='Train ML model.')
@@ -18,7 +18,7 @@ cmd_parser.add_argument('--threads', type=int, default=1, help='Number of thread
 cmd_parser.add_argument('--cross-species', action='store_true', help='Use cross-species model.')
 cmd_args = cmd_parser.parse_args()
 
-training_data, training_gts, training_exact = defaultdict(list), defaultdict(list), defaultdict(list)
+training_data, training_gts, training_exact, training_cnu = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
 
 MODEL_NAMES = (
     "HP", "DEL", "DEL_NOEXL", "DEL_LARGE", "DEL_LARGE_NOEXL", "DUP", "DUP_LARGE", "DUP_LARGE_NOEXL",
@@ -140,11 +140,11 @@ def extract_vcf_features(vcf_fname, stats_fname, gt_labels, feature_dir, temp_di
         raise subprocess.CalledProcessError(returncode, command)
     vcf_training_data, _, record_keys_by_model = Classifier.load_feature_bundle(feature_bundle_fname)
     record_ids = load_record_ids_by_key(vcf_fname)
-    vcf_training_gts, vcf_training_exact = dict(), dict()
+    vcf_training_gts, vcf_training_exact, vcf_training_cnu = dict(), dict(), dict()
     for model_name, record_keys in record_keys_by_model.items():
         if restrict_to_model_name not in (None, "ALL") and model_name != restrict_to_model_name:
             continue
-        model_gts, model_exact = [], []
+        model_gts, model_exact, model_cnu = [], [], []
         for record_key in record_keys:
             record_key = int(record_key)
             if record_key not in record_ids:
@@ -153,16 +153,18 @@ def extract_vcf_features(vcf_fname, stats_fname, gt_labels, feature_dir, temp_di
             label = gt_labels.get(record_id)
             if label is None:
                 raise RuntimeError(f"Missing GT label for record {record_id} in {vcf_fname}")
-            gt, exact = label
+            gt, exact, cnu = label
             model_gts.append(gt)
             model_exact.append(exact)
+            model_cnu.append(cnu)
         vcf_training_gts[model_name] = np.array(model_gts)
         vcf_training_exact[model_name] = np.array(model_exact)
+        vcf_training_cnu[model_name] = np.array(model_cnu)
     if restrict_to_model_name not in (None, "ALL"):
         vcf_training_data = {model_name: values for model_name, values in vcf_training_data.items() if model_name == restrict_to_model_name}
     n_variants = sum(len(model_data) for model_data in vcf_training_data.values())
     log(f"Extracted {n_variants} variants from {vcf_fname} across {len(vcf_training_data)} model(s) in {time.time()-start_time:.1f}s")
-    return vcf_training_data, vcf_training_gts, vcf_training_exact
+    return vcf_training_data, vcf_training_gts, vcf_training_exact, vcf_training_cnu
 
 def select_gt(gt1, gt2):
     if gt1 == "./." and gt2 != "./.":
@@ -178,21 +180,27 @@ def read_gt_labels(file_path):
     if not os.path.exists(file_path):
         raise RuntimeError(f"Genotype labels file not found: {file_path}")
     gt_labels = dict()
+    cnu_labels = dict()
     with open(file_path, 'r') as file:
         for line in file:
             fields = line.split()
             if not fields:
                 continue
-            if len(fields) != 3:
+            if len(fields) != 4:
                 raise RuntimeError(f"Malformed genotype labels line in {file_path}: {' '.join(fields)}")
             id, gt, exact = fields[0], fields[1], int(fields[2])
+            if fields[3] != ".":
+                cnu = int(fields[3])
+                cnu_labels[id] = cnu if cnu_labels.get(id, cnu) == cnu else -1
+            cnu = cnu_labels.get(id, -1)
             if id not in gt_labels:
-                gt_labels[id] = (gt, exact)
+                gt_labels[id] = (gt, exact, cnu)
             else:
-                prev_gt, prev_exact = gt_labels[id]
+                prev_gt, prev_exact, _ = gt_labels[id]
                 gt_labels[id] = (
                     select_gt(prev_gt, gt),
                     max(prev_exact, exact),
+                    cnu,
                 )
     return gt_labels
 
@@ -202,19 +210,20 @@ def process_vcf(training_prefix, feature_dir, temp_root, extractor_threads, rest
     gt_labels = read_gt_labels(training_prefix + ".gts")
     log(f"Loaded {len(gt_labels)} genotype labels for {training_prefix}")
     with tempfile.TemporaryDirectory(prefix=".surveyor-training-features-", dir=temp_root) as temp_dir:
-        vcf_training_data, vcf_training_gts, vcf_training_exact = extract_vcf_features(training_prefix + ".vcf.gz", training_prefix + ".stats", gt_labels, feature_dir, temp_dir, extractor_threads, restrict_to_model_name)
+        vcf_training_data, vcf_training_gts, vcf_training_exact, vcf_training_cnu = extract_vcf_features(training_prefix + ".vcf.gz", training_prefix + ".stats", gt_labels, feature_dir, temp_dir, extractor_threads, restrict_to_model_name)
         if restrict_to_model_name in (None, "ALL", "INS_TO_DUP", "INS_TO_DUP_LARGE"):
-            ins_to_dup_vcf_training_data, ins_to_dup_vcf_training_gts, ins_to_dup_vcf_training_exact = extract_vcf_features(training_prefix + ".INS_TO_DUP.vcf.gz", training_prefix + ".stats", gt_labels, feature_dir, temp_dir, extractor_threads, restrict_to_model_name)
+            ins_to_dup_vcf_training_data, ins_to_dup_vcf_training_gts, ins_to_dup_vcf_training_exact, ins_to_dup_vcf_training_cnu = extract_vcf_features(training_prefix + ".INS_TO_DUP.vcf.gz", training_prefix + ".stats", gt_labels, feature_dir, temp_dir, extractor_threads, restrict_to_model_name)
 
             for model_name in ("INS_TO_DUP", "INS_TO_DUP_LARGE"):
                 if model_name in ins_to_dup_vcf_training_data:
                     vcf_training_data[model_name] = ins_to_dup_vcf_training_data[model_name]
                     vcf_training_gts[model_name] = ins_to_dup_vcf_training_gts[model_name]
                     vcf_training_exact[model_name] = ins_to_dup_vcf_training_exact[model_name]
+                    vcf_training_cnu[model_name] = ins_to_dup_vcf_training_cnu[model_name]
 
     n_variants = sum(len(model_data) for model_data in vcf_training_data.values())
     log(f"Processed training prefix {training_prefix}: {n_variants} variants in {time.time()-start_time:.1f}s")
-    return vcf_training_data, vcf_training_gts, vcf_training_exact
+    return vcf_training_data, vcf_training_gts, vcf_training_exact, vcf_training_cnu
 
 if __name__ == '__main__':
     import multiprocessing
@@ -258,13 +267,14 @@ if __name__ == '__main__':
 
     log("Worker processes shut down; organizing extracted arrays by model")
     for sample_index in range(len(processed_samples)):
-        vcf_training_data, vcf_training_gts, vcf_training_exact = processed_samples[sample_index]
+        vcf_training_data, vcf_training_gts, vcf_training_exact, vcf_training_cnu = processed_samples[sample_index]
         for model in vcf_training_data:
             training_data[model].append(vcf_training_data[model])
             training_gts[model].append(vcf_training_gts[model])
             training_exact[model].append(vcf_training_exact[model])
+            training_cnu[model].append(vcf_training_cnu[model])
         processed_samples[sample_index] = None
-    del processed_samples, vcf_training_data, vcf_training_gts, vcf_training_exact
+    del processed_samples, vcf_training_data, vcf_training_gts, vcf_training_exact, vcf_training_cnu
 
     for model in training_data:
         n_variants = sum(len(sample_data) for sample_data in training_data[model])
@@ -274,6 +284,7 @@ if __name__ == '__main__':
         training_data[model] = np.concatenate(training_data[model])
         training_gts[model] = np.concatenate(training_gts[model])
         training_exact[model] = np.concatenate(training_exact[model])
+        training_cnu[model] = np.concatenate(training_cnu[model])
         log(f"Aggregated model {model} in {time.time()-concatenate_start_time:.1f}s")
 
     yes_or_no_outdir = os.path.join(cmd_args.outdir, "yes_or_no")
@@ -287,6 +298,9 @@ if __name__ == '__main__':
 
     exact_outdir = os.path.join(cmd_args.outdir, "exact")
     os.makedirs(exact_outdir, exist_ok=True)
+
+    cnu_outdir = os.path.join(cmd_args.outdir, "cnu")
+    os.makedirs(cnu_outdir, exist_ok=True)
 
     manifest_path = write_training_manifest(cmd_args.outdir, training_manifest)
     print(f"Wrote training manifest to {manifest_path}")
@@ -310,6 +324,7 @@ if __name__ == '__main__':
         training_data[model_name] = training_data[model_name][known_gt_mask]
         training_gts[model_name] = training_gts[model_name][known_gt_mask]
         training_exact[model_name] = training_exact[model_name][known_gt_mask]
+        training_cnu[model_name] = training_cnu[model_name][known_gt_mask]
         training_data[model_name] = training_data[model_name][:, keep_indices]
         if len(training_data[model_name]) == 0:
             raise RuntimeError(f"Model {model_name} has no non-missing training examples.")
@@ -432,6 +447,41 @@ if __name__ == '__main__':
             classifier.save_model(model_fname)
             write_features_file(model_fname, features_names)
             exact_end_time = time.time()
+
+        if model_name in CNU_MODELS:
+            cnu_start_time = time.time()
+            model_fname = os.path.join(cnu_outdir, model_name + ".ubj")
+            importance_fname = os.path.join(cnu_outdir, model_name + ".importance.txt")
+            remove_model_artifacts(model_fname, importance_fname)
+
+            cnu_mask = gt_has_alt_array(training_gts[model_name]) & (training_cnu[model_name] >= 0)
+            cnu_training_data = training_data[model_name][cnu_mask]
+            cnu_training_labels = training_cnu[model_name][cnu_mask]
+
+            if len(cnu_training_data) == 0:
+                raise RuntimeError(f"No positive {model_name} examples with known CNU labels found. Cannot train the CNU-stage classifier.")
+
+            unique_labels = np.unique(cnu_training_labels)
+            if len(unique_labels) == 1:
+                raise RuntimeError(
+                    f"Only one CNU label ({unique_labels[0]}) present in {model_name} training data. "
+                    "Cannot train the CNU-stage classifier."
+                )
+
+            n_unresolved = np.sum(cnu_training_labels == 1)
+            log(f"Training CNU classifier for {model_name} on {len(cnu_training_data)} positive variants ({n_unresolved} with unresolved copy number)")
+            classifier = xgb.XGBClassifier(n_estimators=600, max_depth=6, learning_rate=0.05, subsample=0.8, colsample_bytree=0.6, n_jobs=cmd_args.threads, random_state=0, tree_method='hist')
+            classifier.fit(cnu_training_data, cnu_training_labels)
+            log(f"Finished CNU classifier for {model_name} in {time.time()-cnu_start_time:.1f}s")
+
+            importances = classifier.feature_importances_
+            indices = np.argsort(importances)[::-1]
+            with open(importance_fname, 'w') as f:
+                for i in range(len(features_names)):
+                    f.write("%d. %s (%f)\n" % (i + 1, features_names[indices[i]], importances[indices[i]]))
+
+            classifier.save_model(model_fname)
+            write_features_file(model_fname, features_names)
 
         end_time = time.time()
         print(f"Training for model {model_name} took {end_time - start_time} seconds")

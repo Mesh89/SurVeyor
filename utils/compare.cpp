@@ -379,6 +379,61 @@ struct sv_match_t {
 };
 std::vector<sv_match_t> matches;
 
+// benchmark variants by chromosome, sorted by start, with their phased alleles (sv_t keeps them sorted), for cn_unresolved_label
+struct benchmark_var_t {
+	hts_pos_t start, end, svlen;
+	int hap[2]; // allele on each haplotype, -1 if missing
+};
+std::unordered_map<std::string, std::vector<benchmark_var_t>> benchmark_vars_by_chr;
+
+// Copy number label of a called DUP, by checking its size against the benchmark haplotypes: the window is made of the tandem repeats
+// within 50 bp of the DUP, +-50 bp (the DUP +-300 bp if there are none); for each benchmark haplotype, the net inserted length is the
+// sum of the SVLENs of the benchmark SVs fully inside the window. 0 (single copy) if a haplotype has >= 10 bp inserted and between 0.5x
+// and 2x the DUP length, 1 (copy number unresolved) if some haplotype has >= 10 bp inserted but none in that range, . if unknown
+// (window longer than 10 kb, no haplotype with known alleles, nothing inserted) and for called SVs that are not DUPs.
+// Coordinates follow the VCF (1-based POS and END) and the tandem repeat BED as given.
+std::string cn_unresolved_label(sv_match_t& match) {
+	sv_t* dup = match.c_sv.get();
+	if (dup->svtype() != "DUP") return ".";
+	hts_pos_t pos = dup->start + 1, end = dup->end + 1, dup_len = dup->end - dup->start;
+	hts_pos_t ws = pos - 300, we = end + 300;
+	auto it = reps_i.find(dup->chr);
+	if (it != reps_i.end() && it->second != nullptr) {
+		hts_pos_t rs = INT64_MAX, re = -1;
+		for (auto& iv : it->second->findOverlapping(std::max(hts_pos_t(0), pos - 50), end + 50)) {
+			const repeat_t& rep = iv.value;
+			if (rep.start - 50 <= end && rep.end + 50 >= pos) {
+				rs = std::min(rs, (hts_pos_t) rep.start);
+				re = std::max(re, (hts_pos_t) rep.end);
+			}
+		}
+		if (re >= 0) ws = rs - 50, we = re + 50;
+	}
+	if (we - ws > 10000) return ".";
+
+	hts_pos_t net[2] = {0, 0};
+	bool known[2] = {true, true};
+	std::vector<benchmark_var_t>& bvars = benchmark_vars_by_chr[dup->chr];
+	auto b = std::lower_bound(bvars.begin(), bvars.end(), ws - 1, [](const benchmark_var_t& v, hts_pos_t p) { return v.start < p; });
+	for (; b != bvars.end() && b->start + 1 <= we; b++) {
+		if (b->end + 1 > we) continue;
+		for (int h = 0; h < 2; h++) {
+			if (b->hap[h] < 0) known[h] = false;
+			else if (b->hap[h] > 0) net[h] += b->svlen;
+		}
+	}
+	if (!known[0] && !known[1]) return ".";
+	bool inserted = false, single_copy = false;
+	for (int h = 0; h < 2; h++) {
+		if (!known[h] || net[h] < 10) continue;
+		inserted = true;
+		double ratio = double(net[h]) / dup_len;
+		if (ratio >= 0.5 && ratio <= 2) single_copy = true;
+	}
+	if (!inserted) return ".";
+	return single_copy ? "0" : "1";
+}
+
 void find_match(int id, int start_idx, int end_idx) {
 
 	StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
@@ -621,7 +676,7 @@ int main(int argc, char* argv[]) {
 		("keep-all-benchmark", "Keep all variants in the benchmark file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
 		("keep-all-called", "Keep all variants in the called file, even if no alternative allele", cxxopts::value<bool>()->default_value("false"))
 		("all-matches", "Keep every match, not only the optimal ones for each called SV. Used to deduplicate a VCF by comparing it with itself.", cxxopts::value<bool>()->default_value("false"))
-		("c,called-to-benchmark-gts", "For each called SV, report benchmark GT and exact-match status.", cxxopts::value<std::string>())
+		("c,called-to-benchmark-gts", "For each called SV, report ID, benchmark GT, exact-match status and CNU label (0, 1 or .).", cxxopts::value<std::string>())
 		("e,exclusive", "SV cannot be used in multiple matches.", cxxopts::value<bool>()->default_value("false"))
 		("ignore-ft", "Ignore the FT field, if present. Without this option, only SVs with FT=PASS or absent are considered.", cxxopts::value<bool>()->default_value("false"))
 		("t,threads", "Number of threads to use.", cxxopts::value<int>()->default_value("1"))
@@ -852,6 +907,25 @@ int main(int argc, char* argv[]) {
 		}
     }
 
+	htsFile* benchmark_file = bcf_open(benchmark_fname.c_str(), "r");
+	bcf_hdr_t* benchmark_hdr = bcf_hdr_read(benchmark_file);
+	int32_t* gts = NULL; int n_gts = 0;
+	for (const std::shared_ptr<sv_t>& bsv : benchmark_svs) {
+		benchmark_var_t v = {bsv->start, bsv->end, bsv->svlen(), {-1, -1}};
+		int n = bcf_get_genotypes(benchmark_hdr, bsv->vcf_entry, &gts, &n_gts);
+		for (int h = 0; h < 2 && n > 0; h++) {
+			int gt = gts[std::min(h, n-1)];
+			v.hap[h] = bcf_gt_is_missing(gt) ? -1 : bcf_gt_allele(gt);
+		}
+		benchmark_vars_by_chr[bsv->chr].push_back(v);
+	}
+	free(gts);
+	bcf_hdr_destroy(benchmark_hdr);
+	bcf_close(benchmark_file);
+	for (auto& kv : benchmark_vars_by_chr) {
+		std::sort(kv.second.begin(), kv.second.end(), [](const benchmark_var_t& a, const benchmark_var_t& b) { return a.start < b.start; });
+	}
+
 	std::unordered_map<std::string, std::vector<Interval<std::shared_ptr<sv_t>>>> dels_csv_iv, inss_csv_iv, invs_csv_iv;
 	for (const std::shared_ptr<sv_t>& sv : called_svs) {
 		if (sv->svtype() == "DEL") {
@@ -1022,7 +1096,7 @@ int main(int argc, char* argv[]) {
 		// Selected non-missing benchmark matches.
 		for (sv_match_t& match : accepted_matches) {
 			if (match.c_sv != NULL) {
-				called_to_benchmark_gts_fout << match.c_sv->id << " " << called_to_benchmark_gt(match) << " " << match.exact << std::endl;
+				called_to_benchmark_gts_fout << match.c_sv->id << " " << called_to_benchmark_gt(match) << " " << match.exact << " " << cn_unresolved_label(match) << std::endl;
 				written_ids.insert(match.c_sv->id);
 			}
 		}
@@ -1042,7 +1116,7 @@ int main(int argc, char* argv[]) {
 		// report non-exact matches with the benchmark GT, but keep exact unselected matches ignored
 		for (std::string id : c_unchoosen_ids) {
 			sv_match_t* match = unchoosen_match_by_called[id];
-			called_to_benchmark_gts_fout << id << " " << "./. " << match->exact << std::endl;
+			called_to_benchmark_gts_fout << id << " " << "./. " << match->exact << " ." << std::endl;
 			written_ids.insert(id);
 		}
 
@@ -1050,9 +1124,9 @@ int main(int argc, char* argv[]) {
 		for (const std::shared_ptr<sv_t>& csv : called_svs) {
 			if (written_ids.count(csv->id)) continue;
 			if (c_unknown.count(csv->id)) {
-				called_to_benchmark_gts_fout << csv->id << " " << "./. " << unknown_match_by_called[csv->id]->exact << std::endl;
+				called_to_benchmark_gts_fout << csv->id << " " << "./. " << unknown_match_by_called[csv->id]->exact << " ." << std::endl;
 			} else {
-				called_to_benchmark_gts_fout << csv->id << " " << "0/0 0" << std::endl;
+				called_to_benchmark_gts_fout << csv->id << " " << "0/0 0 ." << std::endl;
 			}
 		}
 	}

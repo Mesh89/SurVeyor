@@ -11,6 +11,10 @@ import xgboost as xgb
 from training_manifest import load_training_set_sha256
 
 
+# models of the DUP records (INS_TO_DUP excluded) covered by the copy number model
+CNU_MODELS = ("DUP", "DUP_LARGE", "DUP_LARGE_NOEXL")
+
+
 class Classifier:
     def get_extractor_path():
         surveyor_path = os.path.dirname(os.path.realpath(__file__))
