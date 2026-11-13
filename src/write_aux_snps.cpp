@@ -462,6 +462,7 @@ void process_variants(int, const std::string& in_vcf_fname, const std::string& c
                 bcf1_t* snp_record = generate_snp(in_vcf_hdr, chrom, snp.pos, chr_seq[snp.pos], snp.alt_base, id, gt);
                 bcf_update_info_int32(in_vcf_hdr, snp_record, "HPID", &parent_hpid, 1);
                 copy_all_fmt(in_vcf_hdr, b, snp_record);
+                bcf_update_format_int32(in_vcf_hdr, snp_record, "CNU", NULL, 0);
                 variants.records.push_back(snp_record);
                 aux_records.insert(snp_record);
             }
@@ -501,6 +502,7 @@ void process_variants(int, const std::string& in_vcf_fname, const std::string& c
                 bcf1_t* indel_record = bcf_init();
                 sv2bcf(in_vcf_hdr, indel_record, indel.get(), chr_seq);
                 copy_all_fmt(in_vcf_hdr, b, indel_record);
+                bcf_update_format_int32(in_vcf_hdr, indel_record, "CNU", NULL, 0);
                 copy_hp_info(in_vcf_hdr, b, indel_record);
                 variants.records.push_back(indel_record);
                 aux_records.insert(indel_record);

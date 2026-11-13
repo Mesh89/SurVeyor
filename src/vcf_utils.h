@@ -285,10 +285,6 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* hpid_tag = "##INFO=<ID=HPID,Number=1,Type=Integer,Description=\"Identifier of the local haplotype represented by this call.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hpid_tag, &len));
 
-	bcf_hdr_remove(hdr, BCF_HL_INFO, "DUP_CN_UNRESOLVED");
-	const char* dup_cn_unresolved_tag = "##INFO=<ID=DUP_CN_UNRESOLVED,Number=0,Type=Flag,Description=\"For this DUP record, the number of additional tandem copies is unresolved; END and SVLEN describe the duplicated reference interval, not necessarily the total inserted allele length.\">";
-	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, dup_cn_unresolved_tag, &len));
-
 	bcf_hdr_remove(hdr, BCF_HL_INFO, "LEFT_ANCHOR_BASE_COUNT");
 	const char* labc_tag = "##INFO=<ID=LEFT_ANCHOR_BASE_COUNT,Number=4,Type=Integer,Description=\"Number of As, Cs, Gs, and Ts in the left anchor region of the SV.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr,labc_tag, &len));
@@ -799,6 +795,10 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "EREFA");
 	const char* erefa_tag = "##FORMAT=<ID=EREFA,Number=1,Type=Integer,Description=\"Whether the GT-stage classifier requires the other allele to be reference.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, erefa_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_FMT, "CNU");
+	const char* cnu_tag = "##FORMAT=<ID=CNU,Number=1,Type=Integer,Description=\"1 if the copy number of this DUP is unresolved according to the ML model: END and SVLEN describe the duplicated reference interval, but the inserted allele is likely more than twice (or less than half) as long. 0 otherwise.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, cnu_tag, &len));
 }
 
 bcf_hdr_t* generate_vcf_header(chr_seqs_map_t& contigs, std::string sample_name, config_t config, std::string command) {
@@ -1116,9 +1116,6 @@ void sv2bcf(bcf_hdr_t* hdr, bcf1_t* bcf_entry, sv_t* sv, char* chr_seq, bool for
 				bcf_update_info_int32(hdr, bcf_entry, "EST_SIZE", &(del->estimated_size), 1);
 			}
 		}
-	} else if (sv->svtype() == "DUP") {
-		duplication_t* dup = static_cast<duplication_t*>(sv);
-		bcf_update_info_flag(hdr, bcf_entry, "DUP_CN_UNRESOLVED", "", dup->cn_unresolved);
 	} else if (sv->svtype() == "INV") {
 		inversion_t* inv = (inversion_t*) sv;
 		if (inv->inv_start != inv->start || inv->inv_end != inv->end) {
@@ -1393,12 +1390,7 @@ std::shared_ptr<sv_t> bcf_to_sv(bcf_hdr_t* hdr, bcf1_t* b) {
 	if (svtype == "DEL") {
 		sv = std::make_shared<deletion_t>(bcf_seqname_safe(hdr, b), b->pos, end, get_ins_seq(hdr, b), rc_consensus, lc_consensus, left_anchor_aln, right_anchor_aln);
 	} else if (svtype == "DUP") {
-		auto dup = std::make_shared<duplication_t>(bcf_seqname_safe(hdr, b), b->pos, end, get_ins_seq(hdr, b), rc_consensus, lc_consensus, left_anchor_aln, right_anchor_aln);
-		data = NULL;
-		len = 0;
-		dup->cn_unresolved = bcf_get_info_flag(hdr, b, "DUP_CN_UNRESOLVED", &data, &len) > 0;
-		free(data);
-		sv = dup;
+		sv = std::make_shared<duplication_t>(bcf_seqname_safe(hdr, b), b->pos, end, get_ins_seq(hdr, b), rc_consensus, lc_consensus, left_anchor_aln, right_anchor_aln);
 	} else if (svtype == "INS") {
 		sv = std::make_shared<insertion_t>(bcf_seqname_safe(hdr, b), b->pos, end, get_ins_seq(hdr, b), rc_consensus, lc_consensus, left_anchor_aln, right_anchor_aln);
 	} else if (svtype == "RPL") {

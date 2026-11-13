@@ -14,6 +14,12 @@ from training_manifest import load_training_set_sha256
 # models of the DUP records (INS_TO_DUP excluded) covered by the copy number model
 CNU_MODELS = ("DUP", "DUP_LARGE", "DUP_LARGE_NOEXL")
 
+# DUPs with a copy number model probability at least this high are reported as having an unresolved copy number; chosen on the
+# HGSVC3 training samples (chromosome-held-out) as the highest value keeping >= 90% of untagged DUPs correctly sized in both call
+# and catalogue-genotyping mode (0.245, rounded to 0.25)
+# This threshold was selected for the pooled 0.12.3 model.
+CNU_THRESHOLD = 0.25
+
 
 class Classifier:
     def get_extractor_path():
@@ -65,13 +71,13 @@ class Classifier:
                     test_record_keys[model_name] = record_keys
         return test_data, test_variant_ids, test_record_keys
 
-    def write_prediction_bundle(predictions_fname, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, svid_to_record_key, svid_to_model_name):
+    def write_prediction_bundle(predictions_fname, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, svid_to_cnu, svid_to_record_key, svid_to_model_name):
         with open(predictions_fname, "wb") as predictions_file:
-            predictions_file.write(b"SVPRED1\0")
+            predictions_file.write(b"SVPRED2\0")
             predictions_file.write(struct.pack("<Q", len(svid_to_gt)))
             for variant_id, gt in svid_to_gt.items():
                 force_missing_ref = int(gt >= 1 and svid_to_model_name[variant_id] in ("DUP_LARGE", "DUP_LARGE_NOEXL", "INS_TO_DUP_LARGE"))
-                predictions_file.write(struct.pack("<Qbbfffb", svid_to_record_key[variant_id], int(gt), force_missing_ref, float(svid_to_epr[variant_id]), float(svid_to_hopr.get(variant_id, np.nan)), float(svid_to_expr.get(variant_id, np.nan)), int(svid_to_erefa.get(variant_id, -1))))
+                predictions_file.write(struct.pack("<Qbbfffbb", svid_to_record_key[variant_id], int(gt), force_missing_ref, float(svid_to_epr[variant_id]), float(svid_to_hopr.get(variant_id, np.nan)), float(svid_to_expr.get(variant_id, np.nan)), int(svid_to_erefa.get(variant_id, -1)), int(svid_to_cnu.get(variant_id, -1))))
 
     @staticmethod
     def predict_with_proba(classifier, data):
@@ -99,7 +105,7 @@ class Classifier:
 
         classification_start_time = timeit.default_timer()
         svid_to_gt = dict()
-        svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa = dict(), dict(), dict(), dict()
+        svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, svid_to_cnu = dict(), dict(), dict(), dict(), dict()
         svid_to_record_key, svid_to_model_name = dict(), dict()
         for model_name in test_data:
             model_file = os.path.join(model_dir, "yes_or_no", model_name+'.ubj')
@@ -111,6 +117,23 @@ class Classifier:
                 svid_to_epr[test_variant_ids[model_name][i]] = eprs[i][1]
                 svid_to_record_key[test_variant_ids[model_name][i]] = test_record_keys[model_name][i]
                 svid_to_model_name[test_variant_ids[model_name][i]] = model_name
+
+            if model_name in CNU_MODELS:
+                model_file = os.path.join(model_dir, "cnu", model_name+'.ubj')
+                if not os.path.isfile(model_file):
+                    raise RuntimeError(f"Copy number model not found: {model_file}. This model directory was trained without a copy number model; you must retrain it.")
+                cnu_features_file = os.path.join(model_dir, "cnu", model_name+'.features')
+                yes_or_no_features_file = os.path.join(model_dir, "yes_or_no", model_name+'.features')
+                for features_file in (cnu_features_file, yes_or_no_features_file):
+                    if not os.path.isfile(features_file):
+                        raise RuntimeError(f"Copy number feature schema not found: {features_file}.")
+                with open(cnu_features_file) as cnu_features, open(yes_or_no_features_file) as yes_or_no_features:
+                    if cnu_features.read().splitlines() != yes_or_no_features.read().splitlines():
+                        raise RuntimeError(f"Copy number feature schema mismatch: {cnu_features_file} must match {yes_or_no_features_file} in order.")
+                classifier.load_model(model_file)
+                cnu_probabilities = classifier.predict_proba(test_data[model_name])[:, 1]
+                for i in range(len(cnu_probabilities)):
+                    svid_to_cnu[test_variant_ids[model_name][i]] = int(cnu_probabilities[i] >= CNU_THRESHOLD)
 
             positive_mask = predictions == 1
             positive_data = test_data[model_name][positive_mask]
@@ -148,7 +171,7 @@ class Classifier:
         output_dir = os.path.dirname(os.path.abspath(out_vcf))
         with tempfile.TemporaryDirectory(prefix=".surveyor-predictions-", dir=output_dir) as temp_dir:
             predictions_fname = os.path.join(temp_dir, "predictions.bin")
-            Classifier.write_prediction_bundle(predictions_fname, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, svid_to_record_key, svid_to_model_name)
+            Classifier.write_prediction_bundle(predictions_fname, svid_to_gt, svid_to_epr, svid_to_hopr, svid_to_expr, svid_to_erefa, svid_to_cnu, svid_to_record_key, svid_to_model_name)
             subprocess.run([Classifier.get_writer_path(), in_vcf, predictions_fname, out_vcf, training_set_sha256 if training_set_sha256 is not None else ".", str(threads)], check=True)
         print("VCF writing was run in %.2f seconds" % (timeit.default_timer()-write_start_time))
 

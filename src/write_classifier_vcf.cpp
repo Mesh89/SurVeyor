@@ -15,7 +15,7 @@ struct prediction_t {
     int8_t gt;
     bool force_missing_ref;
     float epr, hopr, expr;
-    int8_t erefa;
+    int8_t erefa, cnu;
 };
 
 template<class T> void read_value(std::ifstream& in, T& value) {
@@ -28,7 +28,7 @@ std::unordered_map<uint64_t, prediction_t> load_predictions(const std::string& p
     if (!in) throw std::runtime_error("Failed to open " + predictions_fname + ".");
     char magic[8];
     in.read(magic, sizeof(magic));
-    const char expected_magic[8] = {'S', 'V', 'P', 'R', 'E', 'D', '1', '\0'};
+    const char expected_magic[8] = {'S', 'V', 'P', 'R', 'E', 'D', '2', '\0'};
     if (!in || memcmp(magic, expected_magic, sizeof(magic)) != 0) throw std::runtime_error("Invalid prediction bundle.");
     uint64_t n_predictions;
     read_value(in, n_predictions);
@@ -39,7 +39,7 @@ std::unordered_map<uint64_t, prediction_t> load_predictions(const std::string& p
         int8_t force_missing_ref;
         prediction_t prediction;
         read_value(in, id); read_value(in, prediction.gt); read_value(in, force_missing_ref); prediction.force_missing_ref = force_missing_ref;
-        read_value(in, prediction.epr); read_value(in, prediction.hopr); read_value(in, prediction.expr); read_value(in, prediction.erefa);
+        read_value(in, prediction.epr); read_value(in, prediction.hopr); read_value(in, prediction.expr); read_value(in, prediction.erefa); read_value(in, prediction.cnu);
         predictions[id] = prediction;
     }
     return predictions;
@@ -57,6 +57,7 @@ void update_header(bcf_hdr_t* hdr, const std::string& training_set_sha256) {
     add_format_header(hdr, "HOPR", "Float", "Probability of an existing SV to be homozygous, according to the ML model.");
     add_format_header(hdr, "EXPR", "Float", "Probability of the SV to be represented exactly, according to the ML model.");
     add_format_header(hdr, "EREFA", "Integer", "Whether the EREFA-stage classifier requires the other allele to be reference.");
+    add_format_header(hdr, "CNU", "Integer", "1 if the copy number of this DUP is unresolved according to the ML model: END and SVLEN describe the duplicated reference interval, but the inserted allele is likely more than twice (or less than half) as long. 0 otherwise.");
     if (training_set_sha256 != ".") {
         bcf_hdr_remove(hdr, BCF_HL_GEN, "SurVeyorTrainingSetSHA256");
         std::string line = "##SurVeyorTrainingSetSHA256=" + training_set_sha256;
@@ -88,6 +89,7 @@ void clear_ml_fields(bcf_hdr_t* hdr, bcf1_t* record) {
     set_format_float(hdr, record, "HOPR", NAN);
     set_format_float(hdr, record, "EXPR", NAN);
     set_format_int32(hdr, record, "EREFA", -1);
+    if (bcf_update_format_int32(hdr, record, "CNU", NULL, 0) != 0) throw std::runtime_error("Failed to clear FORMAT/CNU.");
 }
 
 void apply_prediction(bcf_hdr_t* hdr, bcf1_t* record, const prediction_t& prediction) {
@@ -96,6 +98,7 @@ void apply_prediction(bcf_hdr_t* hdr, bcf1_t* record, const prediction_t& predic
     set_format_float(hdr, record, "HOPR", prediction.hopr);
     set_format_float(hdr, record, "EXPR", prediction.expr);
     set_format_int32(hdr, record, "EREFA", prediction.erefa);
+    if (prediction.cnu >= 0) set_format_int32(hdr, record, "CNU", prediction.cnu);
 }
 
 void write_classifier_vcf(const std::string& input_fname, const std::string& predictions_fname, const std::string& output_fname, const std::string& training_set_sha256, int n_threads) {
