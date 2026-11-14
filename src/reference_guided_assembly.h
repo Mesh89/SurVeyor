@@ -88,7 +88,7 @@ void remove_fully_contained(std::vector<assembly_consensus_t>& assembled_contigs
 }
 
 std::vector<std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment> > retain_non_overlapping_contigs(
-		std::vector<std::tuple<int, assembly_consensus_t, StripedSmithWaterman::Alignment> > contigs_w_score) {
+		std::vector<std::tuple<int, assembly_consensus_t, StripedSmithWaterman::Alignment> > contigs_w_score, bool use_unclipped = false) {
 	std::sort(contigs_w_score.begin(), contigs_w_score.end(),
 			[](const std::tuple<int, assembly_consensus_t, StripedSmithWaterman::Alignment>& p1, const std::tuple<int, assembly_consensus_t, StripedSmithWaterman::Alignment>& p2) {
 		return std::get<0>(p1) > std::get<0>(p2);
@@ -99,7 +99,7 @@ std::vector<std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment> > r
 		for (int j = 0; j < i; j++) {
 			StripedSmithWaterman::Alignment& aln1 = std::get<2>(contigs_w_score[i]);
 			StripedSmithWaterman::Alignment& aln2 = std::get<2>(contigs_w_score[j]);
-			if (overlap(aln1.ref_begin, aln1.ref_end, aln2.ref_begin, aln2.ref_end)) {
+			if (use_unclipped ? overlap(get_unclipped_start(aln1), get_unclipped_end(aln1), get_unclipped_start(aln2), get_unclipped_end(aln2)) : overlap(aln1.ref_begin, aln1.ref_end, aln2.ref_begin, aln2.ref_end)) {
 				remove[i] = true;
 				break;
 			}
@@ -221,9 +221,20 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	read_quals.insert(read_quals.end(), quals_is.begin(), quals_is.end());
 	read_quals.insert(read_quals.end(), quals_rf.begin(), quals_rf.end());
 
+	std::vector<std::string> corrected_read_seqs = read_seqs;
+	if (trim_quals != nullptr) {
+		std::vector<read_correction::correction_input_t> correction_inputs;
+		for (int i = 0; i < read_seqs.size(); i++) {
+			const uint8_t* quals = read_quals.empty() ? nullptr : read_quals[i];
+			correction_inputs.push_back({read_seqs[i], quals ? std::vector<uint8_t>(quals, quals+read_seqs[i].length()) : std::vector<uint8_t>(), quals != nullptr});
+		}
+		std::vector<read_correction::correction_flip_t> flips = read_correction::correct_reads(correction_inputs);
+		for (const read_correction::correction_flip_t& flip : flips) corrected_read_seqs[flip.input][flip.pos] = flip.new_base;
+	}
+
 	std::vector<assembly_consensus_t> read_contigs;
 	for (int i = 0; i < read_seqs.size(); i++) {
-		read_contigs.push_back(make_read_contig(read_seqs[i], read_quals.empty() ? nullptr : read_quals[i], trim_quals == nullptr ? nullptr : (*trim_quals)[i]));
+		read_contigs.push_back(make_read_contig(corrected_read_seqs[i], read_quals.empty() ? nullptr : read_quals[i], trim_quals == nullptr ? nullptr : (*trim_quals)[i]));
 	}
 	std::vector<assembly_consensus_t> discarded_contigs;
 	std::vector<assembly_consensus_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config);
@@ -269,7 +280,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		harsh_aligner.Align(assembled_contigs[i].seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
 		contigs_w_score.push_back({scores[i], std::move(assembled_contigs[i]), aln});
 	}
-	std::vector<std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment>> retained = retain_non_overlapping_contigs(std::move(contigs_w_score));
+	std::vector<std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment>> retained = retain_non_overlapping_contigs(std::move(contigs_w_score), trim_quals != nullptr);
 	std::vector<assembly_consensus_t> retained_contigs;
 	consensus_contigs_alns.clear();
 	for (auto& p : retained) {
@@ -355,7 +366,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		scaffolded_w_score.push_back({aln.sw_score, std::move(contig), aln});
 	}
 
-	retained = retain_non_overlapping_contigs(std::move(scaffolded_w_score));
+	retained = retain_non_overlapping_contigs(std::move(scaffolded_w_score), trim_quals != nullptr);
 	std::vector<std::string> sequences;
 	consensus_contigs_alns.clear();
 	for (auto& p : retained) {
