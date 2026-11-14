@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <sstream>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <htslib/sam.h>
@@ -29,6 +30,7 @@
 #include "reference_guided_assembly.h"
 #include "vcf_utils.h"
 
+void fetch_semi_mapped_mates(std::shared_ptr<insertion_cluster_t> cluster, open_samFile_t* reader, const std::string& contig_name);
 
 config_t config;
 stats_t stats;
@@ -182,6 +184,10 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 	const int TOO_MANY_READS = stats.get_max_depth(contig_map.get_name(contig_id)) * stats.max_is / stats.read_len;
 	if (count_assembly_reads(r_cluster, l_cluster) > TOO_MANY_READS) return false;
 
+    std::string contig_name = contig_map.get_name(contig_id);
+    fetch_semi_mapped_mates(r_cluster, flank_bam, contig_name);
+    fetch_semi_mapped_mates(l_cluster, flank_bam, contig_name);
+
     std::vector<region_t> regions;
 
     /* == Find candidate regions for remapping == */
@@ -208,7 +214,6 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
         regions.push_back(get_candidate_region(subcluster, m_contig_name, contig_map.get_id(m_contig_name), contigs.get_len(m_contig_name), stats.max_is, config.max_trans_size));
     }
 
-    std::string contig_name = contig_map.get_name(contig_id);
     std::string primary_junction_seq;
     std::vector<std::string> selected_contigs;
     auto add_alternatives = [&](const std::string& primary_junction, const std::vector<hts_pair_pos_t>* intervals) {
@@ -690,55 +695,45 @@ void merge_assembly_clusters(std::vector<std::shared_ptr<insertion_cluster_t>>& 
     clusters.erase(std::remove(clusters.begin(), clusters.end(), nullptr), clusters.end());
 }
 
-void add_semi_mapped_mates(int contig_id, const std::vector<std::shared_ptr<insertion_cluster_t>>& r_clusters, const std::vector<std::shared_ptr<insertion_cluster_t>>& l_clusters, bam_pool_t& flank_bam_pool) {
-    using read_key_t = std::pair<std::string, int>;
-    std::map<read_key_t, std::set<std::shared_ptr<insertion_cluster_t>>> wanted_mates;
-    std::vector<hts_pos_t> mate_positions;
-    for (const auto* clusters : {&r_clusters, &l_clusters}) {
-        for (auto cluster : *clusters) {
-            std::set<read_key_t> existing_mate_keys;
-            for (bam1_t* read : cluster->semi_mapped_mates) existing_mate_keys.insert(get_read_key(read));
-            auto request_mate = [&](bam1_t* read) {
-                if (read->core.mtid != read->core.tid) return;
-                read_key_t key = get_read_key(read, true);
-                if (existing_mate_keys.count(key)) return;
-                if (wanted_mates[key].insert(cluster).second) mate_positions.push_back(read->core.mpos);
-            };
-            for (bam1_t* read : cluster->semi_mapped_reads) request_mate(read);
-            if (cluster->clip_consensus) {
-                // Clipped anchors still request mates when their semi-mapped copies were excluded.
-                for (auto read : cluster->clip_consensus->clipped_reads) request_mate(read.get());
+void fetch_semi_mapped_mates(std::shared_ptr<insertion_cluster_t> cluster, open_samFile_t* reader, const std::string& contig_name) {
+    std::call_once(*cluster->semi_mapped_mates_fetched, [&]() {
+        using read_key_t = std::pair<std::string, int>;
+        std::set<read_key_t> wanted_mates;
+        std::vector<hts_pos_t> mate_positions;
+        auto request_mate = [&](bam1_t* read) {
+            if (read->core.mtid != read->core.tid) return;
+            if (wanted_mates.insert(get_read_key(read, true)).second) mate_positions.push_back(read->core.mpos);
+        };
+        for (bam1_t* read : cluster->semi_mapped_reads) request_mate(read);
+        if (cluster->clip_consensus) {
+            // Clipped anchors still request mates when their semi-mapped copies were excluded.
+            for (auto read : cluster->clip_consensus->clipped_reads) request_mate(read.get());
+        }
+        if (mate_positions.empty()) return;
+
+        std::sort(mate_positions.begin(), mate_positions.end());
+        std::vector<std::pair<hts_pos_t, hts_pos_t>> regions;
+        for (hts_pos_t pos : mate_positions) {
+            if (regions.empty() || pos-regions.back().second > 1000) regions.push_back({pos, pos});
+            else regions.back().second = pos;
+        }
+
+        int tid = sam_hdr_name2tid(reader->header, contig_name.c_str());
+        std::set<read_key_t> taken_keys;
+        bam1_t* read = bam_init1();
+        for (const auto& region : regions) {
+            hts_itr_t* iter = sam_itr_queryi(reader->idx, tid, region.first, region.second+1);
+            while (sam_itr_next(reader->file, iter, read) >= 0) {
+                if (read->core.pos < region.first || read->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP)) continue;
+                read_key_t key = get_read_key(read);
+                if (!wanted_mates.count(key) || taken_keys.count(key) || get_sequence(read).find('N') != std::string::npos) continue;
+                taken_keys.insert(key);
+                cluster->semi_mapped_mates.push_back(bam_dup1(read));
             }
+            sam_itr_destroy(iter);
         }
-    }
-    if (mate_positions.empty()) return;
-
-    std::sort(mate_positions.begin(), mate_positions.end());
-    std::vector<std::pair<hts_pos_t, hts_pos_t>> regions;
-    for (hts_pos_t pos : mate_positions) {
-        if (regions.empty() || pos-regions.back().second > 1000) regions.push_back({pos, pos});
-        else regions.back().second = pos;
-    }
-
-    open_samFile_t reader(flank_bam_pool.bam_fname);
-    std::unique_ptr<char, decltype(&free)> reference_path(fai_path(flank_bam_pool.reference_fname.c_str()), &free);
-    hts_set_fai_filename(reader.file, reference_path.get());
-    int tid = sam_hdr_name2tid(reader.header, contig_map.get_name(contig_id).c_str());
-    std::set<read_key_t> taken_keys;
-    bam1_t* read = bam_init1();
-    for (const auto& region : regions) {
-        hts_itr_t* iter = sam_itr_queryi(reader.idx, tid, region.first, region.second+1);
-        while (sam_itr_next(reader.file, iter, read) >= 0) {
-            if (read->core.pos < region.first || read->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP)) continue;
-            read_key_t key = get_read_key(read);
-            auto wanted = wanted_mates.find(key);
-            if (wanted == wanted_mates.end() || taken_keys.count(key) || get_sequence(read).find('N') != std::string::npos) continue;
-            taken_keys.insert(key);
-            for (auto cluster : wanted->second) cluster->semi_mapped_mates.push_back(bam_dup1(read));
-        }
-        sam_itr_destroy(iter);
-    }
-    bam_destroy1(read);
+        bam_destroy1(read);
+    });
 }
 
 int dfs(int curr_idx, std::vector<std::vector<int> >& dependencies, std::vector<int>& dfs_label, int& label) {
@@ -832,7 +827,34 @@ void find_insertions(int id, int contig_id, int comp_id, std::vector<cc_v_distan
     }
 }
 
-void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::vector<std::future<void> >& futures, bam_pool_t& flank_bam_pool) {
+void prefetch_bam_contig(open_samFile_t* reader, const std::string& contig_name, const std::string& bam_fname) {
+#ifdef POSIX_FADV_WILLNEED
+    int tid = sam_hdr_name2tid(reader->header, contig_name.c_str());
+    if (tid < 0) return;
+    hts_itr_t* iter = sam_itr_queryi(reader->idx, tid, 0, HTS_POS_MAX);
+    if (!iter) return;
+    if (iter->n_off == 0) {
+        sam_itr_destroy(iter);
+        return;
+    }
+    uint64_t begin = iter->off[0].u, end = iter->off[0].v;
+    for (int i = 1; i < iter->n_off; i++) {
+        begin = std::min(begin, iter->off[i].u);
+        end = std::max(end, iter->off[i].v);
+    }
+    off_t offset = begin >> 16, length = (end >> 16)-(begin >> 16)+65536;
+    sam_itr_destroy(iter);
+    spec_thread_pool->push([bam_fname, offset, length](int) {
+        int fd = open(bam_fname.c_str(), O_RDONLY);
+        if (fd >= 0) {
+            posix_fadvise(fd, offset, length, POSIX_FADV_WILLNEED);
+            close(fd);
+        }
+    });
+#endif
+}
+
+void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::vector<std::future<void> >& futures, bam_pool_t& flank_bam_pool, open_samFile_t* prefetch_reader) {
 
     std::string r_dc_fname = workdir + "/workspace/fwd-stable/" + std::to_string(contig_id) + ".noremap.bam";
     std::string l_dc_fname = workdir + "/workspace/rev-stable/" + std::to_string(contig_id) + ".noremap.bam";
@@ -903,7 +925,6 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
     add_assembly_pairs({same_strand_fname, outward_fname, long_fname}, contig_id, r_clusters, l_clusters, *mateseqs, *matequals);
     merge_assembly_clusters(r_clusters);
     merge_assembly_clusters(l_clusters);
-    add_semi_mapped_mates(contig_id, r_clusters, l_clusters, flank_bam_pool);
 
     std::vector<cc_v_distance_t> pq;
     std::multimap<int, std::shared_ptr<insertion_cluster_t> > l_clusters_map;
@@ -997,6 +1018,7 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
     pq.clear();
 
     bam_hdr_t* header = bam_hdr_dup(l_dc_file->header);
+    prefetch_bam_contig(prefetch_reader, contig_map.get_name(contig_id), flank_bam_pool.bam_fname);
 
     int MIN_COMP_SIZE = 1000;
     std::vector<std::vector<cc_v_distance_t> > batches(1);
@@ -1048,13 +1070,14 @@ int main(int argc, char* argv[]) {
 
     bam_pool_t flank_bam_pool(config.threads, bam_fname, reference_fname);
     for (open_samFile_t* reader : flank_bam_pool.pool) hts_set_cache_size(reader->file, config.bam_reader_cache_size);
+    open_samFile_t prefetch_reader(bam_fname);
 
     spec_thread_pool = new ctpl::thread_pool(config.threads);
     ctpl::thread_pool thread_pool(config.threads);
     std::vector<std::future<void> > futures;
 
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
-        find_contig_insertions(contig_id, thread_pool, futures, flank_bam_pool);
+        find_contig_insertions(contig_id, thread_pool, futures, flank_bam_pool, &prefetch_reader);
     }
     thread_pool.stop(true);
     for (int i = 0; i < futures.size(); i++) {

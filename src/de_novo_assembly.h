@@ -67,15 +67,12 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 			if (is_contained(s1, s2, max_seq_error)) continue;
 
 			suffix_prefix_aln_t spa1 = aln_suffix_prefix(s1, s2, 1, -4, max_seq_error, min_overlap);
-			bool spa1_rejected = reject_assembly_overlap(s1, s2, spa1.overlap);
 			suffix_prefix_aln_t spa2 = aln_suffix_prefix(s2, s1, 1, -4, max_seq_error, min_overlap);
-			bool spa2_rejected = reject_assembly_overlap(s2, s1, spa2.overlap);
 
 			bool reverse = spa2.overlap && (!spa1.overlap || spa1.score < spa2.score);
 			int from = reverse ? j : i, to = reverse ? i : j;
 			const suffix_prefix_aln_t& spa = reverse ? spa2 : spa1;
-			bool rejected = reverse ? spa2_rejected : spa1_rejected;
-			if (spa.overlap && order[from] <= order[to] && !rejected) {
+			if (spa.overlap && order[from] <= order[to] && !reject_assembly_overlap(read_seqs[from], read_seqs[to], spa.overlap)) {
 				add_assembly_edge(from, {to, spa.score, spa.overlap}, out_edges, l_adj, l_adj_rev);
 			}
 		}

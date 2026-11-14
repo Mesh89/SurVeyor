@@ -26,7 +26,14 @@ bool reject_assembly_overlap(const std::string& left, const std::string& right, 
 	hp_base = is_homopolymer(left.data()+left.length()-overlap, overlap);
 	if (hp_base == 'C' || hp_base == 'G') return true;
 
-	size_t first_non_acgt = right.find_first_not_of("ACGT");
+	size_t first_non_acgt = std::string::npos;
+	for (size_t p = 0; p < right.length(); p++) {
+		char base = right[p];
+		if (base != 'A' && base != 'C' && base != 'G' && base != 'T') {
+			first_non_acgt = p;
+			break;
+		}
+	}
 	for (int displacement = 1; displacement <= 6 && displacement < overlap; displacement++) {
 		int shorter = overlap-displacement;
 		const char* suffix = left.data()+left.length()-shorter;

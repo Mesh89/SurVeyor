@@ -7,6 +7,7 @@
 #include "sam_utils.h"
 #include "clustering_utils.h"
 #include <memory>
+#include <mutex>
 #include <set>
 
 struct insertion_cluster_t {
@@ -15,6 +16,7 @@ struct insertion_cluster_t {
     std::shared_ptr<cluster_t> cluster = NULL;
     std::vector<bam1_t*> semi_mapped_reads;
     std::vector<bam1_t*> semi_mapped_mates;
+    std::shared_ptr<std::once_flag> semi_mapped_mates_fetched = std::make_shared<std::once_flag>();
     std::shared_ptr<consensus_t> clip_consensus = NULL;
 
     insertion_cluster_t() : start(0), end(0) {
