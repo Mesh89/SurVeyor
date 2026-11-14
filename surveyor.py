@@ -52,7 +52,7 @@ call_genotype_shared_options_parser.add_argument('--force-workdir', action='stor
 call_genotype_shared_options_parser.add_argument('--per-contig-stats', action='store_true',
                         help='Depth statistics are computed separately for each contig. Useful when one or more of the target contigs are expected to have '
                         'dramatically different depth than others. Otherwise, it is not recommended to use this option.')
-call_genotype_shared_options_parser.add_argument('--two-pass', action='store_true', help='Activate two-pass genotyping.')
+call_genotype_shared_options_parser.add_argument('--single-pass', action='store_true', help='Use single-pass genotyping instead of the default two-pass genotyping.')
 call_genotype_shared_options_parser.add_argument('--write-aux-snp', action='store_true', help='Write auxiliary SNPs to the final result VCF.')
 call_genotype_shared_options_parser.add_argument('--min-diff-hsr', type=int, default=3, help='Minimum number of differences with the reference \
                         (considered as number of insertions, deletions and mismatches) for a read to be considered a hidden split read.')
@@ -452,7 +452,7 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
     generate_read_evidence_cmd = SURVEYOR_PATH + "/bin/generate_read_evidence %s/intermediate_results/calls-for-genotyping.vcf.gz %s %s %s" % (workdir, bam_fname, reference_fname, workdir)
     run_cmd(generate_read_evidence_cmd)
 
-    if cmd_args.two_pass:
+    if not cmd_args.single_pass:
         consensus_cache_options = " --consensus-cache " + shlex.quote(workdir + "/consensus_cache")
         mkdir_clean(workdir + "/consensus_cache")
     genotype_cmd = SURVEYOR_PATH + "/bin/genotype %s/intermediate_results/calls-for-genotyping.vcf.gz %s/intermediate_results/calls-with-fmt.vcf.gz %s %s %s %s" % (workdir, workdir, bam_fname, reference_fname, workdir, sample_name)
@@ -465,10 +465,10 @@ def genotype_variants(bam_fname, workdir, reference_fname, sample_name, ml_model
         print("No model provided. Skipping the classification step.")
         return
 
-    initial_gt_file = workdir + ("/intermediate_results/calls-with-gt.iter0.vcf.gz" if cmd_args.two_pass else "/intermediate_results/calls-with-gt.vcf.gz")
+    initial_gt_file = workdir + ("/intermediate_results/calls-with-gt.vcf.gz" if cmd_args.single_pass else "/intermediate_results/calls-with-gt.iter0.vcf.gz")
     Classifier.run_classifier(workdir + "/intermediate_results/calls-with-fmt.vcf.gz", initial_gt_file, workdir + "/stats.txt", ml_model, threads=cmd_args.threads)
 
-    if not cmd_args.two_pass:
+    if cmd_args.single_pass:
         reconcile_vcf_gt_cmd = SURVEYOR_PATH + "/bin/reconcile_vcf_gt %s %s %s %s %d" % (workdir + "/intermediate_results/calls-raw.vcf.gz", workdir + "/intermediate_results/calls-with-gt.vcf.gz", workdir + "/intermediate_results/calls-with-gt.reconciled.vcf.gz", sample_name, cmd_args.threads)
         run_cmd(reconcile_vcf_gt_cmd)
 
@@ -512,8 +512,8 @@ if cmd_args.command == 'call':
         if not cmd_args.generate_training_data:
             print("At least one of --ml-model or --generate-training-data must be provided.", flush=True)
             exit(1)
-        if cmd_args.two_pass:
-            print("Error: --two-pass requires --ml-model to be provided.", flush=True)
+        if not cmd_args.single_pass:
+            print("Error: two-pass genotyping requires --ml-model to be provided. Use --single-pass to generate training data without a model.", flush=True)
             exit(1)
 
     call_candidate_variants(cmd_args.bam_file, cmd_args.workdir, cmd_args.reference, sample_name)
@@ -524,7 +524,7 @@ if cmd_args.command == 'call':
     if not cmd_args.ml_model:
         exit(0)
 
-    genotyped_prefix = cmd_args.workdir + ("/calls-genotyped.reassigned" if cmd_args.two_pass else "/calls-genotyped")
+    genotyped_prefix = cmd_args.workdir + ("/calls-genotyped" if cmd_args.single_pass else "/calls-genotyped.reassigned")
     deduplicate_vcf(genotyped_prefix + ".smvars.vcf.gz", genotyped_prefix + ".smvars.deduped.vcf.gz")
     deduplicate_vcf(genotyped_prefix + ".stvars.vcf.gz", genotyped_prefix + ".stvars.deduped.vcf.gz")
 
@@ -536,8 +536,8 @@ elif cmd_args.command == 'genotype':
         if not cmd_args.generate_training_data:
             print("At least one of --ml-model or --generate-training-data must be provided.", flush=True)
             exit(1)
-        if cmd_args.two_pass:
-            print("Error: --two-pass requires --ml-model to be provided.", flush=True)
+        if not cmd_args.single_pass:
+            print("Error: two-pass genotyping requires --ml-model to be provided. Use --single-pass to generate training data without a model.", flush=True)
             exit(1)
 
     check_duplicate_ids_cmd = SURVEYOR_PATH + "/bin/check_duplicate_ids %s" % cmd_args.in_vcf_file
@@ -557,7 +557,7 @@ elif cmd_args.command == 'genotype':
     if not cmd_args.ml_model:
         exit(0)
 
-    genotyped_prefix = cmd_args.workdir + ("/calls-genotyped.reassigned" if cmd_args.two_pass else "/calls-genotyped")
+    genotyped_prefix = cmd_args.workdir + ("/calls-genotyped" if cmd_args.single_pass else "/calls-genotyped.reassigned")
     deduplicate_vcf(genotyped_prefix + ".smvars.vcf.gz", genotyped_prefix + ".smvars.deduped.vcf.gz")
     deduplicate_vcf(genotyped_prefix + ".stvars.vcf.gz", genotyped_prefix + ".stvars.deduped.vcf.gz")
 
@@ -576,7 +576,7 @@ elif cmd_args.command == 'generate-training-data':
     source_ins_to_dup_training_data_vcf = original_ins_to_dup_training_data_vcf
     if cmd_args.use_reassigned_training_data:
         if not os.path.exists(reassigned_training_data_vcf) or not os.path.exists(reassigned_ins_to_dup_training_data_vcf):
-            print("Error: reassigned training data not found in the workdir %s. Please make sure to run call or genotype with --generate-training-data, --ml-model, and --two-pass first." % cmd_args.workdir, flush=True)
+            print("Error: reassigned training data not found in the workdir %s. Please make sure to run call or genotype with --generate-training-data and --ml-model without --single-pass first." % cmd_args.workdir, flush=True)
             exit(1)
         source_training_data_vcf = reassigned_training_data_vcf
         source_ins_to_dup_training_data_vcf = reassigned_ins_to_dup_training_data_vcf
