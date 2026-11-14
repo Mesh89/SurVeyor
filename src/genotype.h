@@ -668,12 +668,16 @@ struct evidence_map_t {
         interned_vid_sets.clear();
         std::unordered_map<std::string, float> sv_epr_map;
         std::unordered_map<std::string, int> sv_hpid_map;
+        std::unordered_map<int, float> hpid_main_epr_map;
         std::unordered_map<std::string, sv_t*> sv_by_exact_id;
         for (sv_t* sv : svs) {
             sv_by_exact_id[sv->id] = sv;
             std::string id = remove_svid_dup_suffix(sv->id);
             sv_hpid_map[id] = sv->hpid;
-            if (resolve_assignments) sv_epr_map[id] = sv->sample_info.epr;
+            if (resolve_assignments) {
+                sv_epr_map[id] = sv->sample_info.epr;
+                if (id.find(".AUX_INDEL.") == std::string::npos) hpid_main_epr_map[sv->hpid] = std::max(hpid_main_epr_map[sv->hpid], sv->sample_info.epr);
+            }
         }
 
         for (const auto& entry : sv_hpid_map) {
@@ -858,10 +862,14 @@ struct evidence_map_t {
             // Find top two SVs, prioritizing variants above MIN_EPR, then U, then EPR.
             std::vector<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>> sv_U_vec;
             for (const auto& sv_w_bp : sv_w_bps) {
-                int U = hpid_to_U_map[sv_hpid_map[sv_w_bp.first]];
+                int hpid = sv_hpid_map[sv_w_bp.first];
+                int U = hpid_to_U_map[hpid];
                 float epr = sv_epr_map[sv_w_bp.first];
                 bool passes_min_epr = epr >= MIN_EPR;
-                sv_U_vec.push_back({{passes_min_epr, U, epr}, sv_w_bp});
+                // Rank all pieces by the main event so a high-EPR AUX piece cannot win a haplotype tie.
+                auto main_epr_it = hpid_main_epr_map.find(hpid);
+                float ranking_epr = main_epr_it != hpid_main_epr_map.end() ? main_epr_it->second : epr;
+                sv_U_vec.push_back({{passes_min_epr, U, ranking_epr}, sv_w_bp});
             }
             std::sort(sv_U_vec.begin(), sv_U_vec.end(), std::greater<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>>());
             sv_with_bp_t sv1 = sv_U_vec[0].second;
