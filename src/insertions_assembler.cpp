@@ -690,6 +690,49 @@ void merge_assembly_clusters(std::vector<std::shared_ptr<insertion_cluster_t>>& 
     clusters.erase(std::remove(clusters.begin(), clusters.end(), nullptr), clusters.end());
 }
 
+void add_semi_mapped_mates(int contig_id, const std::vector<std::shared_ptr<insertion_cluster_t>>& r_clusters, const std::vector<std::shared_ptr<insertion_cluster_t>>& l_clusters, bam_pool_t& flank_bam_pool) {
+    using read_key_t = std::pair<std::string, int>;
+    std::map<read_key_t, std::vector<std::shared_ptr<insertion_cluster_t>>> wanted_mates;
+    std::vector<hts_pos_t> mate_positions;
+    for (const auto* clusters : {&r_clusters, &l_clusters}) {
+        for (auto cluster : *clusters) {
+            for (bam1_t* read : cluster->semi_mapped_reads) {
+                if (read->core.mtid != read->core.tid) continue;
+                wanted_mates[get_read_key(read, true)].push_back(cluster);
+                mate_positions.push_back(read->core.mpos);
+            }
+        }
+    }
+    if (mate_positions.empty()) return;
+
+    std::sort(mate_positions.begin(), mate_positions.end());
+    std::vector<std::pair<hts_pos_t, hts_pos_t>> regions;
+    for (hts_pos_t pos : mate_positions) {
+        if (regions.empty() || pos-regions.back().second > 1000) regions.push_back({pos, pos});
+        else regions.back().second = pos;
+    }
+
+    open_samFile_t reader(flank_bam_pool.bam_fname);
+    std::unique_ptr<char, decltype(&free)> reference_path(fai_path(flank_bam_pool.reference_fname.c_str()), &free);
+    hts_set_fai_filename(reader.file, reference_path.get());
+    int tid = sam_hdr_name2tid(reader.header, contig_map.get_name(contig_id).c_str());
+    std::set<read_key_t> taken_keys;
+    bam1_t* read = bam_init1();
+    for (const auto& region : regions) {
+        hts_itr_t* iter = sam_itr_queryi(reader.idx, tid, region.first, region.second+1);
+        while (sam_itr_next(reader.file, iter, read) >= 0) {
+            if (read->core.pos < region.first || read->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP)) continue;
+            read_key_t key = get_read_key(read);
+            auto wanted = wanted_mates.find(key);
+            if (wanted == wanted_mates.end() || taken_keys.count(key) || get_sequence(read).find('N') != std::string::npos) continue;
+            taken_keys.insert(key);
+            for (auto cluster : wanted->second) cluster->semi_mapped_mates.push_back(bam_dup1(read));
+        }
+        sam_itr_destroy(iter);
+    }
+    bam_destroy1(read);
+}
+
 int dfs(int curr_idx, std::vector<std::vector<int> >& dependencies, std::vector<int>& dfs_label, int& label) {
     dfs_label[curr_idx] = label;
     for (int next_idx : dependencies[curr_idx]) {
@@ -852,6 +895,7 @@ void find_contig_insertions(int contig_id, ctpl::thread_pool& thread_pool, std::
     add_assembly_pairs({same_strand_fname, outward_fname, long_fname}, contig_id, r_clusters, l_clusters, *mateseqs, *matequals);
     merge_assembly_clusters(r_clusters);
     merge_assembly_clusters(l_clusters);
+    add_semi_mapped_mates(contig_id, r_clusters, l_clusters, flank_bam_pool);
 
     std::vector<cc_v_distance_t> pq;
     std::multimap<int, std::shared_ptr<insertion_cluster_t> > l_clusters_map;

@@ -14,6 +14,7 @@ struct insertion_cluster_t {
     hts_pos_t start, end;
     std::shared_ptr<cluster_t> cluster = NULL;
     std::vector<bam1_t*> semi_mapped_reads;
+    std::vector<bam1_t*> semi_mapped_mates;
     std::shared_ptr<consensus_t> clip_consensus = NULL;
 
     insertion_cluster_t() : start(0), end(0) {
@@ -62,6 +63,10 @@ struct insertion_cluster_t {
         	bam_destroy1(read);
         }
         semi_mapped_reads.clear();
+        for (bam1_t* read : semi_mapped_mates) {
+        	bam_destroy1(read);
+        }
+        semi_mapped_mates.clear();
     }
 
     int size() {

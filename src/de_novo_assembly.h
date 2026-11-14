@@ -190,6 +190,15 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 		}
 	}
 
+	for (bam1_t* read : r_cluster->semi_mapped_mates) {
+		if (!read_filter.add_read(read)) continue;
+		left_stable.push_back({get_sequence(read), {!is_left_clipped(read, 1), true}, {read, STABLE_READ, false}});
+	}
+	for (bam1_t* read : l_cluster->semi_mapped_mates) {
+		if (!read_filter.add_read(read)) continue;
+		right_stable.push_back({get_sequence(read), {true, !is_right_clipped(read, 1)}, {read, STABLE_READ, false}});
+	}
+
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
 		if (!read_filter.add_read(read)) continue;
 		std::string read_seq = get_sequence(read, true);
@@ -550,9 +559,20 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		}
 	}
 
-	if (chosen_ins == NULL) return NULL;
-
-	chosen_ins = finalize_de_novo_insertion_from_junction(chosen_ins, full_assembled_seq, r_cluster, l_cluster, mateseqs, matequals, config);
+	if (chosen_ins != NULL) chosen_ins = finalize_de_novo_insertion_from_junction(chosen_ins, full_assembled_seq, r_cluster, l_cluster, mateseqs, matequals, config);
+	if (chosen_ins == NULL && assembled_sequences.size() > 8) {
+		std::shared_ptr<sv_t> third_ins = detect_de_novo_insertion_from_junction(contig_name, contigs, assembled_sequences[2], r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, config, stats);
+		if (third_ins != NULL && !third_ins->incomplete_ins_seq()) {
+			bool valid_anchors = true;
+			for (const auto& anchor : {third_ins->left_anchor_aln, third_ins->right_anchor_aln}) {
+				if (!anchor || anchor->best_score < 50 || anchor->seq_len < 50 || anchor->end-anchor->start+1 < 50) valid_anchors = false;
+			}
+			if (valid_anchors) {
+				chosen_ins = third_ins;
+				full_assembled_seq = assembled_sequences[2];
+			}
+		}
+	}
 	if (chosen_ins) junction_seq = full_assembled_seq;
 	return chosen_ins;
 }
