@@ -137,8 +137,15 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 	return assemble_graph_paths(graph_contigs, l_adj_rev, rev_topological_order, path_permissions, used);
 }
 
+// A read as the de novo assembly uses it: after read correction, with the quality of each of its bases.
+struct assembly_read_t {
+	std::string seq;
+	std::vector<uint8_t> quals;
+};
+
 std::vector<std::string> assemble_sequences(std::string contig_name, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
-		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam) {
+		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam, std::vector<assembly_read_t>& assembly_reads) {
+	assembly_reads.clear();
 
 	const int TOO_MANY_READS = stats.get_max_depth(contig_name) * stats.max_is / stats.read_len;
 	if (count_assembly_reads(r_cluster, l_cluster) >= TOO_MANY_READS) return {"TOO_MANY_READS"};
@@ -282,6 +289,14 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 			read_contigs[flip.input].votes[flip.pos] = base_votes_t();
 			read_contigs[flip.input].votes[flip.pos].add(flip.new_base, qual);
 		}
+	}
+	for (const assembly_consensus_t& read : read_contigs) {
+		assembly_read_t assembly_read{read.seq, std::vector<uint8_t>(read.seq.length(), 0)};
+		for (int i = 0; i < read.seq.length(); i++) {
+			int base = base_to_index(read.seq[i]);
+			if (base >= 0) assembly_read.quals[i] = std::min(60, std::max(0, read.votes[i].quals[base]));
+		}
+		assembly_reads.push_back(std::move(assembly_read));
 	}
 	std::vector<assembly_consensus_t> contigs = assemble_contigs(read_contigs, path_permissions, order, config, stats);
 	for (assembly_consensus_t& contig : contigs) {
@@ -435,11 +450,11 @@ std::shared_ptr<sv_t> detect_de_novo_insertion(std::string& contig_name, chr_seq
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
 		std::ostream& assembly_failed_no_seq, std::ostream& assembly_failed_cycle_writer, std::ostream& assembly_failed_too_many_reads_writer,
 		StripedSmithWaterman::Aligner& aligner_to_base, StripedSmithWaterman::Aligner& harsh_aligner,
-		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam, std::string& junction_seq, std::vector<std::string>& selected_contigs) {
+		config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model, open_samFile_t* flank_bam, std::string& junction_seq, std::vector<std::string>& selected_contigs, std::vector<assembly_read_t>& assembly_reads) {
 
 	junction_seq.clear(); // Set only when the selected insertion passes the support checks.
 	selected_contigs.clear();
-	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats, hp_tail_quality_model, flank_bam);
+	std::vector<std::string> assembled_sequences = assemble_sequences(contig_name, r_cluster, l_cluster, mateseqs, matequals, config, stats, hp_tail_quality_model, flank_bam, assembly_reads);
 
 	std::string ins_full_id = "NO_ID";
 	if (assembled_sequences.empty()) {

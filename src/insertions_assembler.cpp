@@ -78,9 +78,124 @@ bool operator < (const cc_v_distance_t& ccd1, const cc_v_distance_t& ccd2) { // 
     return ccd1.distance < ccd2.distance;
 }
 
+// A complete de novo insertion is reported only where the reads of its assembly and the reference confirm its junction.
+// - Spanned: at every position of the inserted sequence, breakpoints included, some read should agree with the junction for
+//   JUNCTION_SPAN bases on both sides (mismatches at low-quality read bases are ignored). A join made through a short
+//   overlap between unrelated reads has no such read. The junction is cut at the position with the least agreement
+//   (weak_pos) if at least MIN_CONTRADICTING reads leave it within 20 bp of that position: they match the junction up to
+//   there and then disagree at 3 or more high-quality bases among the next 20. A thinly covered position is not cut.
+// - Anchored: both reference anchors need an alignment score of MIN_ANCHOR_SCORE. A contig that stops inside a long
+//   insertion can have its end aligned to the reference as if it were the flank.
+struct junction_confirmation_t {
+    int weak_pos = -1;
+    bool left_anchored = true, right_anchored = true;
+    bool confirmed() const { return weak_pos < 0 && left_anchored && right_anchored; }
+};
+
+junction_confirmation_t confirm_complete_junction(const std::string& junction, std::shared_ptr<sv_t> ins, const std::vector<assembly_read_t>& reads) {
+    const int JUNCTION_SPAN = 20, MIN_CONTRADICTING = 2, MIN_ANCHOR_SCORE = 50, MIN_OVERLAP = 30, MIN_QUAL = 20;
+    junction_confirmation_t result;
+    size_t ins_pos = junction.find(ins->ins_seq);
+    if (ins_pos == std::string::npos) return result;
+    int ins_begin = ins_pos, ins_end = ins_begin+ins->ins_seq.length(), junction_len = junction.length();
+
+    std::vector<int> margin(junction_len+1, 0), agreeing_before; // per boundary between junction bases, best over the reads
+    std::vector<std::pair<int, int> > divergences; // (junction position where a read leaves the junction, read index)
+    for (int read_idx = 0; read_idx < reads.size(); read_idx++) {
+        const assembly_read_t& read = reads[read_idx];
+        int read_len = read.seq.length();
+        if (read_len < MIN_OVERLAP) continue;
+
+        // Best gapless local placement: the read leaves the junction at an end of it if it disagrees there.
+        ungapped_aln_t local = best_ungapped_aln(read.seq.c_str(), read_len, junction.c_str(), junction_len, read_len-MIN_OVERLAP, 1, -4, read_len);
+        if (local.score >= MIN_OVERLAP) {
+            int offset = local.ref_begin-local.query_begin, disagreeing = 0;
+            for (int i = local.query_end; i < read_len && i < local.query_end+20 && offset+i < junction_len; i++) {
+                if (read.seq[i] != junction[offset+i] && read.quals[i] >= MIN_QUAL) disagreeing++;
+            }
+            if (disagreeing >= 3) divergences.push_back({local.ref_end, read_idx});
+            disagreeing = 0;
+            for (int i = local.query_begin-1; i >= 0 && i >= local.query_begin-20 && offset+i >= 0; i--) {
+                if (read.seq[i] != junction[offset+i] && read.quals[i] >= MIN_QUAL) disagreeing++;
+            }
+            if (disagreeing >= 3) divergences.push_back({local.ref_begin, read_idx});
+        }
+
+        // Placement of the whole read: at each boundary it covers, the bases agreeing right before it and from it onwards.
+        ungapped_aln_t aln = best_ungapped_aln(read.seq.c_str(), read_len, junction.c_str(), junction_len, read_len-MIN_OVERLAP);
+        int len = aln.query_end-aln.query_begin;
+        if (len < MIN_OVERLAP || aln.mismatches*10 > len) continue;
+        auto disagrees = [&](int i) { return read.seq[aln.query_begin+i] != junction[aln.ref_begin+i] && read.quals[aln.query_begin+i] >= MIN_QUAL; };
+        agreeing_before.assign(len+1, 0);
+        for (int i = 0, run = 0; i < len; i++) {
+            run = disagrees(i) ? 0 : run+1;
+            agreeing_before[i+1] = run;
+        }
+        for (int i = len, run = 0; i >= 0; i--) {
+            if (i < len) run = disagrees(i) ? 0 : run+1;
+            margin[aln.ref_begin+i] = std::max(margin[aln.ref_begin+i], std::min(agreeing_before[i], run));
+        }
+    }
+    int weakest = ins_begin;
+    for (int pos = ins_begin; pos <= ins_end; pos++) {
+        if (margin[pos] < margin[weakest]) weakest = pos;
+    }
+    if (margin[weakest] < JUNCTION_SPAN) {
+        std::set<int> contradicting;
+        for (const auto& divergence : divergences) {
+            if (std::abs(divergence.first-weakest) <= 20) contradicting.insert(divergence.second);
+        }
+        if (contradicting.size() >= MIN_CONTRADICTING) result.weak_pos = weakest;
+    }
+
+    if (!ins->left_anchor_aln || ins->left_anchor_aln->best_score < MIN_ANCHOR_SCORE) result.left_anchored = false;
+    if (!ins->right_anchor_aln || ins->right_anchor_aln->best_score < MIN_ANCHOR_SCORE) result.right_anchored = false;
+    return result;
+}
+
+// A complete insertion that is not confirmed is replaced by an incomplete one made of the confirmed parts: the two sides of
+// the weak position, or the junction with another contig for the side that is not anchored. Of several, the one with the
+// highest sum of anchor scores is taken, and junction is set to it. If there is none, the insertion is kept.
+std::shared_ptr<sv_t> confirmed_de_novo_insertion(std::string& contig_name, std::shared_ptr<sv_t> ins, std::string& junction, const std::vector<std::string>& selected_contigs,
+                   const std::vector<assembly_read_t>& assembly_reads, std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
+                   std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
+                   StripedSmithWaterman::Aligner& aligner_to_base, stats_t& stats) {
+    if (ins == NULL || ins->incomplete_ins_seq()) return ins;
+    junction_confirmation_t confirmation = confirm_complete_junction(junction, ins, assembly_reads);
+    if (confirmation.confirmed()) return ins;
+
+    std::vector<std::string> candidates;
+    if (confirmation.weak_pos >= 0) {
+        candidates.push_back(junction.substr(0, confirmation.weak_pos) + "-" + junction.substr(confirmation.weak_pos));
+    } else {
+        for (const std::string& other : selected_contigs) {
+            if (other.empty() || other == junction) continue;
+            if (!confirmation.right_anchored) candidates.push_back(junction + "-" + other);
+            if (!confirmation.left_anchored) candidates.push_back(other + "-" + junction);
+        }
+    }
+    std::shared_ptr<sv_t> best = NULL;
+    std::string best_junction;
+    int best_score = -1;
+    for (const std::string& candidate : candidates) {
+        std::shared_ptr<sv_t> incomplete = detect_de_novo_insertion_from_junction(contig_name, contigs, candidate, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, config, stats);
+        if (incomplete == NULL || !incomplete->incomplete_ins_seq()) continue;
+        int score = (incomplete->left_anchor_aln ? incomplete->left_anchor_aln->best_score : 0) + (incomplete->right_anchor_aln ? incomplete->right_anchor_aln->best_score : 0);
+        if (score > best_score) {
+            best = incomplete;
+            best_junction = candidate;
+            best_score = score;
+        }
+    }
+    if (best == NULL) return ins;
+    junction = best_junction;
+    return best;
+}
+
 // Insertions from assembled contigs that the primary does not use: a second allele, or the only complete allele.
 // A contig is tried as assembled and after read correction. Its insertion is kept when both reference anchors are at least
-// 50 bp, clean reads cover the inserted sequence and 10 bp on each side at depth 2, and
+// 50 bp, the reads of the assembly confirm its junction (confirm_complete_junction),
+// clean reads cover the inserted sequence and 10 bp on each side at depth 2, and
 // - with a complete primary: at least 2 clean reads align better to the contig than to the primary.
 //   Without the cover, 3 such reads are needed and they must be at least 40% of the reads that align better to it;
 // - without one: at least 2 clean reads span each breakpoint by 15 bp and at least a third of the aligned reads are clean.
@@ -89,6 +204,7 @@ bool operator < (const cc_v_distance_t& ccd1, const cc_v_distance_t& ccd2) { // 
 // in tandem repeats, partial contigs of a single allele have it.
 // The insertions go to extra, which is appended after the pair's other insertions, so that those never depend on them.
 void add_de_novo_contig_insertions(std::string& contig_name, const std::string& primary_junction, bool complete_primary, const std::vector<std::string>& selected_contigs,
+                   const std::vector<assembly_read_t>& assembly_reads,
                    std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
                    std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
                    StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& aligner_to_base,
@@ -136,6 +252,7 @@ void add_de_novo_contig_insertions(std::string& contig_name, const std::string& 
         for (const auto& anchor : {candidate->left_anchor_aln, candidate->right_anchor_aln}) {
             if (!anchor || anchor->best_score < 50 || anchor->seq_len < 50 || anchor->end-anchor->start+1 < 50) return false;
         }
+        if (!confirm_complete_junction(junction, candidate, assembly_reads).confirmed()) return false;
         size_t ins_pos = junction.find(candidate->ins_seq);
         bool located = ins_pos != std::string::npos;
         int ins_begin = located ? ins_pos : 0, ins_end = ins_begin+candidate->ins_seq.length();
@@ -216,6 +333,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 
     std::string primary_junction_seq;
     std::vector<std::string> selected_contigs;
+    std::vector<assembly_read_t> assembly_reads;
     auto add_alternatives = [&](const std::string& primary_junction, const std::vector<hts_pair_pos_t>* intervals) {
         std::vector<insertion_fragment_evidence_t> fragments = collect_insertion_read_evidence(r_cluster, l_cluster, mateseqs, matequals);
         std::vector<reconstructed_insertion_junction_t> alternatives = reconstruct_polished_insertion_junctions(primary_junction, fragments, aligner, intervals ? *intervals : std::vector<hts_pair_pos_t>{});
@@ -233,8 +351,9 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     };
     if (regions.empty()) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq, selected_contigs);
-		add_de_novo_contig_insertions(contig_name, primary_junction_seq, ins != NULL && !ins->incomplete_ins_seq(), selected_contigs, r_cluster, l_cluster, mateseqs, matequals, aligner, aligner_to_base, stats, extra);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq, selected_contigs, assembly_reads);
+		ins = confirmed_de_novo_insertion(contig_name, ins, primary_junction_seq, selected_contigs, assembly_reads, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, stats);
+		add_de_novo_contig_insertions(contig_name, primary_junction_seq, ins != NULL && !ins->incomplete_ins_seq(), selected_contigs, assembly_reads, r_cluster, l_cluster, mateseqs, matequals, aligner, aligner_to_base, stats, extra);
                 
         if (ins != NULL) {
             found.push_back(ins);
@@ -272,8 +391,9 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 	int tot_reads = r_cluster->cluster->reads.size() + l_cluster->cluster->reads.size();
 	if (rc_accepted_reads == 0 || lc_accepted_reads == 0 || double(rc_accepted_reads+lc_accepted_reads)/tot_reads < 0.5) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
-				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq, selected_contigs);
-		add_de_novo_contig_insertions(contig_name, primary_junction_seq, ins != NULL && !ins->incomplete_ins_seq(), selected_contigs, r_cluster, l_cluster, mateseqs, matequals, aligner, aligner_to_base, stats, extra);
+				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq, selected_contigs, assembly_reads);
+		ins = confirmed_de_novo_insertion(contig_name, ins, primary_junction_seq, selected_contigs, assembly_reads, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, stats);
+		add_de_novo_contig_insertions(contig_name, primary_junction_seq, ins != NULL && !ins->incomplete_ins_seq(), selected_contigs, assembly_reads, r_cluster, l_cluster, mateseqs, matequals, aligner, aligner_to_base, stats, extra);
 
 		if (ins != NULL) {
             found.push_back(ins);
