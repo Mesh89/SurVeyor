@@ -2,6 +2,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <iostream>
 #include <map>
 #include <memory>
@@ -64,6 +67,7 @@ std::vector<ext_mate_map_t> mateseqs_w_mapq;
 std::vector<int> active_threads_per_chr;
 std::vector<int> remaining_blocks_per_chr;
 std::vector<std::mutex> mutex_per_chr;
+std::mutex trim_mutex;
 std::vector<std::vector<sv_t*>> evidence_svs_by_contig;
 std::vector<std::unique_ptr<evidence_map_t>> evidence_maps_by_contig;
 evidence_map_t empty_evidence_map;
@@ -1242,8 +1246,15 @@ void release_chromosome_data(int contig_id) {
 	if (active_threads_per_chr[contig_id] == 0) {
 		mateseqs_w_mapq[contig_id].clear();
 	}
-	if (--remaining_blocks_per_chr[contig_id] == 0) evidence_maps_by_contig[contig_id].reset();
+	bool contig_done = --remaining_blocks_per_chr[contig_id] == 0;
+	if (contig_done) evidence_maps_by_contig[contig_id].reset();
 	mutex_per_chr[contig_id].unlock();
+#ifdef __GLIBC__
+	if (contig_done && trim_mutex.try_lock()) {
+		malloc_trim(0);
+		trim_mutex.unlock();
+	}
+#endif
 }
 
 IntervalTree<ext_read_t*> get_candidate_reads_for_extension_itree(std::string contig_name, hts_pos_t contig_len, std::vector<hts_pair_pos_t> target_ivals, open_samFile_t* bam_file,
