@@ -96,13 +96,16 @@ size_t count_assembly_reads(std::shared_ptr<insertion_cluster_t> r_cluster, std:
 struct assembly_read_filter_t {
     std::set<std::pair<std::string, int>> clipped_reads, bam_reads, used_reads;
 
-    assembly_read_filter_t(std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster) {
+    assembly_read_filter_t(std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster, bool include_semi_mapped_mates = false) {
         for (auto cluster : {r_cluster, l_cluster}) {
             if (cluster->clip_consensus) {
                 for (auto read : cluster->clip_consensus->clipped_reads) clipped_reads.insert(get_read_key(read.get()));
             }
             for (auto read : cluster->cluster->reads) bam_reads.insert(get_read_key(read.get()));
             for (bam1_t* read : cluster->semi_mapped_reads) bam_reads.insert(get_read_key(read));
+            if (include_semi_mapped_mates) {
+                for (bam1_t* read : cluster->semi_mapped_mates) bam_reads.insert(get_read_key(read));
+            }
         }
         bam_reads.insert(clipped_reads.begin(), clipped_reads.end());
     }

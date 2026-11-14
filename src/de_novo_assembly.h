@@ -158,7 +158,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 		observation_t observation;
 	};
 	std::vector<input_t> left_stable, unstable, right_stable;
-	assembly_read_filter_t read_filter(r_cluster, l_cluster);
+	assembly_read_filter_t read_filter(r_cluster, l_cluster, true);
 	if (r_cluster->clip_consensus) {
 		for (std::shared_ptr<bam1_t> read : r_cluster->clip_consensus->clipped_reads) {
 			if (!read_filter.add_read(read.get(), true)) continue;
@@ -192,11 +192,17 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 
 	for (bam1_t* read : r_cluster->semi_mapped_mates) {
 		if (!read_filter.add_read(read)) continue;
-		left_stable.push_back({get_sequence(read), {!is_left_clipped(read, 1), true}, {read, STABLE_READ, false}});
+		bool reverse = is_samestr(read);
+		std::string read_seq = get_sequence(read);
+		if (reverse) rc(read_seq);
+		left_stable.push_back({read_seq, {!(reverse ? is_right_clipped(read, 1) : is_left_clipped(read, 1)), true}, {read, STABLE_READ, reverse}});
 	}
 	for (bam1_t* read : l_cluster->semi_mapped_mates) {
 		if (!read_filter.add_read(read)) continue;
-		right_stable.push_back({get_sequence(read), {true, !is_right_clipped(read, 1)}, {read, STABLE_READ, false}});
+		bool reverse = is_samestr(read);
+		std::string read_seq = get_sequence(read);
+		if (reverse) rc(read_seq);
+		right_stable.push_back({read_seq, {true, !(reverse ? is_left_clipped(read, 1) : is_right_clipped(read, 1))}, {read, STABLE_READ, reverse}});
 	}
 
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
@@ -225,7 +231,7 @@ std::vector<std::string> assemble_sequences(std::string contig_name, std::shared
 			std::vector<uint8_t> quals;
 			if (observation.source == STABLE_READ || observation.source == SEMI_MAPPED_READ) {
 				quals = recalibrate_clip_read_qualities(observation.read, config, hp_tail_quality_model, quality_cache);
-				if (observation.source == SEMI_MAPPED_READ && bam_is_rev(observation.read) != observation.reverse) std::reverse(quals.begin(), quals.end());
+				if ((observation.source == STABLE_READ && observation.reverse) || (observation.source == SEMI_MAPPED_READ && bam_is_rev(observation.read) != observation.reverse)) std::reverse(quals.begin(), quals.end());
 			} else {
 				quals = decode_qualities(get_mate_qual(observation.read, matequals));
 				if (observation.reverse) std::reverse(quals.begin(), quals.end());

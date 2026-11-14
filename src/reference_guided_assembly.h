@@ -391,11 +391,11 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	std::vector<const uint8_t*> trim_quals_lf, trim_quals_is, trim_quals_rf;
 	std::vector<std::vector<uint8_t>> quals_storage;
 	std::vector<std::vector<uint8_t>> trim_quals_storage;
-	size_t n_inputs = count_assembly_reads(r_cluster, l_cluster);
+	size_t n_inputs = count_assembly_reads(r_cluster, l_cluster) + r_cluster->semi_mapped_mates.size() + l_cluster->semi_mapped_mates.size();
 	quals_storage.reserve(n_inputs);
 	trim_quals_storage.reserve(n_inputs);
 	hp_tail_quality_table_t quality_cache;
-	assembly_read_filter_t read_filter(r_cluster, l_cluster);
+	assembly_read_filter_t read_filter(r_cluster, l_cluster, true);
 	for (std::shared_ptr<bam1_t> read : r_cluster->cluster->reads) {
 		if (read_filter.add_read(read.get())) {
 			std::string read_seq = get_sequence(read.get());
@@ -467,6 +467,34 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 			trim_quals_storage.push_back(recalibrate_clip_read_qualities(read.get(), config, hp_tail_quality_model, quality_cache));
 			trim_quals_rf.push_back(trim_quals_storage.back().data());
 		}
+	}
+	for (bam1_t* read : r_cluster->semi_mapped_mates) {
+		if (!read_filter.add_read(read)) continue;
+		std::string read_seq = get_sequence(read);
+		quals_storage.push_back(get_qual(read));
+		trim_quals_storage.push_back(recalibrate_clip_read_qualities(read, config, hp_tail_quality_model, quality_cache));
+		if (is_samestr(read)) {
+			rc(read_seq);
+			std::reverse(quals_storage.back().begin(), quals_storage.back().end());
+			std::reverse(trim_quals_storage.back().begin(), trim_quals_storage.back().end());
+		}
+		seqs_lf.push_back(read_seq);
+		quals_lf.push_back(quals_storage.back().data());
+		trim_quals_lf.push_back(trim_quals_storage.back().data());
+	}
+	for (bam1_t* read : l_cluster->semi_mapped_mates) {
+		if (!read_filter.add_read(read)) continue;
+		std::string read_seq = get_sequence(read);
+		quals_storage.push_back(get_qual(read));
+		trim_quals_storage.push_back(recalibrate_clip_read_qualities(read, config, hp_tail_quality_model, quality_cache));
+		if (is_samestr(read)) {
+			rc(read_seq);
+			std::reverse(quals_storage.back().begin(), quals_storage.back().end());
+			std::reverse(trim_quals_storage.back().begin(), trim_quals_storage.back().end());
+		}
+		seqs_rf.push_back(read_seq);
+		quals_rf.push_back(quals_storage.back().data());
+		trim_quals_rf.push_back(trim_quals_storage.back().data());
 	}
 	for (bam1_t* read : r_cluster->semi_mapped_reads) {
 		if (!read_filter.add_read(read)) continue;

@@ -692,14 +692,22 @@ void merge_assembly_clusters(std::vector<std::shared_ptr<insertion_cluster_t>>& 
 
 void add_semi_mapped_mates(int contig_id, const std::vector<std::shared_ptr<insertion_cluster_t>>& r_clusters, const std::vector<std::shared_ptr<insertion_cluster_t>>& l_clusters, bam_pool_t& flank_bam_pool) {
     using read_key_t = std::pair<std::string, int>;
-    std::map<read_key_t, std::vector<std::shared_ptr<insertion_cluster_t>>> wanted_mates;
+    std::map<read_key_t, std::set<std::shared_ptr<insertion_cluster_t>>> wanted_mates;
     std::vector<hts_pos_t> mate_positions;
     for (const auto* clusters : {&r_clusters, &l_clusters}) {
         for (auto cluster : *clusters) {
-            for (bam1_t* read : cluster->semi_mapped_reads) {
-                if (read->core.mtid != read->core.tid) continue;
-                wanted_mates[get_read_key(read, true)].push_back(cluster);
-                mate_positions.push_back(read->core.mpos);
+            std::set<read_key_t> existing_mate_keys;
+            for (bam1_t* read : cluster->semi_mapped_mates) existing_mate_keys.insert(get_read_key(read));
+            auto request_mate = [&](bam1_t* read) {
+                if (read->core.mtid != read->core.tid) return;
+                read_key_t key = get_read_key(read, true);
+                if (existing_mate_keys.count(key)) return;
+                if (wanted_mates[key].insert(cluster).second) mate_positions.push_back(read->core.mpos);
+            };
+            for (bam1_t* read : cluster->semi_mapped_reads) request_mate(read);
+            if (cluster->clip_consensus) {
+                // Clipped anchors still request mates when their semi-mapped copies were excluded.
+                for (auto read : cluster->clip_consensus->clipped_reads) request_mate(read.get());
             }
         }
     }
