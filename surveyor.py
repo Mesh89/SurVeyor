@@ -54,7 +54,7 @@ call_genotype_shared_options_parser.add_argument('--per-contig-stats', action='s
                         'dramatically different depth than others. Otherwise, it is not recommended to use this option.')
 call_genotype_shared_options_parser.add_argument('--single-pass', action='store_true', help='Use single-pass genotyping instead of the default two-pass genotyping.')
 call_genotype_shared_options_parser.add_argument('--write-aux-snp', action='store_true', help='Write auxiliary SNPs to the final result VCF.')
-call_genotype_shared_options_parser.add_argument('--min-diff-hsr', type=int, default=3, help='Minimum number of differences with the reference \
+call_genotype_shared_options_parser.add_argument('--min-diff-hsr', type=int, default=2, help='Minimum number of differences with the reference \
                         (considered as number of insertions, deletions and mismatches) for a read to be considered a hidden split read.')
 call_genotype_shared_options_parser.add_argument('--tr-bed', help='BED file with tandem repetitive regions. If provided, it will be used for a more aggrestive duplicate removal.')
 call_genotype_shared_options_parser.add_argument('--haploid_contigs', '--haploid-contigs', default='',
