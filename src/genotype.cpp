@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #ifdef __GLIBC__
 #include <malloc.h>
 #endif
@@ -1196,7 +1197,7 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     }
 
     if (n_consistent_reads > 0) {
-        avg_score = cum_score / log(std::max<size_t>(2, evidence_consensus_seq.length())) / n_consistent_reads;
+        avg_score = cum_score / n_consistent_reads;
     } else {
         avg_score = 0;
     }
@@ -1447,11 +1448,17 @@ int main(int argc, char* argv[]) {
     std::unordered_map<std::string, std::vector<std::shared_ptr<duplication_t>>> dups_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<insertion_t>>> inss_by_chr;
     std::unordered_map<std::string, std::vector<std::shared_ptr<inversion_t>>> invs_by_chr;
+    std::unordered_map<std::string, std::shared_ptr<sv_t>> shared_aux_indels;
     while (bcf_read(in_vcf_file, in_vcf_header, vcf_record) == 0) {
         std::shared_ptr<sv_t> sv = bcf_to_sv(in_vcf_header, vcf_record);
         if (sv == nullptr) {
             std::cout << "Ignoring SV of unsupported type: " << vcf_record->d.id << std::endl; 
             continue;
+        }
+        for (auto& aux_indel : sv->aux_indels) {
+            std::string key = aux_indel->chr + "\t" + std::to_string(aux_indel->hpid) + "\t" + aux_indel->svtype() + "\t" + std::to_string(aux_indel->start) + "\t" + std::to_string(aux_indel->end) + "\t" + aux_indel->ins_seq;
+            auto shared = shared_aux_indels.emplace(std::move(key), aux_indel);
+            if (!shared.second) aux_indel = shared.first->second;
         }
         if (sv->start > sv->end) {
             std::cout << "Discarding SV with invalid coordinates: " << sv->id << std::endl;
@@ -1476,6 +1483,7 @@ int main(int argc, char* argv[]) {
         }
         if (retained) evidence_svs_by_contig[contig_map.get_id(sv->chr)].push_back(sv.get());
     }
+    std::unordered_map<std::string, std::shared_ptr<sv_t>>().swap(shared_aux_indels);
 
     // Group HP-tagged records by contig and reference-run start.
     std::vector<std::map<hts_pos_t, hp_stutter_run_t>> hp_stutter_runs_by_contig(contig_map.size());
@@ -1527,6 +1535,14 @@ int main(int argc, char* argv[]) {
             sv_consensus_cache::cache().prepare(contig_name, contig_id, svs);
         }
     }
+
+    // Output blocks outlive the pool because its tasks capture them by reference.
+    struct output_block_t {
+        std::vector<sv_t*> svs;
+        char* chr_seq;
+        hts_pos_t chr_len;
+    };
+    std::vector<output_block_t> output_blocks;
 
     // genotype chrs in descending order of svs
     ctpl::thread_pool thread_pool(config.threads);
@@ -1644,7 +1660,6 @@ int main(int argc, char* argv[]) {
 
     // Update records in parallel, retaining VCF order for the writer.
     const size_t UPDATE_BLOCK_SIZE = 256;
-    std::vector<sv_t*> output_svs;
     bool translation_ready = false;
     int n_seqs;
     const char** seqnames = bcf_hdr_seqnames(in_vcf_header, &n_seqs);
@@ -1669,26 +1684,36 @@ int main(int argc, char* argv[]) {
         }
         char* chr_seq = chr_seqs.get_seq(contig_name);
         hts_pos_t chr_len = chr_seqs.get_len(contig_name);
-        int sample_idx = imap[0];
-        for (const auto& sv : contig_svs) output_svs.push_back(sv.get());
         for (size_t begin = 0; begin < contig_svs.size(); begin += UPDATE_BLOCK_SIZE) {
             std::vector<sv_t*> block_svs;
             size_t end = std::min(begin + UPDATE_BLOCK_SIZE, contig_svs.size());
             for (size_t j = begin; j < end; j++) block_svs.push_back(contig_svs[j].get());
-            std::future<void> future = thread_pool.push([block_svs, in_vcf_header, out_vcf_header, chr_seq, chr_len, sample_idx, reassign_evidence](int) {
-                for (sv_t* sv : block_svs) {
-                    if (!reassign_evidence || genotype_when_reassigning_evidence(sv)) update_record(in_vcf_header, out_vcf_header, sv, chr_seq, chr_len, sample_idx);
-                }
-            });
-            futures.push_back(std::move(future));
+            output_blocks.push_back({std::move(block_svs), chr_seq, chr_len});
         }
 	}
     free(seqnames);
-    thread_pool.stop(true);
-    for (std::future<void>& future : futures) future.get();
-    for (sv_t* sv : output_svs) {
-        if (bcf_write(out_vcf_file, out_vcf_header, sv->vcf_entry) != 0) throw std::runtime_error("Failed to write VCF record to " + out_vcf_fname);
+    int sample_idx = imap[0];
+    const size_t UPDATE_WINDOW = 4 * config.threads;
+    size_t next_block = 0;
+    std::deque<std::future<void>> update_futures;
+    for (size_t b = 0; b < output_blocks.size(); b++) {
+        while (next_block < output_blocks.size() && next_block < b+UPDATE_WINDOW) {
+            output_block_t& block = output_blocks[next_block++];
+            update_futures.push_back(thread_pool.push([&block, in_vcf_header, out_vcf_header, sample_idx, reassign_evidence](int) {
+                for (sv_t* sv : block.svs) {
+                    if (!reassign_evidence || genotype_when_reassigning_evidence(sv)) update_record(in_vcf_header, out_vcf_header, sv, block.chr_seq, block.chr_len, sample_idx);
+                }
+            }));
+        }
+        update_futures.front().get();
+        update_futures.pop_front();
+        for (sv_t* sv : output_blocks[b].svs) {
+            if (bcf_write(out_vcf_file, out_vcf_header, sv->vcf_entry) != 0) throw std::runtime_error("Failed to write VCF record to " + out_vcf_fname);
+            bcf_destroy(sv->vcf_entry);
+            sv->vcf_entry = NULL;
+        }
     }
+    thread_pool.stop(true);
     if (bcf_idx_save(out_vcf_file) != 0) throw std::runtime_error("Failed to save VCF index " + out_vcf_index_fname);
     delete[] imap;
 

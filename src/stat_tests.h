@@ -223,6 +223,61 @@ void set_bp_pairs_info(sv_t::bp_pairs_info_t& bp_pairs_info, pairs_data_t& pairs
 	bp_pairs_info.rf_span = pairs_data.bp_rf_end - pairs_data.bp_rf_start;
 }
 
+struct stray_read_t {
+	hts_pos_t pos, endpos;
+	int first_candidate;
+	int pos_mq, neg_mq, pos_nm, neg_nm;
+};
+
+template<typename F>
+void set_bp_pairs_info(sv_t::bp_pairs_info_t& bp_pairs_info, const std::vector<stray_read_t>& reads, F takes_read, config_t& config) {
+	bp_pairs_info.computed = true;
+	int n = 0, pos_high_mapq = 0, neg_high_mapq = 0;
+	int pos_min_mq = INT_MAX, neg_min_mq = INT_MAX, pos_max_mq = INT_MIN, neg_max_mq = INT_MIN;
+	double pos_mq_sum = 0.0, neg_mq_sum = 0.0, pos_nm_sum = 0.0, neg_nm_sum = 0.0;
+	for (const stray_read_t& read : reads) {
+		if (!takes_read(read)) continue;
+		n++;
+		pos_high_mapq += read.pos_mq >= config.high_confidence_mapq;
+		neg_high_mapq += read.neg_mq >= config.high_confidence_mapq;
+		pos_mq_sum = pos_mq_sum + read.pos_mq;
+		neg_mq_sum = neg_mq_sum + read.neg_mq;
+		pos_nm_sum = pos_nm_sum + read.pos_nm;
+		neg_nm_sum = neg_nm_sum + read.neg_nm;
+		pos_min_mq = std::min(pos_min_mq, read.pos_mq);
+		neg_min_mq = std::min(neg_min_mq, read.neg_mq);
+		pos_max_mq = std::max(pos_max_mq, read.pos_mq);
+		neg_max_mq = std::max(neg_max_mq, read.neg_mq);
+	}
+	bp_pairs_info.pairs = n;
+	if (n == 0) return;
+
+	bp_pairs_info.pos_high_mapq = pos_high_mapq;
+	bp_pairs_info.neg_high_mapq = neg_high_mapq;
+	bp_pairs_info.pos_avg_mq = pos_mq_sum/n;
+	bp_pairs_info.neg_avg_mq = neg_mq_sum/n;
+	bp_pairs_info.pos_avg_nm = pos_nm_sum/n;
+	bp_pairs_info.neg_avg_nm = neg_nm_sum/n;
+	double pos_mq_ss = 0.0, neg_mq_ss = 0.0, pos_nm_ss = 0.0, neg_nm_ss = 0.0;
+	for (const stray_read_t& read : reads) {
+		if (!takes_read(read)) continue;
+		pos_mq_ss += (read.pos_mq-bp_pairs_info.pos_avg_mq)*(read.pos_mq-bp_pairs_info.pos_avg_mq);
+		neg_mq_ss += (read.neg_mq-bp_pairs_info.neg_avg_mq)*(read.neg_mq-bp_pairs_info.neg_avg_mq);
+		pos_nm_ss += (read.pos_nm-bp_pairs_info.pos_avg_nm)*(read.pos_nm-bp_pairs_info.pos_avg_nm);
+		neg_nm_ss += (read.neg_nm-bp_pairs_info.neg_avg_nm)*(read.neg_nm-bp_pairs_info.neg_avg_nm);
+	}
+	bp_pairs_info.pos_stddev_mq = std::sqrt(pos_mq_ss/n);
+	bp_pairs_info.neg_stddev_mq = std::sqrt(neg_mq_ss/n);
+	bp_pairs_info.pos_stddev_nm = std::sqrt(pos_nm_ss/n);
+	bp_pairs_info.neg_stddev_nm = std::sqrt(neg_nm_ss/n);
+	bp_pairs_info.pos_min_mq = pos_min_mq;
+	bp_pairs_info.neg_min_mq = neg_min_mq;
+	bp_pairs_info.pos_max_mq = pos_max_mq;
+	bp_pairs_info.neg_max_mq = neg_max_mq;
+}
+
+// The scan bounds are monotone in the sorted breakpoints, so testing the bound at i also tests every candidate from
+// first_candidate through i.
 void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletions, open_samFile_t* bam_file, config_t& config, stats_t& stats) {
 
 	if (deletions.empty()) return;
@@ -251,8 +306,7 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 		return d1->start < d2->start;
 	});
 
-	std::vector<std::vector<int> > pos_mqs(deletions.size()), neg_mqs(deletions.size());
-	std::vector<std::vector<int> > pos_nms(deletions.size()), neg_nms(deletions.size());
+	std::vector<stray_read_t> stray_reads;
 
 	int curr_pos = 0;
 	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, l_cluster_regions.data(), l_cluster_regions.size());
@@ -264,31 +318,21 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 
 		// if the pair is discordant and it overlaps left_anchor_aln, increase l_cluster_region_disc_pair
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read) || is_outward(read)) {
-			for (int i = curr_pos; i < deletions.size() && deletions[i]->start-stats.max_is <= bam_endpos(read); i++) {
-				if (read->core.pos <= deletions[i]->start) {
-					pos_mqs[i].push_back(read->core.qual);
-					neg_mqs[i].push_back(get_mq(read));
-
-					pos_nms[i].push_back(get_nm(read));
-					neg_nms[i].push_back(0);
-				}
-				// TODO: try to remap the mate instead?
-			}
+			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, read->core.qual, int(get_mq(read)), int(get_nm(read)), 0});
 		}
 	}
+	hts_itr_destroy(iter);
 
 	for (int i = 0; i < deletions.size(); i++) {
-		set_bp_pairs_info(deletions[i]->sample_info.bp1_stray_pairs, pos_mqs[i], neg_mqs[i], pos_nms[i], neg_nms[i], config);
+		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && deletions[i]->start-stats.max_is <= r.endpos && r.pos <= deletions[i]->start; };
+		set_bp_pairs_info(deletions[i]->sample_info.bp1_stray_pairs, stray_reads, takes_read, config);
 	}
 
 	std::sort(deletions.begin(), deletions.end(), [](const deletion_t* d1, const deletion_t* d2) {
 		return d1->end < d2->end;
 	});
 
-	pos_mqs = std::vector<std::vector<int> >(deletions.size());
-	neg_mqs = std::vector<std::vector<int> >(deletions.size());
-	pos_nms = std::vector<std::vector<int> >(deletions.size());
-	neg_nms = std::vector<std::vector<int> >(deletions.size());
+	stray_reads.clear();
 
 	curr_pos = 0;
 	iter = sam_itr_regarray(bam_file->idx, bam_file->header, r_cluster_regions.data(), r_cluster_regions.size());
@@ -298,20 +342,14 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 		while (curr_pos < deletions.size() && deletions[curr_pos]->end+stats.max_is < read->core.pos) curr_pos++;
 
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read) || is_outward(read)) {
-			for (int i = curr_pos; i < deletions.size() && deletions[i]->end <= bam_endpos(read); i++) {
-				if (read->core.pos <= deletions[i]->end+stats.max_is) {
-					pos_mqs[i].push_back(get_mq(read));
-					neg_mqs[i].push_back(read->core.qual);
-
-					pos_nms[i].push_back(0);
-					neg_nms[i].push_back(get_nm(read));
-				}
-			}
+			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, int(get_mq(read)), read->core.qual, 0, int(get_nm(read))});
 		}
 	}
+	hts_itr_destroy(iter);
 
 	for (int i = 0; i < deletions.size(); i++) {
-		set_bp_pairs_info(deletions[i]->sample_info.bp2_stray_pairs, pos_mqs[i], neg_mqs[i], pos_nms[i], neg_nms[i], config);
+		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && deletions[i]->end <= r.endpos && r.pos <= deletions[i]->end+stats.max_is; };
+		set_bp_pairs_info(deletions[i]->sample_info.bp2_stray_pairs, stray_reads, takes_read, config);
 	}
 
 	for (char* region : l_cluster_regions) {
@@ -320,6 +358,7 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 	for (char* region : r_cluster_regions) {
 		delete[] region;
 	}
+	bam_destroy1(read);
 }
 
 void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& duplications, open_samFile_t* bam_file, config_t& config, stats_t& stats) {
@@ -342,8 +381,7 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 		return d1->start < d2->start;
 	});
 
-	std::vector<std::vector<int> > pos_mqs(duplications.size()), neg_mqs(duplications.size());
-	std::vector<std::vector<int> > pos_nms(duplications.size()), neg_nms(duplications.size());
+	std::vector<stray_read_t> stray_reads;
 
 	bam1_t* read = bam_init1();
 	int curr_pos = 0;
@@ -354,21 +392,14 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 		while (curr_pos < duplications.size() && duplications[curr_pos]->start+stats.max_is < read->core.pos) curr_pos++;
 
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read) || is_long(read, stats.max_is)) {
-			for (int i = curr_pos; i < duplications.size() && duplications[i]->start <= bam_endpos(read); i++) {
-				if (read->core.pos <= duplications[i]->start+stats.max_is) {
-					pos_mqs[i].push_back(get_mq(read));
-					neg_mqs[i].push_back(read->core.qual);
-
-					pos_nms[i].push_back(0);
-					neg_nms[i].push_back(get_nm(read));
-				}
-			}
+			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, int(get_mq(read)), read->core.qual, 0, int(get_nm(read))});
 		}
 	}
 	hts_itr_destroy(iter);
 
 	for (int i = 0; i < duplications.size(); i++) {
-		set_bp_pairs_info(duplications[i]->sample_info.bp1_stray_pairs, pos_mqs[i], neg_mqs[i], pos_nms[i], neg_nms[i], config);
+		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && duplications[i]->start <= r.endpos && r.pos <= duplications[i]->start+stats.max_is; };
+		set_bp_pairs_info(duplications[i]->sample_info.bp1_stray_pairs, stray_reads, takes_read, config);
 	}
 	
 	for (char* region : rc_cluster_regions) {
@@ -379,10 +410,7 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 		return d1->end < d2->end;
 	});
 
-	pos_mqs = std::vector<std::vector<int> >(duplications.size());
-	neg_mqs = std::vector<std::vector<int> >(duplications.size());
-	pos_nms = std::vector<std::vector<int> >(duplications.size());
-	neg_nms = std::vector<std::vector<int> >(duplications.size());
+	stray_reads.clear();
 
 	curr_pos = 0;
 	iter = sam_itr_regarray(bam_file->idx, bam_file->header, lc_cluster_regions.data(), lc_cluster_regions.size());
@@ -392,26 +420,20 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 		while (curr_pos < duplications.size() && duplications[curr_pos]->end < read->core.pos) curr_pos++;
 
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read) || is_long(read, stats.max_is)) {
-			for (int i = curr_pos; i < duplications.size() && duplications[i]->end-stats.max_is <= bam_endpos(read); i++) {
-				if (read->core.pos <= duplications[i]->end) {
-					pos_mqs[i].push_back(read->core.qual);
-					neg_mqs[i].push_back(get_mq(read));
-
-					pos_nms[i].push_back(get_nm(read));
-					neg_nms[i].push_back(0);
-				}
-			}
+			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, read->core.qual, int(get_mq(read)), int(get_nm(read)), 0});
 		}
 	}
 	hts_itr_destroy(iter);
 
 	for (int i = 0; i < duplications.size(); i++) {
-		set_bp_pairs_info(duplications[i]->sample_info.bp2_stray_pairs, pos_mqs[i], neg_mqs[i], pos_nms[i], neg_nms[i], config);
+		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && duplications[i]->end-stats.max_is <= r.endpos && r.pos <= duplications[i]->end; };
+		set_bp_pairs_info(duplications[i]->sample_info.bp2_stray_pairs, stray_reads, takes_read, config);
 	}
 
 	for (char* region : lc_cluster_regions) {
 		free(region);
 	}
+	bam_destroy1(read);
 }
 
 void calculate_confidence_interval_size(std::string contig_name, const std::vector<double>& global_crossing_isize_dist,

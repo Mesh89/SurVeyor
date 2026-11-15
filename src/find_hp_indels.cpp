@@ -3,6 +3,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <fstream>
 #include <future>
 #include <iomanip>
@@ -37,6 +40,18 @@ const int MIN_READS_FOR_HP_MM_THRESHOLD = 100;
 const double HP_MM_OUTLIER_MAD_MULTIPLIER = 4.0;
 const double MAX_HP_MM_THRESHOLD = 0.75;
 const hts_pos_t CHUNK_SIZE = 1000000;
+
+void trim_hp_memory() {
+#ifdef __GLIBC__
+    static std::mutex trim_mutex;
+    std::unique_lock<std::mutex> lock(trim_mutex, std::try_to_lock);
+    if (lock.owns_lock()) malloc_trim(0);
+#endif
+}
+
+struct hp_memory_cleanup_t {
+    ~hp_memory_cleanup_t() { trim_hp_memory(); }
+};
 
 struct mate_info_t {
     std::string seq, qual;
@@ -96,9 +111,41 @@ struct hp_positional_consensus_t {
     int callable_beg = 0, callable_end = 0;
 };
 
-using hp_mismatch_rates_by_len_t = std::vector<std::vector<double>>;
+struct hp_rate_counts_t {
+    std::map<double, uint64_t> counts;
+    uint64_t total = 0;
+
+    void add(double value, uint64_t count = 1) {
+        counts[value] += count;
+        total += count;
+    }
+
+    void append(const hp_rate_counts_t& other) {
+        for (const auto& value : other.counts) add(value.first, value.second);
+    }
+
+    uint64_t size() const { return total; }
+
+    double median() const {
+        if (total == 0) return -1.0;
+        uint64_t lower_rank = (total - 1) / 2, upper_rank = total / 2, rank = 0;
+        auto value = counts.begin();
+        while (rank + value->second <= lower_rank) {
+            rank += value->second;
+            ++value;
+        }
+        double lower_middle = value->first;
+        while (rank + value->second <= upper_rank) {
+            rank += value->second;
+            ++value;
+        }
+        return total % 2 == 1 ? value->first : (lower_middle + value->first) / 2;
+    }
+};
+
+using hp_mismatch_rates_by_len_t = std::vector<hp_rate_counts_t>;
 using hp_mismatch_rates_by_len_and_base_t = std::array<hp_mismatch_rates_by_len_t, 4>;
-using hp_mismatch_rates_by_quality_t = std::map<std::array<int, 3>, std::vector<double>>;
+using hp_mismatch_rates_by_quality_t = std::map<std::array<int, 3>, hp_rate_counts_t>;
 
 struct hp_read_mismatch_rate_t {
     double rate;
@@ -215,7 +262,7 @@ struct hp_read_mismatch_rates_t {
 };
 
 hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_positional_consensus_t& consensus, const std::vector<hp_read_observation_t>& observations,
-    int hp_len, char hp_base, hp_tail_error_table_t& tail_error_table) {
+    int hp_len, char hp_base, hp_tail_error_table_t& tail_error_table, bool collect_calibration = true) {
 
     hp_read_mismatch_rates_t mismatch_rates;
     if (hp_len < 0) return mismatch_rates;
@@ -251,6 +298,7 @@ hp_read_mismatch_rates_t calculate_hp_consensus_mismatch_rates(const hp_position
         const std::vector<uint8_t>& original_quals = observation.original_quals.empty() ? observation.quals : observation.original_quals;
         double average_quality = original_quals.size() >= tail_end ? average_original_tail_quality(original_quals.data(), tail_beg, tail_end) : -1.0;
         mismatch_rates.candidate_rates.push_back({mismatch_rate, sequenced_hp_base_idx, average_quality});
+        if (!collect_calibration) continue;
         mismatch_rates.threshold_estimation_rates.push_back({mismatch_rate, sequenced_hp_base_idx, average_quality});
         for (int qpos = tail_beg; qpos < tail_end; qpos++) {
             int cpos = consensus_offset + qpos;
@@ -275,12 +323,11 @@ double median_double(std::vector<double> values) {
     return values.size() % 2 == 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
 }
 
-double estimate_hp_mismatch_rate_threshold(const std::vector<double>& rates, double default_threshold) {
-    double center = median_double(rates);
-    std::vector<double> absolute_deviations;
-    absolute_deviations.reserve(rates.size());
-    for (double rate : rates) absolute_deviations.push_back(std::abs(rate - center));
-    double robust_sigma = 1.4826 * median_double(absolute_deviations);
+double estimate_hp_mismatch_rate_threshold(const hp_rate_counts_t& rates, double default_threshold) {
+    double center = rates.median();
+    hp_rate_counts_t absolute_deviations;
+    for (const auto& rate : rates.counts) absolute_deviations.add(std::abs(rate.first - center), rate.second);
+    double robust_sigma = 1.4826 * absolute_deviations.median();
     return std::min(MAX_HP_MM_THRESHOLD, std::max(default_threshold, center + HP_MM_OUTLIER_MAD_MULTIPLIER * robust_sigma));
 }
 
@@ -289,14 +336,14 @@ std::vector<double> estimate_hp_mismatch_rate_thresholds(const hp_mismatch_rates
     std::vector<bool> threshold_computed(mismatch_rates_by_hp_len.size(), false);
     for (int hp_len = 0; hp_len < mismatch_rates_by_hp_len.size(); hp_len++) {
         if (hp_len < MIN_REF_HP_LEN) continue;
-        std::vector<double> rates = mismatch_rates_by_hp_len[hp_len];
+        hp_rate_counts_t rates = mismatch_rates_by_hp_len[hp_len];
         int min_neighbor_hp_len = (hp_len + 1) / 2;
         int max_neighbor_hp_len = std::min<int>(mismatch_rates_by_hp_len.size() - 1, 2 * hp_len);
         for (int distance = 1; rates.size() < MIN_READS_FOR_HP_MM_THRESHOLD && (hp_len - distance >= min_neighbor_hp_len || hp_len + distance <= max_neighbor_hp_len); distance++) {
             int lower_hp_len = hp_len - distance;
             int upper_hp_len = hp_len + distance;
-            if (lower_hp_len >= min_neighbor_hp_len) rates.insert(rates.end(), mismatch_rates_by_hp_len[lower_hp_len].begin(), mismatch_rates_by_hp_len[lower_hp_len].end());
-            if (upper_hp_len <= max_neighbor_hp_len) rates.insert(rates.end(), mismatch_rates_by_hp_len[upper_hp_len].begin(), mismatch_rates_by_hp_len[upper_hp_len].end());
+            if (lower_hp_len >= min_neighbor_hp_len) rates.append(mismatch_rates_by_hp_len[lower_hp_len]);
+            if (upper_hp_len <= max_neighbor_hp_len) rates.append(mismatch_rates_by_hp_len[upper_hp_len]);
         }
         if (rates.size() < MIN_READS_FOR_HP_MM_THRESHOLD) continue;
 
@@ -325,7 +372,7 @@ hp_quality_mismatch_rate_threshold_table_t estimate_hp_quality_mismatch_rate_thr
             for (int quality_bin = 0; quality_bin < HP_TAIL_QUALITY_BIN_COUNT; quality_bin++) {
                 std::array<int, 3> key{base, hp_len, quality_bin};
                 auto rates = rates_by_quality.find(key);
-                size_t observations = rates == rates_by_quality.end() ? 0 : rates->second.size();
+                uint64_t observations = rates == rates_by_quality.end() ? 0 : rates->second.size();
                 bool estimated = observations >= MIN_READS_FOR_HP_MM_THRESHOLD;
                 if (estimated) threshold = estimate_hp_mismatch_rate_threshold(rates->second, default_threshold);
                 thresholds[key] = {observations, threshold, estimated};
@@ -511,7 +558,7 @@ void call_aux_from_hp_consensus(std::shared_ptr<sv_t>& hp_indel, const hp_run_t&
 void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
     bool anchor_is_reverse, char* contig_seq, hts_pos_t contig_len,
     int read_len, int min_clip_len, double max_seq_error, StripedSmithWaterman::Aligner& aligner,
-    const StripedSmithWaterman::Filter& filter) {
+    const StripedSmithWaterman::Filter& filter, int max_hp_reads_per_locus) {
 
     hts_pos_t extend = std::max(0, read_len - 1);
     hts_pos_t allele_beg = std::max((hts_pos_t) 0, hp_run.beg - extend);
@@ -550,6 +597,10 @@ void add_rescued_hp_read(hp_run_t& hp_run, const mate_info_t& mate,
     if (!is_usable_hp_read(hp_read_info, min_clip_len, max_seq_error)) return;
     hp_run.usable_reads++;
     hp_run.hp_len_counts[hp_read_info.hp_len]++;
+    if (hp_run.usable_reads > max_hp_reads_per_locus) {
+        hp_run.observations_by_hp_len.clear();
+        return;
+    }
     bool is_reverse = !hp_read_info.read.mate_is_reverse;
     int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
     int right_tail_len = is_reverse ? hp_read_info.tail_5p_len : hp_read_info.tail_3p_len;
@@ -581,14 +632,16 @@ hp_chunk_result_t postprocess_hp_runs(const std::vector<hp_run_t>& hp_runs, cons
                 consensus_observations = &calibrated_observations;
             }
             hp_positional_consensus_t consensus = build_hp_positional_consensus(*consensus_observations, alt_hp_len);
-            hp_read_mismatch_rates_t read_mismatch_rates = calculate_hp_consensus_mismatch_rates(consensus, observations_it->second, alt_hp_len, hp_run.base, result.tail_error_table);
-            for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.candidate_rates) {
-                hp_mismatch_rates_by_len_t& rates_by_hp_len = result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx];
-                if (rates_by_hp_len.size() <= alt_hp_len) rates_by_hp_len.resize(alt_hp_len + 1);
-            }
-            for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.threshold_estimation_rates) {
-                result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx][alt_hp_len].push_back(read_rate.rate);
-                if (read_rate.average_original_quality >= 0) result.threshold_estimation_rates_by_quality[{read_rate.sequenced_hp_base_idx, alt_hp_len, int(read_rate.average_original_quality / HP_TAIL_QUALITY_BIN_SIZE)}].push_back(read_rate.rate);
+            hp_read_mismatch_rates_t read_mismatch_rates = calculate_hp_consensus_mismatch_rates(consensus, observations_it->second, alt_hp_len, hp_run.base, result.tail_error_table, !generate_candidates);
+            if (!generate_candidates) {
+                for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.candidate_rates) {
+                    hp_mismatch_rates_by_len_t& rates_by_hp_len = result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx];
+                    if (rates_by_hp_len.size() <= alt_hp_len) rates_by_hp_len.resize(alt_hp_len + 1);
+                }
+                for (const hp_read_mismatch_rate_t& read_rate : read_mismatch_rates.threshold_estimation_rates) {
+                    result.threshold_estimation_rates_by_hp_len_and_base[read_rate.sequenced_hp_base_idx][alt_hp_len].add(read_rate.rate);
+                    if (read_rate.average_original_quality >= 0) result.threshold_estimation_rates_by_quality[{read_rate.sequenced_hp_base_idx, alt_hp_len, int(read_rate.average_original_quality / HP_TAIL_QUALITY_BIN_SIZE)}].add(read_rate.rate);
+                }
             }
 
             if (!generate_candidates) continue;
@@ -653,8 +706,10 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
     StripedSmithWaterman::Aligner& aligner, const StripedSmithWaterman::Filter& filter, bool keep_candidate_runs) {
 
     hp_chunk_result_t result;
+    hp_memory_cleanup_t cleanup;
     if (contig_len == 0) return result;
 
+    int max_hp_reads_per_locus = 2 * stats->get_max_depth(contig_name);
     std::vector<hp_run_t> hp_runs = find_hp_runs<hp_run_t>(contig_seq, contig_len, chunk_beg, chunk_end);
     if (hp_runs.empty()) return result;
 
@@ -714,6 +769,10 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 hp_run.hp_len_counts[hp_read_info.hp_len]++;
                 hp_run.direct_usable_reads++;
                 hp_run.direct_hp_len_counts[hp_read_info.hp_len]++;
+                if (hp_run.usable_reads > max_hp_reads_per_locus) {
+                    hp_run.observations_by_hp_len.clear();
+                    continue;
+                }
                 bool is_reverse = bam_is_rev(read.get());
                 int left_tail_len = is_reverse ? hp_read_info.tail_3p_len : hp_read_info.tail_5p_len;
                 int right_tail_len = is_reverse ? hp_read_info.tail_5p_len : hp_read_info.tail_3p_len;
@@ -737,7 +796,7 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 for (; rescue_hp_idx < hp_runs.size() && hp_runs[rescue_hp_idx].beg <= max_hp_beg; rescue_hp_idx++) {
                     add_rescued_hp_read(hp_runs[rescue_hp_idx], mate_it->second, false,
                         contig_seq, contig_len, stats->read_len, config->min_clip_len, config->max_seq_error,
-                        aligner, filter);
+                        aligner, filter, max_hp_reads_per_locus);
                 }
             } else {
                 hts_pos_t min_hp_end = read_end - stats->max_is;
@@ -746,7 +805,7 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
                 for (; rescue_hp_idx < hp_runs.size() && hp_runs[rescue_hp_idx].end <= max_hp_end; rescue_hp_idx++) {
                     add_rescued_hp_read(hp_runs[rescue_hp_idx], mate_it->second, true,
                         contig_seq, contig_len, stats->read_len, config->min_clip_len, config->max_seq_error,
-                        aligner, filter);
+                        aligner, filter, max_hp_reads_per_locus);
                 }
             }
         }
@@ -776,13 +835,14 @@ hp_chunk_result_t find_hp_indels_for_chunk(int id, size_t contig_id, std::string
     }
     if (keep_candidate_runs) {
         result.candidate_chunk.contig_name = contig_name;
-        result.candidate_chunk.hp_runs = retain_candidate_hp_runs(hp_runs, 2 * stats->get_max_depth(contig_name), config->min_sv_size);
+        result.candidate_chunk.hp_runs = retain_candidate_hp_runs(hp_runs, max_hp_reads_per_locus, config->min_sv_size);
     }
     return result;
 }
 
 std::array<hp_mismatch_rates_by_len_t, 6> collect_dnr_tail_rates(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, hts_pos_t chunk_beg, hts_pos_t chunk_end, config_t* config, stats_t* stats, bam_pool_t* bam_pool) {
     std::array<hp_mismatch_rates_by_len_t, 6> rates_by_class;
+    hp_memory_cleanup_t cleanup;
     std::array<std::vector<bool>, 6> seen_units;
     open_samFile_t* alignment_file = bam_pool->get_bam_reader(id);
     std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read(bam_init1(), &bam_destroy1);
@@ -948,7 +1008,7 @@ std::array<hp_mismatch_rates_by_len_t, 6> collect_dnr_tail_rates(int id, std::st
                             for (int pos = 0; pos < compared; pos++) mismatches += observation.tail[pos] != consensus[pos];
                             int cls = observation.sequenced_class, observed_units = group.first;
                             if (rates_by_class[cls].size() <= observed_units) rates_by_class[cls].resize(observed_units + 1);
-                            rates_by_class[cls][observed_units].push_back(double(mismatches) / compared);
+                            rates_by_class[cls][observed_units].add(double(mismatches) / compared);
                         }
                     }
                 }
@@ -1012,6 +1072,14 @@ int main(int argc, char* argv[]) {
 
     // Train on original qualities and retain candidate evidence for the fitted model.
     std::vector<std::future<hp_chunk_result_t>> futures;
+    std::vector<hp_candidate_chunk_t> candidate_chunks;
+    std::vector<std::shared_ptr<sv_t>> hp_indels;
+    std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
+    hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
+    hp_mismatch_rates_by_quality_t threshold_estimation_rates_by_quality;
+    hp_tail_error_table_t tail_error_table;
+    long long stutter_tot[4][31] = {};
+    long long stutter_cnt[4][31][7] = {};
     {
         ctpl::thread_pool thread_pool(config.threads);
         for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
@@ -1022,41 +1090,32 @@ int main(int argc, char* argv[]) {
                     chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool, std::ref(aligner), std::cref(filter), !thresholds_only));
             }
         }
+        for (std::future<hp_chunk_result_t>& future : futures) {
+            hp_chunk_result_t chunk_result = future.get();
+            if (!chunk_result.candidate_chunk.hp_runs.empty()) candidate_chunks.push_back(std::move(chunk_result.candidate_chunk));
+            for (const auto& entry : chunk_result.threshold_estimation_rates_by_quality) {
+                threshold_estimation_rates_by_quality[entry.first].append(entry.second);
+            }
+            for (const auto& entry : chunk_result.tail_error_table) {
+                auto& counts = tail_error_table[entry.first];
+                counts.first += entry.second.first;
+                counts.second += entry.second.second;
+            }
+            for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) {
+                hp_mismatch_rates_by_len_t& threshold_estimation_rates_by_hp_len = threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
+                const hp_mismatch_rates_by_len_t& chunk_threshold_estimation_rates_by_hp_len = chunk_result.threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
+                if (threshold_estimation_rates_by_hp_len.size() < chunk_threshold_estimation_rates_by_hp_len.size()) threshold_estimation_rates_by_hp_len.resize(chunk_threshold_estimation_rates_by_hp_len.size());
+                for (int hp_len = 0; hp_len < chunk_threshold_estimation_rates_by_hp_len.size(); hp_len++) {
+                    threshold_estimation_rates_by_hp_len[hp_len].append(chunk_threshold_estimation_rates_by_hp_len[hp_len]);
+                }
+                for (int hp_len = MIN_REF_HP_LEN; hp_len <= 30; hp_len++) {
+                    stutter_tot[hp_base_idx][hp_len] += chunk_result.stutter_tot[hp_base_idx][hp_len];
+                    for (int delta_idx = 0; delta_idx < 7; delta_idx++) stutter_cnt[hp_base_idx][hp_len][delta_idx] += chunk_result.stutter_cnt[hp_base_idx][hp_len][delta_idx];
+                }
+            }
+        }
+        futures.clear();
         thread_pool.stop(true);
-    }
-
-    std::vector<hp_candidate_chunk_t> candidate_chunks;
-    std::vector<std::shared_ptr<sv_t>> hp_indels;
-    std::vector<std::vector<hp_read_mismatch_rate_t>> hp_indel_3p_mismatch_rates;
-    hp_mismatch_rates_by_len_and_base_t threshold_estimation_rates_by_hp_len_and_base;
-    hp_mismatch_rates_by_quality_t threshold_estimation_rates_by_quality;
-    hp_tail_error_table_t tail_error_table;
-    long long stutter_tot[4][31] = {};
-    long long stutter_cnt[4][31][7] = {};
-    for (std::future<hp_chunk_result_t>& future : futures) {
-        hp_chunk_result_t chunk_result = future.get();
-        if (!chunk_result.candidate_chunk.hp_runs.empty()) candidate_chunks.push_back(std::move(chunk_result.candidate_chunk));
-        for (const auto& entry : chunk_result.threshold_estimation_rates_by_quality) {
-            auto& rates = threshold_estimation_rates_by_quality[entry.first];
-            rates.insert(rates.end(), entry.second.begin(), entry.second.end());
-        }
-        for (const auto& entry : chunk_result.tail_error_table) {
-            auto& counts = tail_error_table[entry.first];
-            counts.first += entry.second.first;
-            counts.second += entry.second.second;
-        }
-        for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) {
-            hp_mismatch_rates_by_len_t& threshold_estimation_rates_by_hp_len = threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
-            const hp_mismatch_rates_by_len_t& chunk_threshold_estimation_rates_by_hp_len = chunk_result.threshold_estimation_rates_by_hp_len_and_base[hp_base_idx];
-            if (threshold_estimation_rates_by_hp_len.size() < chunk_threshold_estimation_rates_by_hp_len.size()) threshold_estimation_rates_by_hp_len.resize(chunk_threshold_estimation_rates_by_hp_len.size());
-            for (int hp_len = 0; hp_len < chunk_threshold_estimation_rates_by_hp_len.size(); hp_len++) {
-                threshold_estimation_rates_by_hp_len[hp_len].insert(threshold_estimation_rates_by_hp_len[hp_len].end(), chunk_threshold_estimation_rates_by_hp_len[hp_len].begin(), chunk_threshold_estimation_rates_by_hp_len[hp_len].end());
-            }
-            for (int hp_len = MIN_REF_HP_LEN; hp_len <= 30; hp_len++) {
-                stutter_tot[hp_base_idx][hp_len] += chunk_result.stutter_tot[hp_base_idx][hp_len];
-                for (int delta_idx = 0; delta_idx < 7; delta_idx++) stutter_cnt[hp_base_idx][hp_len][delta_idx] += chunk_result.stutter_cnt[hp_base_idx][hp_len][delta_idx];
-            }
-        }
     }
     size_t hp_len_count = MIN_REF_HP_LEN + 1;
     for (const hp_mismatch_rates_by_len_t& rates_by_hp_len : threshold_estimation_rates_by_hp_len_and_base) hp_len_count = std::max(hp_len_count, rates_by_hp_len.size());
@@ -1064,13 +1123,20 @@ int main(int argc, char* argv[]) {
     std::array<std::vector<double>, 4> hp_mismatch_rate_thresholds_by_base;
     for (int hp_base_idx = 0; hp_base_idx < 4; hp_base_idx++) hp_mismatch_rate_thresholds_by_base[hp_base_idx] = estimate_hp_mismatch_rate_thresholds(threshold_estimation_rates_by_hp_len_and_base[hp_base_idx], config.max_seq_error);
     write_hp_mismatch_rate_thresholds(hp_mismatch_rate_thresholds_by_base, workdir + "/" + HP_MISMATCH_RATE_THRESHOLDS_FILENAME);
-    auto hp_quality_mismatch_rate_thresholds = estimate_hp_quality_mismatch_rate_thresholds(threshold_estimation_rates_by_quality, hp_mismatch_rate_thresholds_by_base, config.max_seq_error);
-    write_hp_quality_mismatch_rate_thresholds(hp_quality_mismatch_rate_thresholds, workdir + "/" + HP_QUALITY_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    {
+        auto hp_quality_mismatch_rate_thresholds = estimate_hp_quality_mismatch_rate_thresholds(threshold_estimation_rates_by_quality, hp_mismatch_rate_thresholds_by_base, config.max_seq_error);
+        write_hp_quality_mismatch_rate_thresholds(hp_quality_mismatch_rate_thresholds, workdir + "/" + HP_QUALITY_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    }
     write_hp_tail_error_table(tail_error_table, workdir + "/hp_3p_tail_error_probabilities.txt");
     write_hp_stutter_profile(stutter_tot, stutter_cnt, workdir + "/" + HP_STUTTER_PROFILE_FILENAME);
+    hp_mismatch_rates_by_len_and_base_t().swap(threshold_estimation_rates_by_hp_len_and_base);
+    hp_mismatch_rates_by_quality_t().swap(threshold_estimation_rates_by_quality);
+    if (thresholds_only) hp_tail_error_table_t().swap(tail_error_table);
+    trim_hp_memory();
 
     // Train DNR thresholds in a separate pass over the same chunks, including thresholds-only runs.
     std::vector<std::future<std::array<hp_mismatch_rates_by_len_t, 6>>> dnr_futures;
+    std::array<hp_mismatch_rates_by_len_t, 6> dnr_rates_by_class;
     {
         ctpl::thread_pool thread_pool(config.threads);
         for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
@@ -1080,16 +1146,16 @@ int main(int argc, char* argv[]) {
                 dnr_futures.push_back(thread_pool.push(collect_dnr_tail_rates, contig_name, chr_seqs.get_seq(contig_name), contig_len, chunk_beg, std::min(contig_len, chunk_beg + CHUNK_SIZE), &config, &stats, &bam_pool));
             }
         }
-        thread_pool.stop(true);
-    }
-    // Combine chunk observations into sample-wide rate lists for each class and unit count.
-    std::array<hp_mismatch_rates_by_len_t, 6> dnr_rates_by_class;
-    for (auto& future : dnr_futures) {
-        auto chunk_rates = future.get();
-        for (int cls = 0; cls < 6; cls++) {
-            if (dnr_rates_by_class[cls].size() < chunk_rates[cls].size()) dnr_rates_by_class[cls].resize(chunk_rates[cls].size());
-            for (size_t units = 0; units < chunk_rates[cls].size(); units++) dnr_rates_by_class[cls][units].insert(dnr_rates_by_class[cls][units].end(), chunk_rates[cls][units].begin(), chunk_rates[cls][units].end());
+        // Combine chunk observations in submission order while the remaining workers run.
+        for (auto& future : dnr_futures) {
+            auto chunk_rates = future.get();
+            for (int cls = 0; cls < 6; cls++) {
+                if (dnr_rates_by_class[cls].size() < chunk_rates[cls].size()) dnr_rates_by_class[cls].resize(chunk_rates[cls].size());
+                for (size_t units = 0; units < chunk_rates[cls].size(); units++) dnr_rates_by_class[cls][units].append(chunk_rates[cls][units]);
+            }
         }
+        dnr_futures.clear();
+        thread_pool.stop(true);
     }
     // Give every TSV column the same row range and reuse the HP estimator's pooling and robust limits.
     size_t unit_count = MIN_REF_HP_LEN + 1;
@@ -1100,26 +1166,33 @@ int main(int argc, char* argv[]) {
         dnr_thresholds_by_class[cls] = estimate_hp_mismatch_rate_thresholds(dnr_rates_by_class[cls], config.max_seq_error);
     }
     write_dnr_mismatch_rate_thresholds(dnr_thresholds_by_class, workdir + "/" + DNR_MISMATCH_RATE_THRESHOLDS_FILENAME);
+    std::array<hp_mismatch_rates_by_len_t, 6>().swap(dnr_rates_by_class);
+    std::array<std::vector<double>, 6>().swap(dnr_thresholds_by_class);
+    trim_hp_memory();
     if (thresholds_only) return 0;
     hp_mismatch_rate_thresholds_t hp_mismatch_rate_thresholds(workdir);
     hp_tail_quality_model_t quality_model = make_hp_tail_quality_model(tail_error_table);
-    futures.clear();
+    hp_tail_error_table_t().swap(tail_error_table);
+    trim_hp_memory();
     {
         ctpl::thread_pool thread_pool(config.threads);
         for (hp_candidate_chunk_t& chunk : candidate_chunks) {
             futures.push_back(thread_pool.push([&chunk, &chr_seqs, &config, &stats, &aligner, &filter, &quality_model](int id) {
                 // Own the evidence locally so it is freed as soon as this chunk finishes.
+                hp_memory_cleanup_t cleanup;
                 std::vector<hp_run_t> hp_runs = std::move(chunk.hp_runs);
                 return postprocess_hp_runs(hp_runs, chunk.contig_name, chr_seqs.get_seq(chunk.contig_name), chr_seqs.get_len(chunk.contig_name), &config, &stats, aligner, filter, true, quality_model);
             }));
         }
+        for (std::future<hp_chunk_result_t>& future : futures) {
+            hp_chunk_result_t chunk_result = future.get();
+            hp_indels.insert(hp_indels.end(), chunk_result.hp_indels.begin(), chunk_result.hp_indels.end());
+            hp_indel_3p_mismatch_rates.insert(hp_indel_3p_mismatch_rates.end(), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.begin()), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.end()));
+        }
+        futures.clear();
         thread_pool.stop(true);
     }
-    for (std::future<hp_chunk_result_t>& future : futures) {
-        hp_chunk_result_t chunk_result = future.get();
-        hp_indels.insert(hp_indels.end(), chunk_result.hp_indels.begin(), chunk_result.hp_indels.end());
-        hp_indel_3p_mismatch_rates.insert(hp_indel_3p_mismatch_rates.end(), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.begin()), std::make_move_iterator(chunk_result.hp_indel_3p_mismatch_rates.end()));
-    }
+    candidate_chunks.clear();
     std::vector<std::shared_ptr<sv_t>> filtered_hp_indels;
     for (int hp_indel_idx = 0; hp_indel_idx < hp_indels.size(); hp_indel_idx++) {
         std::shared_ptr<sv_t>& hp_indel = hp_indels[hp_indel_idx];
