@@ -1,5 +1,6 @@
 # SurVeyor
-Structural variant discovery and genotyping pipeline from paired-end NGS data. SurVeyor can detect and genotype deletions, tandem duplications, insertions and inversions that are 50 base pairs or longer using WGS paired-end sequencing data. Furthermore, when multiple samples from a cohort are available, it is able to leverage the shared information to increase sample-level recall.
+Structural variant discovery and genotyping pipeline from paired-end NGS data. SurVeyor can detect and genotype deletions, tandem duplications, insertions and inversions using WGS paired-end sequencing data. By default it reports variants of 50 base pairs or longer; with --min-sv-size 1 it also reports indels down to 1 bp.
+Furthermore, when multiple samples from a cohort are available, it is able to leverage the shared information to increase sample-level recall.
 
 ## Installation
 
@@ -10,7 +11,7 @@ In order to compile the code, the following are required:
 - A C and a C++ compiler are required. If the GCC suite is used, version 4.9.3 or above is required.
 - CMake (3.5 or above)
 
-Downloaded the latest release from https://github.com/Mesh89/SurVeyor/releases , uncompress it and enter the directory.
+Download the latest release from https://github.com/Mesh89/SurVeyor/releases , uncompress it and enter the directory.
 The following commands should be sufficient
 
 ```
@@ -37,9 +38,9 @@ python3 surveyor.py call demo/reads.bam workdir/ demo/ref.fa --ml-model trained-
 ```
 The software should finish in a few seconds. Then, 
 ```
-bcftools view -H workdir/calls-genotyped.vcf.gz --min-ac=1
+bcftools view -H workdir/calls-genotyped.reassigned.stvars.vcf.gz --min-ac=1
 ```
-should output 4 variants: two insertions, one deletion and one duplication. The expected variants are in demo/result.txt
+should output 4 variants: three insertions and one deletion. The insertion at ref2:80000 is a tandem duplication; it is reported as an insertion, and the INFO field GT_AS_DUP gives the duplicated reference interval (ref2:79999-80100). The expected variants are in demo/result.txt
 
 ## Data preparation
 
@@ -49,7 +50,7 @@ The BAM/CRAM file must be coordinate-sorted and indexed. Furthermore, the MD, MC
 
 Recent versions of BWA MEM will automatically add all the necessary tags. If you used an old version, a different aligner, or if for any reason your BAM/CRAM does not have the required tags, you can use the samtools command fixmate (for MC and MQ) and callmd (for MD) to add them.
 
-## Denovo calling of structural variants
+## Denovo calling of variants
 
 The basic command to call structural variants 
 ```bash
@@ -57,10 +58,17 @@ python surveyor.py call --threads N_THREADS BAM_FILE WORKDIR REFERENCE_FASTA --m
 ```
 TRAINED_MODEL should be the location of the uncompressed trained-model.zip
 
+By default, only variants of 50 bp or longer are called. To also call small indels (down to 1 bp), add `--min-sv-size 1`:
+```bash
+python surveyor.py call --threads N_THREADS --min-sv-size 1 BAM_FILE WORKDIR REFERENCE_FASTA --ml-model TRAINED_MODEL
+```
+
 For other parameters, please see the help with
 ```bash
 python surveyor.py call -h
 ```
+
+> **Note:** the genotyping and cohort-calling workflows described below have only been tested on structural variants, i.e. the calls in `calls-genotyped.reassigned.stvars.vcf.gz`. Their use with the small indels in `calls-genotyped.reassigned.smvars.vcf.gz` has not been validated.
 
 ## Genotyping a set of structural variants
 
@@ -68,7 +76,7 @@ The basic command to genotype a set of structural variants in VCF format (IN_VCF
 ```bash
 python surveyor.py genotype --threads N_THREADS IN_VCF BAM_FILE WORKDIR REFERENCE_FASTA --ml-model TRAINED_MODEL
 ```
-The genotyped variants will be reported in genotyped.vcf.gz (version with all of the original calls) and genotyped.deduped.vcf.gz (version with duplicate calls removed).
+The genotyped variants will be reported in calls-genotyped.reassigned.stvars.vcf.gz (variants of 50 bp or longer) and calls-genotyped.reassigned.smvars.vcf.gz (variants shorter than 50 bp), together with calls-genotyped.reassigned.stvars.deduped.vcf.gz and calls-genotyped.reassigned.smvars.deduped.vcf.gz (versions with duplicate calls removed).
 
 For other parameters, please see the help with
 ```
@@ -100,10 +108,10 @@ A text file `FILELIST` should be produced where each line contains a sample name
 
 For our example, `FILELIST` should look like this
 ```text
-SAMPLE_1 WORKDIR_S_1/calls-genotyped.vcf.gz
-SAMPLE_2 WORKDIR_S_2/calls-genotyped.vcf.gz
+SAMPLE_1 WORKDIR_S_1/calls-genotyped.reassigned.stvars.vcf.gz
+SAMPLE_2 WORKDIR_S_2/calls-genotyped.reassigned.stvars.vcf.gz
 ...
-SAMPLE_n WORKDIR_S_n/calls-genotyped.vcf.gz
+SAMPLE_n WORKDIR_S_n/calls-genotyped.reassigned.stvars.vcf.gz
 ```
 
 Then, run the command
@@ -130,7 +138,7 @@ python surveyor.py genotype --threads N_THREADS catalogue.vcf.gz BAM_FILE_S_i WO
 ```
 where `BAM_FILE_S_i` is the BAM or CRAM file relative to sample $S_i$.
 
-For each $i$, final calls for sample $S_i$ will be in `WORKDIR_S_i-regt/genotyped.deduped.vcf.gz`
+For each $i$, final calls for sample $S_i$ will be in `WORKDIR_S_i-regt/calls-genotyped.reassigned.stvars.deduped.vcf.gz`
 
 ### Genotyping a precomputed cohort catalogue
 
@@ -143,15 +151,15 @@ python surveyor.py genotype --threads N_THREADS catalogue.vcf.gz BAM_FILE WORKDI
 
 The genotyped calls will be written to:
 ```text
-WORKDIR/genotyped.vcf.gz
-WORKDIR/genotyped.deduped.vcf.gz
+WORKDIR/calls-genotyped.reassigned.stvars.vcf.gz
+WORKDIR/calls-genotyped.reassigned.stvars.deduped.vcf.gz
 ```
 
 As mentioned previously, if the catalogue was generated from many samples and you notice an excessive number of duplicate calls, we recommend using the option 
 ```
 --tr-bed SIMPLE_REPEATS_BED
 ```
-where `SIMPLE_REPEATS_BED` is a list of repetitive regions for the reference in BED format, and using the `genotyped.deduped.vcf.gz` file.
+where `SIMPLE_REPEATS_BED` is a list of repetitive regions for the reference in BED format, and using the `calls-genotyped.reassigned.stvars.deduped.vcf.gz` file.
 
 ### Tandem duplications with unresolved copy number (since 0.12.3)
 Some tandem duplications reported by SurVeyor have an unresolved copy number. In these cases, SurVeyor can identify the reference interval involved in the duplication, but it cannot determine from short-read evidence how many additional copies are present. For every DUP record and every sample, SurVeyor reports this in the FORMAT field CNU, both when calling and when genotyping.
