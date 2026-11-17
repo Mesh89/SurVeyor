@@ -8,7 +8,7 @@ Furthermore, when multiple samples from a cohort are available, it is able to le
 **We discourage cloning the repository, as it may not be compatible with the latest trained model.**
 
 In order to compile the code, the following are required:
-- A C and a C++ compiler are required. If the GCC suite is used, version 4.9.3 or above is required.
+- A C and a C++ compiler are required. GCC 8 or newer (tested 8.4, 10.2, 15.2) or Clang.
 - CMake (3.5 or above)
 
 Download the latest release from https://github.com/Mesh89/SurVeyor/releases , uncompress it and enter the directory.
@@ -24,7 +24,7 @@ If you are compiling on the same platform as where you will execute it, you can 
 cmake -DCMAKE_BUILD_TYPE=Release -DNATIVE=ON . && make
 ```
 
-Python 3 is necessary to run SurVeyor. Libraries NumPy (http://www.numpy.org/), PySam (https://github.com/pysam-developers/pysam), scikit-learn (https://scikit-learn.org/stable/) and xgboost (https://xgboost.readthedocs.io/en/stable/) are also necessary.
+Python 3 is necessary to run SurVeyor. Libraries NumPy (http://www.numpy.org/), PySam (https://github.com/pysam-developers/pysam), scikit-learn (https://scikit-learn.org/stable/) and xgboost (https://xgboost.readthedocs.io/en/stable/) are also necessary. Required versions: Python 3.8+, xgboost 3.1+ (or xgboost 2.0–3.0 with scikit-learn ≤ 1.7).
 
 Please also download trained-model.zip from the release you are using, and uncompress it in a location of your convenience.
 
