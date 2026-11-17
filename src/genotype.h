@@ -1193,6 +1193,7 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<std
     double consistent_avg_score, double consistent_stddev_score);
 
 std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_id);
+const std::unordered_map<std::string, int64_t>& get_mate_nms(int contig_id, bool outward);
 void release_chromosome_data(int contig_id);
 
 IntervalTree<ext_read_t*> get_candidate_reads_for_extension_itree(std::string contig_name, hts_pos_t contig_len, std::vector<hts_pair_pos_t> target_ivals, open_samFile_t* bam_file,

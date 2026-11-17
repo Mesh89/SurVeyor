@@ -717,8 +717,7 @@ inline void genotype_dups(int id, std::string contig_name, char* contig_seq, hts
 
     depth_filter_dup(contig_name, dups, bam_file, config, stats);
     calculate_confidence_interval_size(contig_name, *global_crossing_isize_dist, small_dups, bam_file, config, stats);
-    std::string mates_nms_file = workdir + "/workspace/outward-pairs/" + std::to_string(contig_id) + ".txt";
-    calculate_ptn_ratio(contig_name, dups, bam_file, config, stats, contig_len, false, evidence_map, mates_nms_file);
+    calculate_ptn_ratio(contig_name, dups, bam_file, config, stats, contig_len, false, evidence_map, get_mate_nms(contig_id, true));
     count_stray_pairs(contig_name, dups, bam_file, config, stats);
     release_chromosome_data(contig_id);
 }

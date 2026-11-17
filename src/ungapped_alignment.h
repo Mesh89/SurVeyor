@@ -154,6 +154,17 @@ ungapped_aln_t best_ungapped_aln(const char* query, int query_len, const char* r
     max_ref_overflow = std::max(0, max_ref_overflow);
     max_query_clip = std::max(0, max_query_clip);
 
+    bool fast_unclipped = max_query_clip == 0 && match_score == 1 && (mismatch_score == -4 || mismatch_score == 0);
+    if (fast_unclipped) {
+        const char* exact = std::search(ref, ref+ref_len, query, query+query_len);
+        if (exact != ref+ref_len) {
+            int ref_begin = exact-ref;
+            ungapped_aln_t aln(0, query_len, ref_begin, ref_begin+query_len, 0, query_len);
+            cache.store(std::move(cache_key), aln);
+            return aln;
+        }
+    }
+
     ungapped_aln_t best_aln(0, 0, 0, 0, 0, INT32_MIN);
     // These are the same placements as the former padded-reference search, including its
     // single placement when the query is longer than the reference plus both overhangs.
@@ -164,7 +175,20 @@ ungapped_aln_t best_ungapped_aln(const char* query, int query_len, const char* r
         if (max_query_clip > 0 && (left_overhang > max_ref_overflow || right_overhang > max_ref_overflow)) continue;
         int left_clip = max_query_clip > 0 ? max_query_clip : left_overhang;
         int right_clip = max_query_clip > 0 ? max_query_clip : right_overhang;
-        ungapped_aln_t aln = fixed_ungapped_aln(query, query_len, ref, ref_len, placement, match_score, mismatch_score, left_clip, right_clip);
+        ungapped_aln_t aln(0, 0, 0, 0, 0, INT32_MIN);
+        if (fast_unclipped && placement > -hts_pos_t(query_len) && placement < ref_len) {
+            int overlap = query_len-left_overhang-right_overhang;
+            if (overlap <= best_aln.score) continue;
+            // Ties retain the earlier placement, so only fully score possible strict winners.
+            int max_mismatches = std::min<int64_t>(overlap, (int64_t(overlap)-best_aln.score-1)/(1-mismatch_score));
+            int ref_begin = std::max<hts_pos_t>(0, placement);
+            int mismatches = number_of_mismatches_fast(query+left_overhang, ref+ref_begin, overlap, max_mismatches);
+            if (mismatches > max_mismatches) continue;
+            int score = (overlap-mismatches)*match_score + mismatches*mismatch_score;
+            aln = ungapped_aln_t(left_overhang, query_len-right_overhang, ref_begin, ref_begin+overlap, mismatches, score);
+        } else {
+            aln = fixed_ungapped_aln(query, query_len, ref, ref_len, placement, match_score, mismatch_score, left_clip, right_clip);
+        }
         // Preserve zero-overlap candidates from the legacy search only when clipping is disabled.
         if (max_query_clip == 0 && (placement <= -hts_pos_t(query_len) || placement >= ref_len)) {
             int ref_begin = std::max<hts_pos_t>(0, placement);

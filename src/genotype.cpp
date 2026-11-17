@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <new>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -65,6 +66,7 @@ StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
 StripedSmithWaterman::Aligner harsh_aligner(1, 4, 100, 1, false);
 
 std::vector<ext_mate_map_t> mateseqs_w_mapq;
+std::vector<std::unique_ptr<std::unordered_map<std::string, int64_t>>> long_mate_nms_by_contig, outward_mate_nms_by_contig;
 std::vector<int> active_threads_per_chr;
 std::vector<int> remaining_blocks_per_chr;
 std::vector<std::mutex> mutex_per_chr;
@@ -1241,6 +1243,20 @@ std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_i
 	return {&mateseqs_w_mapq[contig_id], evidence_map};
 }
 
+const std::unordered_map<std::string, int64_t>& get_mate_nms(int contig_id, bool outward) {
+    std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
+    auto& mate_nms = outward ? outward_mate_nms_by_contig[contig_id] : long_mate_nms_by_contig[contig_id];
+    if (!mate_nms) {
+        mate_nms.reset(new std::unordered_map<std::string, int64_t>());
+        std::string fname = workdir + "/workspace/" + (outward ? "outward-pairs/" : "long-pairs/") + std::to_string(contig_id) + ".txt";
+        std::ifstream fin(fname);
+        std::string qname, seq;
+        int64_t nm;
+        while (fin >> qname >> seq >> nm) (*mate_nms)[qname] = nm;
+    }
+    return *mate_nms;
+}
+
 void release_chromosome_data(int contig_id) {
     mutex_per_chr[contig_id].lock();
 	active_threads_per_chr[contig_id]--;
@@ -1248,7 +1264,11 @@ void release_chromosome_data(int contig_id) {
 		mateseqs_w_mapq[contig_id].clear();
 	}
 	bool contig_done = --remaining_blocks_per_chr[contig_id] == 0;
-	if (contig_done) evidence_maps_by_contig[contig_id].reset();
+	if (contig_done) {
+		evidence_maps_by_contig[contig_id].reset();
+		long_mate_nms_by_contig[contig_id].reset();
+		outward_mate_nms_by_contig[contig_id].reset();
+	}
 	mutex_per_chr[contig_id].unlock();
 #ifdef __GLIBC__
 	if (contig_done && trim_mutex.try_lock()) {
@@ -1410,11 +1430,19 @@ int main(int argc, char* argv[]) {
     // read crossing isize distribution
     std::ifstream crossing_isizes_dist_fin(workdir + "/crossing_isizes.txt");
 	int isize, count;
+	std::mt19937 crossing_isizes_rng(config.seed);
+	size_t total_isizes = 0;
 	while (crossing_isizes_dist_fin >> isize >> count) {
-		for (int i = 0; i < count; i++) global_crossing_isize_dist.push_back(isize);
+		for (int i = 0; i < count; i++, total_isizes++) {
+			if (total_isizes < 100000) {
+				global_crossing_isize_dist.push_back(isize);
+			} else {
+				// Sample each repeated observation with equal probability.
+				size_t j = std::uniform_int_distribution<size_t>(0, total_isizes)(crossing_isizes_rng);
+				if (j < 100000) global_crossing_isize_dist[j] = isize;
+			}
+		}
 	}
-	std::random_shuffle(global_crossing_isize_dist.begin(), global_crossing_isize_dist.end());
-	if (global_crossing_isize_dist.size() > 100000) global_crossing_isize_dist.resize(100000);
     std::sort(global_crossing_isize_dist.begin(), global_crossing_isize_dist.end());
     global_crossing_isize_dist.shrink_to_fit();
 	crossing_isizes_dist_fin.close();
@@ -1425,8 +1453,10 @@ int main(int argc, char* argv[]) {
 	std::getline(full_cmd_fin, full_cmd_str);
 
     mateseqs_w_mapq.resize(contig_map.size());
+    long_mate_nms_by_contig.resize(contig_map.size());
+    outward_mate_nms_by_contig.resize(contig_map.size());
     active_threads_per_chr = std::vector<int>(contig_map.size());
-    // One scheduling reference keeps evidence alive until every block has been queued.
+    // One scheduling reference keeps chromosome data alive until every block has been queued.
     remaining_blocks_per_chr = std::vector<int>(contig_map.size(), 1);
 	mutex_per_chr = std::vector<std::mutex>(contig_map.size());
     evidence_svs_by_contig.resize(contig_map.size());
@@ -1643,7 +1673,11 @@ int main(int argc, char* argv[]) {
             futures.push_back(std::move(future));
         }
         std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
-        if (--remaining_blocks_per_chr[contig_id] == 0) evidence_maps_by_contig[contig_id].reset();
+        if (--remaining_blocks_per_chr[contig_id] == 0) {
+            evidence_maps_by_contig[contig_id].reset();
+            long_mate_nms_by_contig[contig_id].reset();
+            outward_mate_nms_by_contig[contig_id].reset();
+        }
     }
     for (int i = 0; i < futures.size(); i++) {
         futures[i].get();

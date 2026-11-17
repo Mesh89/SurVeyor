@@ -618,7 +618,7 @@ void add_read(pairs_data_t& pairs_data, bam1_t* read, int64_t mate_nm) {
 }
 
 void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& deletions, open_samFile_t* bam_file, 
-	config_t& config, stats_t& stats, bool reassign_evidence, evidence_map_t* evidence_map, std::string nm_file = "") {
+	config_t& config, stats_t& stats, bool reassign_evidence, evidence_map_t* evidence_map, const std::unordered_map<std::string, int64_t>& qname_to_mate_nm) {
 	
 	if (deletions.empty()) return;
 	cram_required_fields_guard_t required_fields(bam_file->file, INT_MAX & ~SAM_QUAL);
@@ -643,14 +643,6 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& dele
 		return d1->end < d2->end;
 	});
 
-	std::unordered_map<std::string, int64_t> qname_to_mate_nm; 
-	std::ifstream mateseqs_fin(nm_file);
-	std::string qname, seq;
-	int64_t nm;
-	while (mateseqs_fin >> qname >> seq >> nm) {
-		qname_to_mate_nm[qname] = nm;
-	}
-
 	std::vector<pairs_data_t> alt_pairs_data(deletions.size());
 	std::vector<pairs_data_t> ref_bp1_pairs_data(deletions.size()), ref_bp2_pairs_data(deletions.size());
 	std::vector<pairs_data_t> neutral_bp1_pairs_data(deletions.size()), neutral_bp2_pairs_data(deletions.size());
@@ -662,6 +654,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& dele
 		if (is_unmapped(read) || !is_primary(read) || bam_is_rev(read)) continue;
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read) || read->core.isize <= 0) continue;
 
+		auto mate_nm_it = qname_to_mate_nm.find(bam_get_qname(read));
+		int64_t mate_nm = mate_nm_it == qname_to_mate_nm.end() ? 0 : mate_nm_it->second;
+
 		while (curr_del_bystart_idx < deletions_by_start.size() && deletions_by_start[curr_del_bystart_idx]->start < read->core.pos) curr_del_bystart_idx++;
 		while (curr_del_byend_idx < deletions_by_end.size() && deletions_by_end[curr_del_byend_idx]->end < read->core.pos) curr_del_byend_idx++;
 
@@ -672,20 +667,20 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& dele
 				if (pair_start <= deletions_by_start[i]->start+5 && deletions_by_start[i]->end-5 <= pair_end && 
 					deletions_by_start[i]->start-pair_start + pair_end-deletions_by_start[i]->end <= stats.max_is) {
 					if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, deletions_by_start[i])) continue;
-					add_read(alt_pairs_data[i], read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+					add_read(alt_pairs_data[i], read, mate_nm);
 				}
 			}
 		} else if (read->core.isize >= stats.min_is) {
 			for (int i = curr_del_bystart_idx; i < deletions.size() && deletions_by_start[i]->start <= pair_end; i++) {
 				if (pair_start <= deletions_by_start[i]->start && deletions_by_start[i]->start <= pair_end) {
 					pairs_data_t& pairs_data = (read->core.isize < stats.min_is+(-deletions_by_start[i]->svlen()) ? ref_bp1_pairs_data[i] : neutral_bp1_pairs_data[i]);
-					add_read(pairs_data, read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+					add_read(pairs_data, read, mate_nm);
 				}
 			}
 			for (int i = curr_del_byend_idx; i < deletions.size() && deletions_by_end[i]->end <= pair_end; i++) {
 				if (pair_start <= deletions_by_end[i]->end && deletions_by_end[i]->end <= pair_end) {
 					pairs_data_t& pairs_data = (read->core.isize < stats.min_is+(-deletions_by_end[i]->svlen()) ? ref_bp2_pairs_data[i] : neutral_bp2_pairs_data[i]);
-					add_read(pairs_data, read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+					add_read(pairs_data, read, mate_nm);
 				}
 			}
 		}
@@ -699,7 +694,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& dele
 	}
 }
 void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& duplications, open_samFile_t* bam_file, 
-	config_t& config, stats_t& stats, hts_pos_t contig_len, bool reassign_evidence, evidence_map_t* evidence_map, std::string nm_file = "") {
+	config_t& config, stats_t& stats, hts_pos_t contig_len, bool reassign_evidence, evidence_map_t* evidence_map, const std::unordered_map<std::string, int64_t>& qname_to_mate_nm) {
 	
 	if (duplications.empty()) return;
 	cram_required_fields_guard_t required_fields(bam_file->file, INT_MAX & ~SAM_QUAL);
@@ -724,14 +719,6 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 		return d1->end < d2->end;
 	});
 
-	std::unordered_map<std::string, int64_t> qname_to_mate_nm; 
-	std::ifstream mateseqs_fin(nm_file);
-	std::string qname, seq;
-	int64_t nm;
-	while (mateseqs_fin >> qname >> seq >> nm) {
-		qname_to_mate_nm[qname] = nm;
-	}
-
 	std::unordered_map<duplication_t*, size_t> duplication_to_idx;
 	for (size_t i = 0; i < duplications.size(); i++) duplication_to_idx[duplications[i]] = i;
 
@@ -746,6 +733,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 		if (is_unmapped(read) || !is_primary(read)) continue;
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read)) continue;
 
+		auto mate_nm_it = qname_to_mate_nm.find(bam_get_qname(read));
+		int64_t mate_nm = mate_nm_it == qname_to_mate_nm.end() ? 0 : mate_nm_it->second;
+
 		while (curr_dup_dp_idx < duplications.size() && duplications_by_start[curr_dup_dp_idx]->start < read->core.pos-stats.max_is) curr_dup_dp_idx++;
 		while (curr_dup_bystart_idx < duplications.size() && duplications_by_start[curr_dup_bystart_idx]->start < read->core.pos) curr_dup_bystart_idx++;
 		while (curr_dup_byend_idx < duplications.size() && duplications_by_end[curr_dup_byend_idx]->end < read->core.pos) curr_dup_byend_idx++;
@@ -757,7 +747,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 				int idx = duplication_to_idx[dup];
 				if (dup->start < pair_start && pair_start < dup->start+stats.max_is && dup->end-stats.max_is < pair_end && pair_end < dup->end) {
 					if (reassign_evidence && evidence_map->is_read_assigned_to_different_sv(read, dup)) continue;
-					add_read(alt_pairs_data[idx], read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+					add_read(alt_pairs_data[idx], read, mate_nm);
 				}
 			}
 		} else if (!bam_is_rev(read) && read->core.isize >= stats.min_is && read->core.isize <= stats.max_is) {
@@ -766,13 +756,13 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 				int idx = duplication_to_idx[dup];
 				if (pair_start <= dup->start && dup->end <= pair_end) {
 					if (read->core.isize > stats.max_is-dup->svlen()) {
-						add_read(ref_pairs_data[idx], read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+						add_read(ref_pairs_data[idx], read, mate_nm);
 					} else {
-						add_read(neutral_bp1_pairs_data[idx], read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
-						add_read(neutral_bp2_pairs_data[idx], read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+						add_read(neutral_bp1_pairs_data[idx], read, mate_nm);
+						add_read(neutral_bp2_pairs_data[idx], read, mate_nm);
 					}
 				} else if (pair_start <= dup->start && dup->start <= pair_end) {
-					add_read(neutral_bp1_pairs_data[idx], read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+					add_read(neutral_bp1_pairs_data[idx], read, mate_nm);
 				}
 			}
 			for (int i = curr_dup_byend_idx; i < duplications.size() && duplications_by_end[i]->end < pair_end; i++) {
@@ -781,7 +771,7 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 				if (pair_start <= dup->start && dup->end <= pair_end) {
 					continue;
 				} else if (pair_start <= dup->end && dup->end <= pair_end) {
-					add_read(neutral_bp2_pairs_data[idx], read, qname_to_mate_nm[std::string(bam_get_qname(read))]);
+					add_read(neutral_bp2_pairs_data[idx], read, mate_nm);
 				}
 			}
 		}

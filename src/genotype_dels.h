@@ -487,8 +487,7 @@ inline void genotype_dels(int id, std::string contig_name, char* contig_seq, int
 
     depth_filter_del(contig_name, dels, bam_file, config, stats);
     calculate_confidence_interval_size(contig_name, *global_crossing_isize_dist, small_svs, bam_file, config, stats);
-    std::string mates_nms_file = workdir + "/workspace/long-pairs/" + std::to_string(contig_id) + ".txt";
-    calculate_ptn_ratio(contig_name, dels, bam_file, config, stats, false, evidence_map, mates_nms_file);
+    calculate_ptn_ratio(contig_name, dels, bam_file, config, stats, false, evidence_map, get_mate_nms(contig_id, false));
     count_stray_pairs(contig_name, dels, bam_file, config, stats);
     release_chromosome_data(contig_id);
 }
