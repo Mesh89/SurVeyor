@@ -2,6 +2,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <htslib/sam.h>
 #include <htslib/faidx.h>
 #include <htslib/tbx.h>
@@ -17,6 +20,7 @@
 #include <unordered_set>
 
 #include "../libs/cptl_stl.h"
+#include "../libs/exact_cache.h"
 #include "../libs/ssw_selected.h"
 #include "../libs/IntervalTree.h"
 #include "htslib/hts.h"
@@ -47,6 +51,18 @@ std::vector<int> active_threads_per_chr;
 std::vector<std::mutex> mutex_per_chr;
 
 std::mutex mtx;
+
+void trim_sr_memory() {
+#ifdef __GLIBC__
+	static std::mutex trim_mutex;
+	std::unique_lock<std::mutex> lock(trim_mutex, std::try_to_lock);
+	if (lock.owns_lock()) malloc_trim(0);
+#endif
+}
+
+struct sr_memory_cleanup_t {
+	~sr_memory_cleanup_t() { trim_sr_memory(); }
+};
 
 void merge_read_haplotypes(std::vector<std::shared_ptr<sv_t>>& svs, const std::vector<std::shared_ptr<sv_t>>& read_svs) {
 	// READ calls can carry distinct AUX SNP context for the same main event.
@@ -147,6 +163,8 @@ static void load_extension_mates(const std::string& fname, ext_mate_map_t& mates
 
 void extend_consensuses(int id, std::vector<std::shared_ptr<consensus_t>>* consensuses, std::string contig_name, int start_idx, int end_idx, bool extend_in_clip_direction) {
 
+	sr_memory_cleanup_t memory_cleanup;
+	surveyor_cache::start_block();
 	if (start_idx == end_idx) return;
 	const int MAX_EXTENSION_LEN = 500;
 	hts_pos_t contig_len = chr_seqs.get_len(contig_name);
@@ -217,6 +235,8 @@ void find_svs_from_consensuses_pair(int id, std::string contig_name,
 	std::vector<pair_w_score_t>& consensuses_scored_pairs, size_t start_idx, size_t end_idx,
 	StripedSmithWaterman::Aligner& aligner, std::vector<std::vector<std::shared_ptr<sv_t>>>& svs_by_pair) {
 
+	sr_memory_cleanup_t memory_cleanup;
+	surveyor_cache::start_block();
 	for (size_t pair_idx = start_idx; pair_idx < end_idx; pair_idx++) {
 		pair_w_score_t& ps = consensuses_scored_pairs[pair_idx];
 		std::shared_ptr<consensus_t> c1_consensus = ps.c1_lc ? lc_consensuses[ps.c1_idx] : rc_consensuses[ps.c1_idx]; // in rc/lc pairs, this is rc
@@ -680,6 +700,8 @@ void find_indels_from_paired_consensuses(int contig_id, std::string contig_name,
 	ext_mate_map_t* mateseqs_w_mapq,
 	ctpl::thread_pool& thread_pool) {
 
+	sr_memory_cleanup_t memory_cleanup;
+	surveyor_cache::start_block();
 	mtx.lock();
 	std::vector<std::shared_ptr<consensus_t>>& rc_consensuses = rc_consensuses_by_chr[contig_name];
 	std::vector<std::shared_ptr<consensus_t>>& lc_consensuses = lc_consensuses_by_chr[contig_name];
@@ -698,6 +720,8 @@ void find_indels_from_paired_consensuses(int contig_id, std::string contig_name,
 
 void find_indels_from_unpaired_consensuses(int id, std::string contig_name, std::vector<std::shared_ptr<consensus_t>>* consensuses, int start, int end) {
 
+	sr_memory_cleanup_t memory_cleanup;
+	surveyor_cache::start_block();
 	std::vector<std::shared_ptr<sv_t>> local_svs;
 
 	StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
@@ -713,6 +737,9 @@ void find_indels_from_unpaired_consensuses(int id, std::string contig_name, std:
 		} else if (consensus->left_clipped) {
 			svs = detect_svs(contig_name, contig_seq, contig_len, NULL, consensus, aligner, 0, stats, config);
 		}
+		// Calling is complete; retained SVs only need the consensus metadata.
+		std::string().swap(consensus->sequence);
+		std::string().swap(consensus->qual);
 
 		if (!svs.empty()) {
 			local_svs.insert(local_svs.end(), svs.begin(), svs.end());
@@ -726,6 +753,8 @@ void find_indels_from_unpaired_consensuses(int id, std::string contig_name, std:
 
 void cluster_ss_dps(int id, int contig_id, std::string contig_name) {
 
+	sr_memory_cleanup_t memory_cleanup;
+	surveyor_cache::start_block();
 	std::string dp_fname = workdir + "/workspace/same-strand/" + std::to_string(contig_id) + ".bam";
 	if (!file_exists(dp_fname)) return;
 
@@ -868,6 +897,12 @@ int main(int argc, char* argv[]) {
 		std::string contig_name = contig_map.get_name(contig_id);
 		find_indels_from_paired_consensuses(contig_id, contig_name, &mateseqs_w_mapq[contig_id], finding_indels_thread_pool);
     }
+	finding_indels_thread_pool.stop(true);
+	// Standalone queues and SVs retain shared ownership of the consensuses they need.
+	ss_clusters_by_chr.clear();
+	rc_consensuses_by_chr.clear();
+	lc_consensuses_by_chr.clear();
+	trim_sr_memory();
 
 	elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - start_time).count();
 	std::cout << "Indels found in " << elapsed_time << " seconds" << std::endl;
@@ -900,63 +935,6 @@ int main(int argc, char* argv[]) {
 	start_time = std::chrono::high_resolution_clock::now();
 
 	chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
-
-    ctpl::thread_pool finding_indels_from_up_consenensus_thread_pool(config.threads);
-    for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
-		std::string contig_name = contig_map.get_name(contig_id);
-    	std::vector<std::shared_ptr<consensus_t>>& consensuses = unpaired_consensuses_by_chr[contig_name];
-    	if (consensuses.empty()) continue;
-    	for (int i = 0; i <= consensuses.size()/block_size; i++) {
-    		int start = i * block_size;
-    		int end = std::min(start+block_size, (int) consensuses.size());
-			std::future<void> future = finding_indels_from_up_consenensus_thread_pool.push(find_indels_from_unpaired_consensuses,
-					contig_name, &consensuses, i*block_size, end);
-			futures.push_back(std::move(future));
-		}
-    }
-    finding_indels_from_up_consenensus_thread_pool.stop(true);
-	for (size_t i = 0; i < futures.size(); i++) {
-		futures[i].get();
-	}
-	futures.clear();
-
-	elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - start_time).count();
-	std::cout << "Indels found from unpaired consensuses in " << elapsed_time << " seconds" << std::endl;
-
-	StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
-	StripedSmithWaterman::Filter filter;
-	for (size_t contig_id = 0; contig_id < contig_map.size(); contig_id++) {
-		std::string contig_name = contig_map.get_name(contig_id);
-
-		auto& svs = svs_by_chr[contig_name];
-		for (int i = 0; i < svs.size(); i++) {
-			std::shared_ptr<sv_t> sv = svs[i];
-			bool size_gt_50 = sv->end-sv->start >= 50;
-			bool len_diff_lt_50 = std::abs(sv->svlen()) < 50;
-			bool inv_seq_size_gt_50 = sv->ins_seq.length() >= 50;
-			bool usable_sv_type = sv->svtype() == "DEL" || sv->svtype() == "INS" || sv->svtype() == "RPL";
-			bool inv_seq_covers_enough = double(sv->ins_seq.length())/(sv->end-sv->start) >= 0.75;
-			if (!sv->imprecise && size_gt_50 && len_diff_lt_50 && inv_seq_size_gt_50 && usable_sv_type && inv_seq_covers_enough) { // SV is represented as an inversion
-				char* contig_seq = chr_seqs.get_seq(contig_name);
-				std::string inv_seq = svs[i]->ins_seq;
-				rc(inv_seq);
-				StripedSmithWaterman::Alignment aln;
-				aligner.Align(inv_seq.c_str(), contig_seq+svs[i]->start, svs[i]->end-svs[i]->start, filter, &aln, 0);
-				if (aln.sw_score >= 0.9*inv_seq.length()) {
-					std::string ins_seq = sv->ins_seq;
-					if (sv->svlen() == 0 && aln.sw_score == inv_seq.length()) ins_seq = "";
-					std::shared_ptr<inversion_t> inv = std::make_shared<inversion_t>(contig_name, sv->start, sv->end, ins_seq, sv->rc_consensus, sv->lc_consensus, sv->left_anchor_aln, sv->left_anchor_aln, sv->right_anchor_aln, sv->right_anchor_aln);
-					inv->source = sv->source;
-					inv->aux_indels = sv->aux_indels;
-					inv->aux_snps = sv->aux_snps;
-					svs[i] = inv;
-				}
-			} else if (svs[i]->svsize() < config.min_sv_size) {
-				svs[i] = nullptr;
-			}
-		}
-		svs.erase(std::remove(svs.begin(), svs.end(), nullptr), svs.end());
-	}
 
 	// Input SVs detected from read alignments directly
 	std::unordered_map<std::string, std::vector<std::shared_ptr<sv_t>>> read_svs_by_chr;
@@ -994,9 +972,50 @@ int main(int argc, char* argv[]) {
 		throw std::runtime_error("Failed to write the VCF header to " + out_dp_inv_vcf_fname + ".");
 	}
 
+	StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
+	StripedSmithWaterman::Filter filter;
+	ctpl::thread_pool finding_indels_from_up_consenensus_thread_pool(config.threads);
 	std::unordered_map<std::string, int> svtype_id;
+	// Finish and release each contig before queuing the next one.
 	for (const std::string& contig_name : chr_seqs.ordered_contigs) {
+		sr_memory_cleanup_t memory_cleanup;
+		std::vector<std::shared_ptr<consensus_t>>& consensuses = unpaired_consensuses_by_chr[contig_name];
+		for (int start = 0; start < consensuses.size(); start += block_size) {
+			int end = std::min(start+block_size, (int) consensuses.size());
+			std::future<void> future = finding_indels_from_up_consenensus_thread_pool.push(find_indels_from_unpaired_consensuses, contig_name, &consensuses, start, end);
+			futures.push_back(std::move(future));
+		}
+		for (auto& future : futures) future.get();
+		futures.clear();
+
 		std::vector<std::shared_ptr<sv_t>>& svs = svs_by_chr[contig_name];
+		for (int i = 0; i < svs.size(); i++) {
+			std::shared_ptr<sv_t> sv = svs[i];
+			bool size_gt_50 = sv->end-sv->start >= 50;
+			bool len_diff_lt_50 = std::abs(sv->svlen()) < 50;
+			bool inv_seq_size_gt_50 = sv->ins_seq.length() >= 50;
+			bool usable_sv_type = sv->svtype() == "DEL" || sv->svtype() == "INS" || sv->svtype() == "RPL";
+			bool inv_seq_covers_enough = double(sv->ins_seq.length())/(sv->end-sv->start) >= 0.75;
+			if (!sv->imprecise && size_gt_50 && len_diff_lt_50 && inv_seq_size_gt_50 && usable_sv_type && inv_seq_covers_enough) { // SV is represented as an inversion
+				char* contig_seq = chr_seqs.get_seq(contig_name);
+				std::string inv_seq = svs[i]->ins_seq;
+				rc(inv_seq);
+				StripedSmithWaterman::Alignment aln;
+				aligner.Align(inv_seq.c_str(), contig_seq+svs[i]->start, svs[i]->end-svs[i]->start, filter, &aln, 0);
+				if (aln.sw_score >= 0.9*inv_seq.length()) {
+					std::string ins_seq = sv->ins_seq;
+					if (sv->svlen() == 0 && aln.sw_score == inv_seq.length()) ins_seq = "";
+					std::shared_ptr<inversion_t> inv = std::make_shared<inversion_t>(contig_name, sv->start, sv->end, ins_seq, sv->rc_consensus, sv->lc_consensus, sv->left_anchor_aln, sv->left_anchor_aln, sv->right_anchor_aln, sv->right_anchor_aln);
+					inv->source = sv->source;
+					inv->aux_indels = sv->aux_indels;
+					inv->aux_snps = sv->aux_snps;
+					svs[i] = inv;
+				}
+			} else if (svs[i]->svsize() < config.min_sv_size) {
+				svs[i] = nullptr;
+			}
+		}
+		svs.erase(std::remove(svs.begin(), svs.end(), nullptr), svs.end());
 
 		// merge with read_svs and hp_svs
 		merge_read_haplotypes(svs, read_svs_by_chr[contig_name]);
@@ -1062,8 +1081,17 @@ int main(int argc, char* argv[]) {
 				throw std::runtime_error("Failed to write to " + out_vcf_fname + ".");
 			}
 		}
-	}
 
+		svs_by_chr.erase(contig_name);
+		read_svs_by_chr.erase(contig_name);
+		unpaired_consensuses_by_chr.erase(contig_name);
+	}
+	finding_indels_from_up_consenensus_thread_pool.stop(true);
+
+	elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - start_time).count();
+	std::cout << "Indels found from unpaired consensuses in " << elapsed_time << " seconds" << std::endl;
+
+	// Keep DP breakend IDs after all SR breakend IDs.
 	for (std::string& contig_name : chr_seqs.ordered_contigs) {
 		auto dp_invs = dp_bnds_by_chr[contig_name];
 		std::sort(dp_invs.begin(), dp_invs.end(), [](std::shared_ptr<breakend_t> inv1, std::shared_ptr<breakend_t> inv2) {
