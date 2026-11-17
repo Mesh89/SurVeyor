@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -71,7 +72,13 @@ aux_haplotype_t build_aux_haplotype(sv_t& sv, char* chr_seq, hts_pos_t chr_len) 
     return result;
 }
 
-std::vector<std::string> atom_signatures(const std::string& haplotype, int begin, int end, const std::string& other) {
+std::string upper_window(const char* chr_seq, hts_pos_t begin, hts_pos_t end) {
+    std::string sequence(chr_seq+begin, end-begin);
+    for (char& base : sequence) base = std::toupper(static_cast<unsigned char>(base));
+    return sequence;
+}
+
+std::vector<std::string> atom_signatures(const std::string& haplotype, int begin, int end, const std::string& other, const std::string* other2 = nullptr) {
     std::vector<std::pair<int, int>> intervals;
     if (end-begin+20 > 120) {
         intervals.push_back({begin, begin});
@@ -85,7 +92,7 @@ std::vector<std::string> atom_signatures(const std::string& haplotype, int begin
         for (int flank = 10; flank <= 75; flank += 5) {
             if (interval.first < flank || interval.second+flank > haplotype.size()) break;
             std::string signature = haplotype.substr(interval.first-flank, interval.second-interval.first+2*flank);
-            if (other.find(signature) == std::string::npos) {
+            if (other.find(signature) == std::string::npos && (!other2 || other2->find(signature) == std::string::npos)) {
                 signatures.push_back(std::move(signature));
                 break;
             }
@@ -94,22 +101,76 @@ std::vector<std::string> atom_signatures(const std::string& haplotype, int begin
     return signatures;
 }
 
-bool atom_is_contradicted(const aux_haplotype_t& haplotype, const allele_edit_t& edit, const char* chr_seq, const std::vector<std::pair<std::string, std::string>>& reads, const std::vector<std::string>& main_signatures) {
+void paired_signatures(const std::string& seq_a, int a_begin, int a_end, const std::string& seq_b, int b_begin, int b_end, const std::string* other_a2, const std::string* other_b2, std::vector<std::string>& out_a, std::vector<std::string>& out_b) {
+    out_a.clear();
+    out_b.clear();
+    std::vector<std::pair<int, int>> intervals_a{{a_begin, a_end}}, intervals_b{{b_begin, b_end}};
+    if (a_end-a_begin > 1) intervals_a = {{a_begin, a_begin}, {a_end, a_end}};
+    if (b_end-b_begin > 1) intervals_b = {{b_begin, b_begin}, {b_end, b_end}};
+    for (int flank = 10; flank <= 75; flank += 5) {
+        std::vector<std::string> signatures_a, signatures_b;
+        for (const auto& interval : intervals_a) {
+            if (interval.first < flank || interval.second+flank > seq_a.size()) return;
+            std::string signature = seq_a.substr(interval.first-flank, interval.second-interval.first+2*flank);
+            if (seq_b.find(signature) == std::string::npos && (!other_a2 || other_a2->find(signature) == std::string::npos)) signatures_a.push_back(std::move(signature));
+        }
+        for (const auto& interval : intervals_b) {
+            if (interval.first < flank || interval.second+flank > seq_b.size()) return;
+            std::string signature = seq_b.substr(interval.first-flank, interval.second-interval.first+2*flank);
+            if (seq_a.find(signature) == std::string::npos && (!other_b2 || other_b2->find(signature) == std::string::npos)) signatures_b.push_back(std::move(signature));
+        }
+        if (signatures_a.size() == intervals_a.size() && signatures_b.size() == intervals_b.size()) {
+            out_a = std::move(signatures_a);
+            out_b = std::move(signatures_b);
+            return;
+        }
+    }
+}
+
+// Require main-linked evidence; cut main signatures without this atom and in reference context so a false nearby atom cannot hide the main.
+// full-haplotype exclusions reject shifted repeat matches, and paired junctions avoid unequal-length evidence.
+bool atom_is_contradicted(const aux_haplotype_t& haplotype, const allele_edit_t& edit, const char* chr_seq, hts_pos_t chr_len, const std::vector<std::pair<std::string, std::string>>& reads, const std::vector<std::string>& main_signatures, const std::string& main_reference) {
     std::string reference(chr_seq+edit.ref_begin, edit.ref_end-edit.ref_begin);
     std::string reverted = haplotype.sequence;
     reverted.replace(edit.alt_begin, edit.alt_end-edit.alt_begin, reference);
-    auto signatures = atom_signatures(haplotype.sequence, edit.alt_begin, edit.alt_end, reverted);
-    auto anti_signatures = atom_signatures(reverted, edit.alt_begin, edit.alt_begin+reference.length(), haplotype.sequence);
+    std::vector<std::string> signatures, anti_signatures;
+    paired_signatures(haplotype.sequence, edit.alt_begin, edit.alt_end, reverted, edit.alt_begin, edit.alt_begin+reference.length(), nullptr, nullptr, signatures, anti_signatures);
     if (signatures.empty() || anti_signatures.empty()) return false;
 
-    int atom_reads = 0, alt_reads = 0;
+    auto atom_main_signatures = main_signatures;
+    if (edit.alt_end <= haplotype.main_begin || edit.alt_begin >= haplotype.main_end) {
+        int mb = haplotype.main_begin, me = haplotype.main_end;
+        if (edit.alt_end <= haplotype.main_begin) {
+            int shift = int(reference.length())-(edit.alt_end-edit.alt_begin);
+            mb += shift;
+            me += shift;
+        }
+        std::string reverted_ref_main = reverted;
+        reverted_ref_main.replace(mb, me-mb, main_reference);
+        std::string ref_main = haplotype.sequence;
+        ref_main.replace(haplotype.main_begin, haplotype.main_end-haplotype.main_begin, main_reference);
+        auto additional_main_signatures = atom_signatures(reverted, mb, me, reverted_ref_main, &ref_main);
+        atom_main_signatures.insert(atom_main_signatures.end(), additional_main_signatures.begin(), additional_main_signatures.end());
+    }
+
+    hts_pos_t window_begin = std::max(hts_pos_t(0), edit.ref_begin-100), window_end = std::min(chr_len, edit.ref_end+100);
+    std::string ref_window = upper_window(chr_seq, window_begin, window_end);
+    int rb = edit.ref_begin-window_begin, re = edit.ref_end-window_begin;
+    int atom_len = edit.alt_end-edit.alt_begin;
+    std::string atom_window = ref_window;
+    atom_window.replace(rb, re-rb, haplotype.sequence.substr(edit.alt_begin, atom_len));
+    std::vector<std::string> ref_signatures, ref_anti_signatures;
+    paired_signatures(atom_window, rb, rb+atom_len, ref_window, rb, re, &reverted, &haplotype.sequence, ref_signatures, ref_anti_signatures);
+    signatures.insert(signatures.end(), ref_signatures.begin(), ref_signatures.end());
+    anti_signatures.insert(anti_signatures.end(), ref_anti_signatures.begin(), ref_anti_signatures.end());
+
+    int atom_reads = 0;
     std::unordered_map<std::string, std::array<bool, 3>> pair_flags;
     for (const auto& read : reads) {
-        bool carries_main = std::any_of(main_signatures.begin(), main_signatures.end(), [&](const std::string& signature) { return read.second.find(signature) != std::string::npos; });
+        bool carries_main = std::any_of(atom_main_signatures.begin(), atom_main_signatures.end(), [&](const std::string& signature) { return read.second.find(signature) != std::string::npos; });
         bool carries_atom = std::any_of(signatures.begin(), signatures.end(), [&](const std::string& signature) { return read.second.find(signature) != std::string::npos; });
         bool carries_alt = std::any_of(anti_signatures.begin(), anti_signatures.end(), [&](const std::string& signature) { return read.second.find(signature) != std::string::npos; });
         atom_reads += carries_atom;
-        alt_reads += carries_alt;
         auto& flags = pair_flags[read.first];
         flags[0] = flags[0] || carries_main;
         flags[1] = flags[1] || carries_atom;
@@ -120,7 +181,7 @@ bool atom_is_contradicted(const aux_haplotype_t& haplotype, const allele_edit_t&
         pairs_main_atom += pair.second[0] && pair.second[1];
         pairs_main_alt += pair.second[0] && pair.second[2];
     }
-    return (atom_reads == 0 && alt_reads > 0) || (pairs_main_alt >= 1 && pairs_main_atom == 0 && atom_reads <= 2);
+    return pairs_main_alt >= 1 && pairs_main_atom == 0 && atom_reads <= 2;
 }
 
 void filter_aux_atoms(sv_t& sv, char* chr_seq, hts_pos_t chr_len, open_samFile_t& bam_file, stats_t& stats) {
@@ -154,6 +215,13 @@ void filter_aux_atoms(sv_t& sv, char* chr_seq, hts_pos_t chr_len, open_samFile_t
     std::string main_reference = sv.svtype() == "INS" ? "" : std::string(chr_seq+sv.start+1, sv.end-sv.start);
     ref_main.replace(haplotype.main_begin, haplotype.main_end-haplotype.main_begin, main_reference);
     auto main_signatures = atom_signatures(haplotype.sequence, haplotype.main_begin, haplotype.main_end, ref_main);
+    hts_pos_t window_begin = std::max(hts_pos_t(0), sv.start-99), window_end = std::min(chr_len, sv.end+101);
+    std::string left_ref = upper_window(chr_seq, window_begin, sv.start+1), right_ref = upper_window(chr_seq, sv.end+1, window_end);
+    int main_len = haplotype.main_end-haplotype.main_begin;
+    std::string main_only = left_ref + haplotype.sequence.substr(haplotype.main_begin, main_len) + right_ref;
+    std::string ref_window = upper_window(chr_seq, window_begin, window_end);
+    auto reference_main_signatures = atom_signatures(main_only, left_ref.length(), left_ref.length()+main_len, ref_window, &ref_main);
+    main_signatures.insert(main_signatures.end(), reference_main_signatures.begin(), reference_main_signatures.end());
 
     // Match edits back to the original AUX order, including shared-anchor insertions.
     std::vector<bool> used_edits(haplotype.edits.size(), false);
@@ -163,7 +231,7 @@ void filter_aux_atoms(sv_t& sv, char* chr_seq, hts_pos_t chr_len, open_samFile_t
             if (used_edits[i] || edit.kind != kind || edit.ref_begin != ref_begin || edit.ref_end != ref_end) continue;
             if (edit.alt_end-edit.alt_begin != alt.length() || haplotype.sequence.compare(edit.alt_begin, alt.length(), alt) != 0) continue;
             used_edits[i] = true;
-            return atom_is_contradicted(haplotype, edit, chr_seq, reads, main_signatures);
+            return atom_is_contradicted(haplotype, edit, chr_seq, chr_len, reads, main_signatures, main_reference);
         }
         return false;
     };
