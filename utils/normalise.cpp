@@ -5,6 +5,9 @@
 #include <memory>
 #include <mutex>
 #include <functional>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 #include "htslib/vcf.h"
 #include "htslib/tbx.h"
@@ -13,6 +16,7 @@
 #include "../src/haplotype_normalization.h"
 #include "../src/vcf_utils.h"
 #include "../libs/cptl_stl.h"
+#include "../libs/exact_cache.h"
 
 chr_seqs_map_t chr_seqs;
 bcf_hdr_t* hdr;
@@ -30,6 +34,7 @@ hts_pos_t max_indel_size(const std::shared_ptr<sv_t>& sv) {
 }
 
 void simplify_and_realign_svs(int id, std::vector<std::shared_ptr<sv_t>>& svs, int start, int end) {
+	surveyor_cache::start_block();
 	for (int i = start; i < end; i++) {
 		haplotype_normalization::normalization_context_t context(chr_seqs.get_seq(svs[i]->chr), chr_seqs.get_len(svs[i]->chr), normalise_max_is);
 		svs[i] = haplotype_normalization::normalize_haplotype(svs[i], context);
@@ -72,47 +77,56 @@ int main(int argc, char* argv[]) {
 	hdr = bcf_hdr_read(in_vcf_file);
 	bcf1_t* vcf_record = bcf_init();
 
-	std::vector<std::shared_ptr<sv_t>> input_svs;
-	while (bcf_read(in_vcf_file, hdr, vcf_record) == 0) {
-		std::shared_ptr<sv_t> sv = bcf_to_sv(hdr, vcf_record);
-		if (sv == nullptr) continue;
-
-		sv->vcf_entry = bcf_dup(vcf_record);
-		input_svs.push_back(sv);
-	}
-
 	const int block_size = 1000;
+	const size_t batch_size = size_t(block_size)*n_threads;
+	std::vector<std::shared_ptr<sv_t>> input_svs;
 	ctpl::thread_pool simplify_realign_thread_pool(n_threads);
 	std::vector<std::future<void> > futures;
-	for (int i = 0; i < input_svs.size(); i += block_size) {
-		int start = i, end = std::min(i+block_size, (int) input_svs.size());
-		std::future<void> future = simplify_realign_thread_pool.push(simplify_and_realign_svs, std::ref(input_svs), start, end);
-		futures.push_back(std::move(future));
+	while (true) {
+		while (input_svs.size() < batch_size && bcf_read(in_vcf_file, hdr, vcf_record) == 0) {
+			std::shared_ptr<sv_t> sv = bcf_to_sv(hdr, vcf_record);
+			if (sv == nullptr) continue;
+
+			sv->vcf_entry = bcf_dup(vcf_record);
+			input_svs.push_back(sv);
+		}
+		if (input_svs.empty()) break;
+
+		for (int i = 0; i < input_svs.size(); i += block_size) {
+			int start = i, end = std::min(i+block_size, (int) input_svs.size());
+			std::future<void> future = simplify_realign_thread_pool.push(simplify_and_realign_svs, std::ref(input_svs), start, end);
+			futures.push_back(std::move(future));
+		}
+		for (auto& future : futures) future.get();
+		futures.clear();
+
+		// Left alignment temporarily changes the reference, so all batch tasks must finish first.
+		for (auto& sv : input_svs) {
+			if (sv == nullptr) continue;
+			if ((sv->svtype() == "DEL" || sv->svtype() == "INS") && max_indel_size(sv) < min_indel_size) {
+				sv.reset();
+				continue;
+			}
+
+			// TODO: Handle left alignment moving variants outside JUNCTION_REMAP_REF_RANGE.
+			haplotype_normalization::left_align(sv, chr_seqs.get_seq(sv->chr));
+			canonicalize_aux(sv);
+			bcf1_t* vcf_record_norm = bcf_init();
+			sv2bcf(hdr, vcf_record_norm, sv.get(), chr_seqs.get_seq(sv->chr));
+			copy_all_fmt(hdr, sv->vcf_entry, vcf_record_norm);
+			normalised_vcf_records.push_back(vcf_record_norm);
+			sv.reset();
+		}
+		input_svs.clear();
+#ifdef __GLIBC__
+		malloc_trim(0);
+#endif
 	}
 	simplify_realign_thread_pool.stop(true);
-	for (int i = 0; i < futures.size(); i++) {
-		futures[i].get();
-	}
-	futures.clear();
-
-	std::vector<std::shared_ptr<sv_t>> svs;
-	for (std::shared_ptr<sv_t> sv : input_svs) {
-		if (sv == nullptr) continue;
-
-		if ((sv->svtype() == "DEL" || sv->svtype() == "INS") && max_indel_size(sv) < min_indel_size) continue;
-
-		// TODO: Handle left alignment moving variants outside JUNCTION_REMAP_REF_RANGE.
-		haplotype_normalization::left_align(sv, chr_seqs.get_seq(sv->chr));
-		canonicalize_aux(sv);
-		svs.push_back(sv);
-	}
-
-	for (const auto& sv : svs) {
-		bcf1_t* vcf_record_norm = bcf_init();
-		sv2bcf(hdr, vcf_record_norm, sv.get(), chr_seqs.get_seq(sv->chr));
-		copy_all_fmt(hdr, sv->vcf_entry, vcf_record_norm);
-		normalised_vcf_records.push_back(vcf_record_norm);
-	}
+	bcf_destroy(vcf_record);
+#ifdef __GLIBC__
+	malloc_trim(0);
+#endif
 
 	std::stable_sort(normalised_vcf_records.begin(), normalised_vcf_records.end(),
 			[](const bcf1_t* b1, const bcf1_t* b2) { return std::tie(b1->rid, b1->pos) < std::tie(b2->rid, b2->pos); });
@@ -125,10 +139,13 @@ int main(int argc, char* argv[]) {
 		if (bcf_write(out_vcf_file, hdr, vcf_record_norm) != 0) {
 			throw std::runtime_error("Failed to write VCF record to " +  out_vcf_fname);
 		}
+		bcf_destroy(vcf_record_norm);
 	}
+	normalised_vcf_records.clear();
 
 	hts_close(in_vcf_file);
 	hts_close(out_vcf_file);
+	bcf_hdr_destroy(hdr);
 
 	tbx_index_build(out_vcf_fname.c_str(), 0, &tbx_conf_vcf);
 }
