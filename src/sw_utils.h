@@ -137,7 +137,7 @@ std::pair<int, int> find_aln_suffix_score(std::vector<uint32_t> cigar, int ref_s
 }
 
 
-// the (min) length of the query prefix that cover ref_len bases on the reference
+// Length of the query prefix covering ref_len reference bases, including insertions exactly at the cut.
 int query_prefix_len(std::vector<uint32_t>& cigar, int ref_len, int& extra_deletion) {
     int query_len = 0;
     int ref_count = 0;
@@ -156,6 +156,11 @@ int query_prefix_len(std::vector<uint32_t>& cigar, int ref_len, int& extra_delet
                 query_len -= overshoot;
             } else if (op == 'D') {
                 extra_deletion = overshoot;
+            }
+            if (overshoot == 0) {
+                for (++it; it != cigar.end() && cigar_int_to_op(*it) == 'I'; ++it) {
+                    query_len += cigar_int_to_len(*it);
+                }
             }
             break;
         }
@@ -640,7 +645,7 @@ std::vector<std::shared_ptr<sv_t>> detect_svs_from_junction(std::string& contig_
 	// delete sv->aux_indels and sv->aux_snps that are >= svs[0]->start
 	svs[0]->aux_indels.erase(std::remove_if(svs[0]->aux_indels.begin(), svs[0]->aux_indels.end(),
 		[svs](std::shared_ptr<sv_t> sv) {
-			return sv->end > svs[0]->start;
+			return sv->end > svs[0]->start || (svs[0]->svtype() != "DUP" && sv->svtype() == "INS" && sv->start == svs[0]->start);
 		}), svs[0]->aux_indels.end());
 	svs[0]->aux_snps.erase(std::remove_if(svs[0]->aux_snps.begin(), svs[0]->aux_snps.end(),
 		[svs](snp_t snp) {
