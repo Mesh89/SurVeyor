@@ -1218,10 +1218,10 @@ std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_i
     }
 	if (load_evidence_maps && !evidence_maps_by_contig[contig_id]) {
         std::string contig_name = contig_map.get_name(contig_id);
-        std::string alt_fname = reads_association_dir + "/" + contig_name + ".alt.txt";
-        std::string ref_fname = reads_association_dir + "/" + contig_name + ".ref.txt";
-        std::string er_fname = reads_association_dir + "/" + contig_name + ".er.txt";
-        std::string td_fname = reads_association_dir + "/" + contig_name + ".td.txt";
+        std::string alt_fname = reads_association_dir + "/" + std::to_string(contig_id) + ".alt.txt";
+        std::string ref_fname = reads_association_dir + "/" + std::to_string(contig_id) + ".ref.txt";
+        std::string er_fname = reads_association_dir + "/" + std::to_string(contig_id) + ".er.txt";
+        std::string td_fname = reads_association_dir + "/" + std::to_string(contig_id) + ".td.txt";
         std::ifstream alt_fin(alt_fname), ref_fin(ref_fname), er_fin(er_fname), td_fin(td_fname);
         bool has_alt = bool(alt_fin), has_ref = bool(ref_fin), has_er = bool(er_fin);
         if (td_fin) {

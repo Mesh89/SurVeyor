@@ -65,11 +65,11 @@ void complete_mates_scheduling(int contig_id) {
     }
 }
 
-void write_too_deep_variants(const std::string& association_dir, const std::string& chr, const std::vector<sv_t*>& svs) {
+void write_too_deep_variants(const std::string& association_dir, int contig_id, const std::vector<sv_t*>& svs) {
     std::ofstream fout;
     for (sv_t* sv : svs) {
         if (!sv->sample_info.too_deep) continue;
-        if (!fout.is_open()) fout.open(association_dir + "/" + chr + ".td.txt");
+        if (!fout.is_open()) fout.open(association_dir + "/" + std::to_string(contig_id) + ".td.txt");
         fout << sv->id << '\n';
     }
 }
@@ -132,7 +132,7 @@ int main(int argc, char* argv[]) {
     chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
     bam_pool_t bam_pool(config.threads, bam_fname, reference_fname);
     for (open_samFile_t* reader : bam_pool.pool) hts_set_cache_size(reader->file, config.bam_reader_cache_size);
-    evidence_logger_t evidence_logger(association_dir);
+    evidence_logger_t evidence_logger(association_dir, contig_map);
 
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
     if (!in_vcf_file) throw std::runtime_error("Unable to open file " + in_vcf_fname + ".");
@@ -197,7 +197,7 @@ int main(int argc, char* argv[]) {
         if (svs_by_contig[contig_id].empty()) continue;
         std::vector<sv_t*> svs;
         for (const std::shared_ptr<sv_t>& sv : svs_by_contig[contig_id]) svs.push_back(sv.get());
-        write_too_deep_variants(association_dir, contig_map.get_name(contig_id), svs);
+        write_too_deep_variants(association_dir, contig_id, svs);
     }
 
     bcf_destroy(vcf_record);
