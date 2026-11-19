@@ -27,10 +27,10 @@ static int CP_KERNEL(const s_profile* p, const int8_t* ref, int nr, int reverse,
     if (!profile) profile = temporary = CP_MAKE_PROFILE;
     if (!profile) { free(mem); return -1; }
 #ifdef CP_FULL_BYTE
-    CP_VEC* unbiased = (CP_VEC*)CP_ALLOC((size_t)p->n*seg);
+    CP_VEC* unbiased = (CP_VEC*)CP_ALLOC((size_t)p->ref_n*seg);
     if (!unbiased) { free(temporary); free(mem); return -1; }
     const CP_VEC sign = CP_SET(-128), bias = CP_SET(p->bias);
-    for (int j = 0; j < p->n*seg; ++j) unbiased[j] = CP_UNBIAS(profile[j], bias);
+    for (int j = 0; j < p->ref_n*seg; ++j) unbiased[j] = CP_UNBIAS(profile[j], bias);
     free(temporary); profile = temporary = unbiased;
 #endif
     for (int j = 0; j < seg; ++j) {

@@ -119,6 +119,7 @@ struct _profile{
 	const int8_t* mat;
 	int32_t readLen;
 	int32_t n;
+	int32_t ref_n;
 	uint8_t bias;
 };
 
@@ -164,18 +165,19 @@ static __m128i* qP_byte (const int8_t* read_num,
 				  const int8_t* mat,
 				  const int32_t readLen,
 				  const int32_t n,	/* the edge length of the squre matrix mat */
+				  const int32_t ref_n,
 				  uint8_t bias) {
 
 	int32_t segLen = (readLen + 15) / 16; /* Split the 128 bit register into 16 pieces.
 								     Each piece is 8 bit. Split the read into 16 segments.
 								     Calculat 16 segments in parallel.
 								   */
-	__m128i* vProfile = (__m128i*)malloc(n * segLen * sizeof(__m128i));
+	__m128i* vProfile = (__m128i*)malloc(ref_n * segLen * sizeof(__m128i));
 	int8_t* t = (int8_t*)vProfile;
 	int32_t nt, i, j, segNum;
 
 	/* Generate query profile rearrange query sequence & calculate the weight of match/mismatch */
-	for (nt = 0; LIKELY(nt < n); nt ++) {
+	for (nt = 0; LIKELY(nt < ref_n); nt ++) {
 		for (i = 0; i < segLen; i ++) {
 			j = i;
 			for (segNum = 0; LIKELY(segNum < 16) ; segNum ++) {
@@ -411,16 +413,17 @@ end:
 static __m128i* qP_word (const int8_t* read_num,
 				  const int8_t* mat,
 				  const int32_t readLen,
-				  const int32_t n) {
+				  const int32_t n,
+				  const int32_t ref_n) {
 
 	int32_t segLen = (readLen + 7) / 8;
-	__m128i* vProfile = (__m128i*)malloc(n * segLen * sizeof(__m128i));
+	__m128i* vProfile = (__m128i*)malloc(ref_n * segLen * sizeof(__m128i));
 	int16_t* t = (int16_t*)vProfile;
 	int32_t nt, i, j;
 	int32_t segNum;
 
 	/* Generate query profile rearrange query sequence & calculate the weight of match/mismatch */
-	for (nt = 0; LIKELY(nt < n); nt ++) {
+	for (nt = 0; LIKELY(nt < ref_n); nt ++) {
 		for (i = 0; i < segLen; i ++) {
 			j = i;
 			for (segNum = 0; LIKELY(segNum < 8) ; segNum ++) {
@@ -927,26 +930,35 @@ static int ssw_valid_cigar(const s_profile* p,const int8_t* ref,const s_align* a
 }
 
 s_profile* ssw_init (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n, const int8_t score_size) {
-	if (!read || !mat || readLen <= 0 || n <= 0 || n > 128 || score_size < 0 || score_size > 2) { errno=EINVAL; return NULL; }
+	return ssw_init_ref(read, readLen, mat, n, n, score_size);
+}
+
+s_profile* ssw_init_ref (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n, const int32_t ref_n, const int8_t score_size) {
+	if (!read || !mat || readLen <= 0 || n <= 0 || n > 128 || ref_n <= 0 || ref_n > n || score_size < 0 || score_size > 2) { errno=EINVAL; return NULL; }
 	s_profile* p = (s_profile*)calloc(1, sizeof(struct _profile));
-	p->profile_byte = 0;
-	p->profile_word = 0;
-	p->bias = 0;
-
+	int selected_size = score_size;
 	if (score_size == 0 || score_size == 2) {
-		/* Find the bias to use in the substitution matrix */
-		int32_t bias = 0, i;
-		for (i = 0; i < n*n; i++) if (mat[i] < bias) bias = mat[i];
-		bias = abs(bias);
-
-		p->bias = bias;
-		p->profile_byte = qP_byte (read, mat, readLen, n, bias);
+		int bias = 0;
+		int8_t max_by_query[128] = {0};
+		for (int t = 0; t < ref_n; t++) for (int q = 0; q < n; q++) {
+			int substitution = mat[t*n+q];
+			if (substitution < bias) bias = substitution;
+			if (substitution > max_by_query[q]) max_by_query[q] = substitution;
+		}
+		p->bias = -bias;
+		if (score_size == 2) {
+			int64_t upper_bound = 0;
+			for (int j = 0; j < readLen; j++) upper_bound += max_by_query[read[j]];
+			selected_size = upper_bound+p->bias < 255 ? 0 : 1;
+		}
 	}
-	if (score_size == 1 || score_size == 2) p->profile_word = qP_word (read, mat, readLen, n);
+	if (selected_size == 0) p->profile_byte = qP_byte(read, mat, readLen, n, ref_n, p->bias);
+	else p->profile_word = qP_word(read, mat, readLen, n, ref_n);
 	p->read = read;
 	p->mat = mat;
 	p->readLen = readLen;
 	p->n = n;
+	p->ref_n = ref_n;
 	return p;
 }
 
@@ -996,7 +1008,7 @@ s_align* ssw_align (const s_profile* prof,
 		bests = sw_sse2_byte(ref, 0, refLen, readLen, weight_gapO, weight_gapE, prof->profile_byte, -1, prof->bias, maskLen, r->prefix_scores);
 		if (bests[0].score == 255) {
 			free(bests);
-			__m128i* temporary = prof->profile_word ? NULL : qP_word(prof->read,prof->mat,readLen,prof->n);
+			__m128i* temporary = prof->profile_word ? NULL : qP_word(prof->read,prof->mat,readLen,prof->n,prof->ref_n);
 			bests = sw_sse2_word(ref, 0, refLen, readLen, weight_gapO, weight_gapE, temporary ? temporary : prof->profile_word, -1, maskLen, r->prefix_scores);
 			free(temporary);
 			word = 1;
@@ -1034,10 +1046,10 @@ s_align* ssw_align (const s_profile* prof,
 	// Find the beginning position of the best alignment.
 	read_reverse = seq_reverse(prof->read, r->read_end1);
 	if (word == 0) {
-		vP = qP_byte(read_reverse, prof->mat, r->read_end1 + 1, prof->n, prof->bias);
+		vP = qP_byte(read_reverse, prof->mat, r->read_end1 + 1, prof->n, prof->ref_n, prof->bias);
 		bests_reverse = sw_sse2_byte(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, prof->bias, maskLen, NULL);
 	} else {
-		vP = qP_word(read_reverse, prof->mat, r->read_end1 + 1, prof->n);
+		vP = qP_word(read_reverse, prof->mat, r->read_end1 + 1, prof->n, prof->ref_n);
 		bests_reverse = sw_sse2_word(ref, 1, r->ref_end1 + 1, r->read_end1 + 1, weight_gapO, weight_gapE, vP, r->score1, maskLen, NULL);
 	}
 	free(vP);

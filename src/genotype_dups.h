@@ -4,6 +4,7 @@
 #include "stat_tests.h"
 
 #include "genotype.h"
+#include "quality_read_scoring.h"
 #include "var_consensus_cache.h"
 
 struct small_dup_alignment_targets_t {
@@ -124,7 +125,7 @@ large_dup_read_evidence_t get_cached_large_dup_read_evidence(duplication_t* dup,
     return result;
 }
 
-void write_aligned_small_dup_read_evidence(duplication_t* dup, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_logger_t& evidence_logger) {
+void write_aligned_small_dup_read_evidence(duplication_t* dup, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger) {
     small_dup_alignment_targets_t targets = build_small_dup_alignment_targets(dup, contig_seq, contig_len, stats);
     std::stringstream region;
     region << dup->chr << ":" << targets.ref_start << "-" << targets.ref_end;
@@ -157,12 +158,13 @@ void write_aligned_small_dup_read_evidence(duplication_t* dup, open_samFile_t* b
 
         std::string seq = get_sequence(read, true);
         if (reverse_seq) rc(seq);
-        aligner.Align(seq.c_str(), targets.ref_seq.get(), targets.ref_len, filter_with_score_only, &ref_aln, 0);
+        quality_read_encoding_t encoded = encode_quality_read(read, seq, bool(bam_is_rev(read)) != reverse_seq, contig_seq, contig_len, config);
+        quality_align(encoded, targets.ref_seq.get(), targets.ref_len, filter_with_score_only, &ref_aln);
         uint16_t best_aln_score = 0;
         std::vector<uint16_t> alt_aln_scores(targets.alt_seqs.size());
         std::vector<int> alt_aln_positions(targets.alt_seqs.size());
         for (int i = 0; i < targets.alt_seqs.size(); i++) {
-            aligner.Align(seq.c_str(), targets.alt_seqs[i], strlen(targets.alt_seqs[i]), filter_with_pos, &alt_aln, 0);
+            quality_align(encoded, targets.alt_seqs[i], strlen(targets.alt_seqs[i]), filter_with_pos, &alt_aln);
             alt_aln_scores[i] = alt_aln.sw_score;
             alt_aln_positions[i] = alt_aln.ref_begin;
             if (alt_aln.sw_score > best_aln_score) best_aln_score = alt_aln.sw_score;
@@ -196,7 +198,7 @@ void write_aligned_small_dup_read_evidence(duplication_t* dup, open_samFile_t* b
     evidence_logger.log_er_reads_associations(dup->chr, dup->id, er_read_names);
 }
 
-void write_aligned_large_dup_read_evidence(duplication_t* dup, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_logger_t& evidence_logger) {
+void write_aligned_large_dup_read_evidence(duplication_t* dup, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger) {
     large_dup_alignment_targets_t targets = build_large_dup_alignment_targets(dup, contig_seq, contig_len, stats);
     std::stringstream l_region, r_region;
     l_region << dup->chr << ":" << targets.ref_bp1_start << "-" << targets.ref_bp1_end;
@@ -232,21 +234,22 @@ void write_aligned_large_dup_read_evidence(duplication_t* dup, open_samFile_t* b
 
         std::string seq = get_sequence(read, true);
         if (reverse_seq) rc(seq);
+        quality_read_encoding_t encoded = encode_quality_read(read, seq, bool(bam_is_rev(read)) != reverse_seq, contig_seq, contig_len, config);
         uint16_t ref_aln_score = 0;
         bool ref_bp1_better = false, ref_bp2_better = false;
         bool ref_is_exact_match = is_perfectly_aligned(read);
         if (ref_is_exact_match) {
-            ref_aln_score = read->core.l_qseq;
+            ref_aln_score = encoded.match_sum;
             if (read->core.pos < targets.dup_start && bam_endpos(read) > targets.dup_start) ref_bp1_better = true;
             if (read->core.pos < targets.dup_end && bam_endpos(read) > targets.dup_end) ref_bp2_better = true;
         } else {
-            aligner.Align(seq.c_str(), contig_seq+targets.ref_bp1_start, targets.ref_bp1_len, filter_with_pos, &ref1_aln, 0);
-            aligner.Align(seq.c_str(), contig_seq+targets.ref_bp2_start, targets.ref_bp2_len, filter_with_pos, &ref2_aln, 0);
+            quality_align(encoded, contig_seq+targets.ref_bp1_start, targets.ref_bp1_len, filter_with_pos, &ref1_aln);
+            quality_align(encoded, contig_seq+targets.ref_bp2_start, targets.ref_bp2_len, filter_with_pos, &ref2_aln);
             ref_aln_score = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln.sw_score : ref2_aln.sw_score;
             ref_bp1_better = ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin <= targets.ref_bp1_pos && ref1_aln.ref_end >= targets.ref_bp1_pos;
             ref_bp2_better = ref2_aln.sw_score >= ref1_aln.sw_score && ref2_aln.ref_begin <= targets.ref_bp2_pos && ref2_aln.ref_end >= targets.ref_bp2_pos;
         }
-        alt_aln = align_fast(aligner, seq.c_str(), targets.alt_seq.get(), targets.alt_len, filter_with_pos, ref_is_exact_match);
+        alt_aln = quality_align_fast(seq.c_str(), encoded, targets.alt_seq.get(), targets.alt_len, filter_with_pos, ref_is_exact_match);
         hts_pos_t alt_right_flank_pos = targets.alt_lh_len + dup->ins_seq.length();
         bool spans_bp1 = alt_aln.ref_begin < targets.alt_lh_len && alt_aln.ref_end >= targets.alt_lh_len;
         bool spans_bp2 = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;

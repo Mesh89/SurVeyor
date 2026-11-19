@@ -49,7 +49,7 @@ static inline int cp_max_byte(CP_VEC v) {
 #define CP_REDUCE cp_max_byte
 #define CP_KERNEL cp_byte
 #define CP_PROFILE p->profile_byte
-#define CP_MAKE_PROFILE qP_byte(p->read, p->mat, nq, p->n, p->bias)
+#define CP_MAKE_PROFILE qP_byte(p->read, p->mat, nq, p->n, p->ref_n, p->bias)
 #include "ssw_clip_simd.h"
 #undef CP_INT
 #undef CP_LIMIT
@@ -126,7 +126,7 @@ static inline int cp_max_word(CP_VEC v) {
 #define CP_REDUCE cp_max_word
 #define CP_KERNEL cp_word
 #define CP_PROFILE p->profile_word
-#define CP_MAKE_PROFILE qP_word(p->read, p->mat, nq, p->n)
+#define CP_MAKE_PROFILE qP_word(p->read, p->mat, nq, p->n, p->ref_n)
 #include "ssw_clip_simd.h"
 #undef CP_INT
 #undef CP_LIMIT
@@ -236,7 +236,7 @@ s_align* ssw_align_clip(const s_profile* p, const int8_t* ref, int32_t nr,
     if (flag & SSW_REPORT_PREFIX_SCORES) a->prefix_scores = (uint16_t*)calloc(p->readLen, sizeof(uint16_t));
     if ((mask >= 15 && !columns) || ((flag & SSW_REPORT_PREFIX_SCORES) && !a->prefix_scores)) goto error;
     int exact = 0, word = !p->profile_byte, stop = -1, match_max = 0;
-    for (int i = 0; i < p->n*p->n; ++i) if (p->mat[i] > match_max) match_max = p->mat[i];
+    for (int i = 0; i < p->ref_n*p->n; ++i) if (p->mat[i] > match_max) match_max = p->mat[i];
     int64_t ceiling = (int64_t)p->readLen*match_max+clip;
     int full_byte = ceiling <= 255 && ceiling+p->bias >= 255;
     if (!columns && !a->prefix_scores) {
@@ -254,7 +254,7 @@ scalar:
     } else if (a->score1 && (flag&15) && ((flag&15) != 2 || a->score1 >= filters)) {
         int tail_cost = a->read_end1 == p->readLen-1 ? 0 : clip;
         int8_t* reversed = seq_reverse(p->read, a->read_end1);
-        s_profile* reverse = ssw_init(reversed, a->read_end1+1, p->mat, p->n, word ? 1 : 0);
+        s_profile* reverse = ssw_init_ref(reversed, a->read_end1+1, p->mat, p->n, p->ref_n, word ? 1 : 0);
         s_align back = {0};
         int ok = 0;
         if (!word) ok = full_byte ? cp_byte_full(reverse, ref, a->ref_end1+1, 1, go, ge, clip, a->score1+tail_cost, &back, NULL) : cp_byte(reverse, ref, a->ref_end1+1, 1, go, ge, clip, a->score1+tail_cost, &back, NULL);

@@ -17,6 +17,7 @@ extern "C" {
 typedef struct _ssw_avx2_profile ssw_avx2_profile;
 extern const uint8_t ssw_avx2_encoded_ops[];
 ssw_avx2_profile* ssw_avx2_init(const int8_t*, int32_t, const int8_t*, int32_t, int8_t);
+ssw_avx2_profile* ssw_avx2_init_ref(const int8_t*, int32_t, const int8_t*, int32_t, int32_t, int8_t);
 void ssw_avx2_init_destroy(ssw_avx2_profile*);
 s_align* ssw_avx2_align(const ssw_avx2_profile*, const int8_t*, int32_t,
                       uint8_t, uint8_t, uint8_t, uint16_t, int32_t, int32_t);
@@ -35,6 +36,7 @@ static inline uint32_t ssw_avx2_to_cigar_int(uint32_t len, unsigned char op) {
 #ifndef SSW_AVX2_NO_REMAP
 #define s_profile ssw_avx2_profile
 #define ssw_init ssw_avx2_init
+#define ssw_init_ref ssw_avx2_init_ref
 #define ssw_align ssw_avx2_align
 #define ssw_align_clip ssw_avx2_align_clip
 #define ssw_align_semiglobal ssw_avx2_align_semiglobal

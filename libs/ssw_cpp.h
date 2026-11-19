@@ -196,6 +196,9 @@ class Aligner {
     gap_extending_penalty_ = extending;
   };
 
+  // Restrict target codes to [0,size), retaining the square matrix stride.
+  void SetTargetAlphabetSize(int size);
+
   // =========
   // @function Align the query againt the reference that is set by
   //             SetReferenceSequence.
@@ -279,6 +282,8 @@ class Aligner {
  private:
   int8_t* score_matrix_;
   int     score_matrix_size_;
+  int     target_alphabet_size_;
+  uint64_t scoring_id_;
   int8_t* translation_matrix_;
   int     translation_matrix_size_;
 
@@ -291,6 +296,9 @@ class Aligner {
   int32_t reference_length_;
 
   int TranslateBase(const char* bases, const int& length, int8_t* translated) const;
+  void CheckTargetAlphabet(const char* bases, int length) const;
+  void CheckTranslatedTargetAlphabet(const int8_t* bases, int length) const;
+  void UpdateScoringIdentity(void);
   void SetAllDefault(void);
   void BuildDefaultMatrix(bool, bool = false);
   void ClearMatrices(void);

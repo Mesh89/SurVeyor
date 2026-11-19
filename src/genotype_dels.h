@@ -10,6 +10,7 @@
 #include "../libs/ssw_selected.h"
 
 #include "genotype.h"
+#include "quality_read_scoring.h"
 #include "var_consensus_cache.h"
 
 
@@ -171,7 +172,7 @@ del_read_evidence_t collect_cached_del_read_evidence(deletion_t* del, open_samFi
     return result;
 }
 
-void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_logger_t& evidence_logger) {
+void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger) {
     int del_start = del->start + 1, del_end = del->end + 1;
     del_read_alignment_sequences_t sequences = build_del_read_alignment_sequences(del, contig_seq, contig_len, del_start, del_end, stats);
     const del_read_alignment_targets_t& targets = sequences.targets;
@@ -213,6 +214,7 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
             if (mate_endpos < del_end && (abs(mate_endpos-bam_endpos(read)) > 5 || !is_right_clipped(read, config.min_clip_len))) continue;
             seq = get_sequence(read, true);
         }
+        quality_read_encoding_t encoded = encode_quality_read(read, seq, bool(bam_is_rev(read)) != !bam_is_mrev(read), contig_seq, contig_len, config);
 
         bp_reads++;
         if (bp_reads > 4 * stats.get_max_depth(del->chr)) {
@@ -224,24 +226,24 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
         bool ref_bp1_better = false, ref_bp2_better = false;
         bool ref_is_exact_match = is_perfectly_aligned(read);
         if (ref_is_exact_match) {
-            ref_aln_score = read->core.l_qseq;
+            ref_aln_score = encoded.match_sum;
             if (read->core.pos < del_start && bam_endpos(read) > del_start) ref_bp1_better = true;
             if (read->core.pos < del_end && bam_endpos(read) > del_end) ref_bp2_better = true;
         } else {
-            aligner.Align(seq.c_str(), targets.ref_bp1_seq, targets.ref_bp1_len, filter_with_pos, &ref1_aln, 0);
-            aligner.Align(seq.c_str(), targets.ref_bp2_seq, targets.ref_bp2_len, filter_with_pos, &ref2_aln, 0);
+            quality_align(encoded, targets.ref_bp1_seq, targets.ref_bp1_len, filter_with_pos, &ref1_aln);
+            quality_align(encoded, targets.ref_bp2_seq, targets.ref_bp2_len, filter_with_pos, &ref2_aln);
             ref_aln_score = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln.sw_score : ref2_aln.sw_score;
             ref_bp1_better = ref1_aln.sw_score >= ref2_aln.sw_score && ref1_aln.ref_begin < targets.ref_bp1_pos && ref1_aln.ref_end >= targets.ref_bp1_pos;
             ref_bp2_better = ref2_aln.sw_score >= ref1_aln.sw_score && ref2_aln.ref_begin < targets.ref_bp2_pos && ref2_aln.ref_end >= targets.ref_bp2_pos;
         }
 
-        alt_aln = align_fast(aligner, seq.c_str(), targets.alt_seq, targets.alt_len, filter_with_pos_and_cigar, ref_is_exact_match);
+        alt_aln = quality_align_fast(seq.c_str(), encoded, targets.alt_seq, targets.alt_len, filter_with_pos_and_cigar, ref_is_exact_match);
         hts_pos_t alt_right_flank_pos = targets.alt_lh_len + del->ins_seq.length();
         bool alt_spans_bp1 = alt_aln.ref_begin < targets.alt_lh_len && alt_aln.ref_end >= targets.alt_lh_len;
         bool alt_spans_bp2 = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;
         bool alt_better = alt_aln.sw_score > ref_aln_score && (alt_spans_bp1 || alt_spans_bp2);
         if (alt_better) {
-            if (passes_original_bam_alt_veto(read, contig_seq, contig_len, alt_aln.sw_score)) {
+            if (quality_passes_original_bam_alt_veto(read, contig_seq, contig_len, encoded, alt_aln.sw_score)) {
                 std::shared_ptr<bam1_t> alt_read(bam_dup1(read), bam_destroy1);
                 if (alt_spans_bp1) {
                     alt_bp1_reads.push_back(alt_read);

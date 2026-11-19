@@ -7,9 +7,9 @@ static int SG_KERNEL(const s_profile* p, const int8_t* ref, int nr, int reverse,
     const int lanes = SG_BYTES / sizeof(SG_INT), nq = p->readLen;
     const int seg = (nq + lanes - 1) / lanes;
     const int offset = (nq-1) % seg, lane = (nq-1) / seg;
-    SG_VEC* mem = (SG_VEC*)SG_ALLOC((p->n+3+(a->prefix_scores != NULL))*(size_t)seg);
+    SG_VEC* mem = (SG_VEC*)SG_ALLOC((p->ref_n+3+(a->prefix_scores != NULL))*(size_t)seg);
     if (!mem) return -1;
-    SG_VEC *profile = mem, *h = profile+p->n*seg, *old = h+seg, *e = old+seg;
+    SG_VEC *profile = mem, *h = profile+p->ref_n*seg, *old = h+seg, *e = old+seg;
     SG_VEC* prefix = a->prefix_scores ? e+seg : NULL;
     const SG_VEC zero = SG_ZERO();
     const SG_VEC gap_o = SG_SET(go), gap_e = SG_SET(ge);
@@ -21,7 +21,7 @@ static int SG_KERNEL(const s_profile* p, const int8_t* ref, int nr, int reverse,
     SG_VEC* temporary = NULL;
     if (!qp) qp = temporary = SG_MAKE_PROFILE;
     const SG_VEC bias = SG_SET(SG_PROFILE_BIAS);
-    for (int j = 0; j < p->n*seg; ++j) profile[j] = SG_SUB(bias, qp[j]);
+    for (int j = 0; j < p->ref_n*seg; ++j) profile[j] = SG_SUB(bias, qp[j]);
     free(temporary);
     for (int j = 0; j < seg; ++j) {
         for (int k = 0; k < lanes; ++k) {

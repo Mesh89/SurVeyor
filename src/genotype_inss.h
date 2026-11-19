@@ -4,6 +4,7 @@
 #include "stat_tests.h"
 
 #include "genotype.h"
+#include "quality_read_scoring.h"
 #include "var_consensus_cache.h"
 
 struct ins_alignment_targets_t {
@@ -114,7 +115,7 @@ ins_read_evidence_t get_cached_ins_read_evidence(insertion_t* ins, bam1_t* read,
     return result;
 }
 
-void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, StripedSmithWaterman::Aligner& aligner, evidence_logger_t& evidence_logger) {
+void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger) {
     ins_alignment_targets_t targets = build_ins_alignment_targets(ins, contig_seq, contig_len, stats);
     std::stringstream l_region, r_region;
     l_region << ins->chr << ":" << targets.ref_bp1_start << "-" << targets.ref_bp1_end;
@@ -149,22 +150,23 @@ void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file,
         }
 
         std::string seq = get_sequence(read);
+        quality_read_encoding_t encoded = encode_quality_read(read, seq, false, contig_seq, contig_len, config);
         bool ref_is_exact_match = is_perfectly_aligned(read);
-        alt1_aln = align_fast(aligner, seq.c_str(), targets.alt_bp1_seq.get(), targets.alt_bp1_len, filter_with_pos, ref_is_exact_match);
-        alt2_aln = align_fast(aligner, seq.c_str(), targets.alt_bp2_seq.get(), targets.alt_bp2_len, filter_with_pos, ref_is_exact_match);
+        alt1_aln = quality_align_fast(seq.c_str(), encoded, targets.alt_bp1_seq.get(), targets.alt_bp1_len, filter_with_pos, ref_is_exact_match);
+        alt2_aln = quality_align_fast(seq.c_str(), encoded, targets.alt_bp2_seq.get(), targets.alt_bp2_len, filter_with_pos, ref_is_exact_match);
         bool alt1_covers_bp1 = alt1_aln.ref_begin <= targets.alt_bp1_pos && alt1_aln.ref_end >= targets.alt_bp1_pos;
         bool alt2_covers_bp2 = alt2_aln.ref_begin <= targets.alt_bp2_pos && alt2_aln.ref_end >= targets.alt_bp2_pos;
         bool ref1_covers_bp1, ref2_covers_bp2;
         if (ref_is_exact_match) {
             ref1_aln.Clear();
             ref2_aln.Clear();
-            ref1_aln.sw_score = read->core.l_qseq;
-            ref2_aln.sw_score = read->core.l_qseq;
+            ref1_aln.sw_score = encoded.match_sum;
+            ref2_aln.sw_score = encoded.match_sum;
             ref1_covers_bp1 = read->core.pos <= targets.ins_start && bam_endpos(read) > targets.ins_start;
             ref2_covers_bp2 = read->core.pos <= targets.ins_end && bam_endpos(read) > targets.ins_end;
         } else {
-            aligner.Align(seq.c_str(), targets.ref_bp1_seq_with_aux.get(), targets.ref_bp1_len_with_aux, filter_with_pos, &ref1_aln, 0);
-            aligner.Align(seq.c_str(), targets.ref_bp2_seq_with_aux.get(), targets.ref_bp2_len_with_aux, filter_with_pos, &ref2_aln, 0);
+            quality_align(encoded, targets.ref_bp1_seq_with_aux.get(), targets.ref_bp1_len_with_aux, filter_with_pos, &ref1_aln);
+            quality_align(encoded, targets.ref_bp2_seq_with_aux.get(), targets.ref_bp2_len_with_aux, filter_with_pos, &ref2_aln);
             ref1_covers_bp1 = ref1_aln.ref_begin <= targets.ref_bp1_pos_with_aux && ref1_aln.ref_end >= targets.ref_bp1_pos_with_aux;
             ref2_covers_bp2 = ref2_aln.ref_begin <= targets.ref_bp2_pos_with_aux && ref2_aln.ref_end >= targets.ref_bp2_pos_with_aux;
         }
@@ -172,7 +174,7 @@ void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file,
         StripedSmithWaterman::Alignment& ref_aln = ref1_aln.sw_score >= ref2_aln.sw_score ? ref1_aln : ref2_aln;
         if (alt_aln.sw_score > ref_aln.sw_score) {
             // Keep a vetoed ALT read out of the existing REF/ER branches.
-            bool alt_eligible = passes_original_bam_alt_veto(read, contig_seq, contig_len, alt_aln.sw_score);
+            bool alt_eligible = quality_passes_original_bam_alt_veto(read, contig_seq, contig_len, encoded, alt_aln.sw_score);
             if (alt_eligible && alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
                 alt_bp1_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
                 alt_bp1_scores.push_back(alt1_aln.sw_score);

@@ -33,7 +33,7 @@
 #define SG_LIMIT 255
 #define SG_KERNEL sg_byte
 #define SG_PROFILE p->profile_byte
-#define SG_MAKE_PROFILE qP_byte(p->read, p->mat, nq, p->n, p->bias)
+#define SG_MAKE_PROFILE qP_byte(p->read, p->mat, nq, p->n, p->ref_n, p->bias)
 #define SG_PROFILE_BIAS (match_max+p->bias)
 #include "ssw_semiglobal_simd.h"
 #undef SG_INT
@@ -68,7 +68,7 @@
 #define SG_LIMIT 32767
 #define SG_KERNEL sg_word
 #define SG_PROFILE p->profile_word
-#define SG_MAKE_PROFILE qP_word(p->read, p->mat, nq, p->n)
+#define SG_MAKE_PROFILE qP_word(p->read, p->mat, nq, p->n, p->ref_n)
 #define SG_PROFILE_BIAS match_max
 #include "ssw_semiglobal_simd.h"
 #undef SG_INT
@@ -223,7 +223,7 @@ s_align_semiglobal* ssw_align_semiglobal(const s_profile* p, const int8_t* ref, 
         uint8_t go, uint8_t ge, uint8_t flag, int32_t filters, int32_t filterd, int32_t mask) {
     if (!p || !ref || nr <= 0) { errno = EINVAL; return NULL; }
     int nq = p->readLen, match_max = 0;
-    for (int i = 0; i < p->n*p->n; ++i) if (p->mat[i] > match_max) match_max = p->mat[i];
+    for (int i = 0; i < p->ref_n*p->n; ++i) if (p->mat[i] > match_max) match_max = p->mat[i];
     if ((int64_t)nq*(match_max+ge)+go > INT32_MAX/2) { errno = ERANGE; return NULL; }
     s_align_semiglobal* a = (s_align_semiglobal*)calloc(1, sizeof(*a));
     if (!a) return NULL;
@@ -245,7 +245,7 @@ s_align_semiglobal* ssw_align_semiglobal(const s_profile* p, const int8_t* ref, 
         if (a->ref_end1 < 0) a->ref_begin1 = 0;
         else {
             int8_t* reversed = seq_reverse(p->read, nq-1);
-            s_profile* reverse = ssw_init(reversed, nq, p->mat, p->n, word ? 1 : 0);
+            s_profile* reverse = ssw_init_ref(reversed, nq, p->mat, p->n, p->ref_n, word ? 1 : 0);
             s_align_semiglobal back = {0};
             int ok = word ? sg_word(reverse, ref, a->ref_end1+1, 1, go, ge, match_max, a->score1, 0, &back, NULL) : sg_byte(reverse, ref, a->ref_end1+1, 1, go, ge, match_max, a->score1, 0, &back, NULL);
             init_destroy(reverse); free(reversed);

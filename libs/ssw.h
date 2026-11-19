@@ -102,6 +102,10 @@ typedef struct {
 */
 s_profile* ssw_init (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n, const int8_t score_size);
 
+/* Build only ref_n profile rows; target codes must be in [0,ref_n).
+ * Query codes and the square matrix retain stride n. */
+s_profile* ssw_init_ref (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n, const int32_t ref_n, const int8_t score_size);
+
 /*!	@function	Release the memory allocated by function ssw_init.
 	@param	p	pointer to the query profile structure
 */
