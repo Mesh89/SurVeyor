@@ -488,12 +488,13 @@ struct evidence_logger_t {
 
     static const size_t MAX_OPEN_READ_ASSOCIATION_FILES = 64;
     std::string alt_reads_association_dir;
+    const contig_map_t& contig_map;
     std::unordered_map<std::string, std::unique_ptr<std::ofstream>> alt_reads_to_sv_associations;
     std::list<std::string> alt_reads_association_lru;
     std::unordered_map<std::string, std::list<std::string>::iterator> alt_reads_association_lru_iters;
     std::mutex mtx;
 
-    evidence_logger_t(const std::string& alt_reads_association_dir) : alt_reads_association_dir(alt_reads_association_dir) {}
+    evidence_logger_t(const std::string& alt_reads_association_dir, const contig_map_t& contig_map) : alt_reads_association_dir(alt_reads_association_dir), contig_map(contig_map) {}
 
     std::ofstream& get_reads_association_file(const std::string& chr, const std::string& suffix) {
         std::string file_key = chr + suffix;
@@ -510,7 +511,8 @@ struct evidence_logger_t {
             alt_reads_association_lru_iters.erase(evicted_chr);
             alt_reads_association_lru.pop_back();
         }
-        std::unique_ptr<std::ofstream> file(new std::ofstream(alt_reads_association_dir + "/" + file_key + ".txt", std::ios::app));
+        // Use contig numbers because contig names may contain characters forbidden in filenames.
+        std::unique_ptr<std::ofstream> file(new std::ofstream(alt_reads_association_dir + "/" + std::to_string(contig_map.name_to_id.at(chr)) + suffix + ".txt", std::ios::app));
         if (!*file) throw std::runtime_error("Unable to open read association file for " + file_key + ".");
         std::ofstream& file_ref = *file;
         alt_reads_to_sv_associations.emplace(file_key, std::move(file));
