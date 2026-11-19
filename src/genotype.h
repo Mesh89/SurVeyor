@@ -670,7 +670,8 @@ struct evidence_map_t {
         interned_vid_sets.clear();
         std::unordered_map<std::string, float> sv_epr_map;
         std::unordered_map<std::string, int> sv_hpid_map;
-        std::unordered_map<int, float> hpid_main_epr_map;
+        std::unordered_map<int, std::unordered_map<std::string, float>> hpid_atom_epr_map;
+        std::unordered_map<int, float> hpid_mean_epr_map;
         std::unordered_map<std::string, sv_t*> sv_by_exact_id;
         for (sv_t* sv : svs) {
             sv_by_exact_id[sv->id] = sv;
@@ -678,8 +679,14 @@ struct evidence_map_t {
             sv_hpid_map[id] = sv->hpid;
             if (resolve_assignments) {
                 sv_epr_map[id] = sv->sample_info.epr;
-                if (id.find(".AUX_INDEL.") == std::string::npos) hpid_main_epr_map[sv->hpid] = std::max(hpid_main_epr_map[sv->hpid], sv->sample_info.epr);
+                auto& atom_eprs = hpid_atom_epr_map[sv->hpid];
+                atom_eprs[id] = std::max(atom_eprs[id], sv->sample_info.epr);
             }
+        }
+        for (const auto& entry : hpid_atom_epr_map) {
+            float total_epr = 0;
+            for (const auto& atom : entry.second) total_epr += atom.second;
+            hpid_mean_epr_map[entry.first] = total_epr/entry.second.size();
         }
 
         for (const auto& entry : sv_hpid_map) {
@@ -811,7 +818,7 @@ struct evidence_map_t {
         // Then, we assign reads as follows:
         // - we assign each read with a unique best association to that SV
         // - when a read has multiple equally good best associations, we keep the best two
-        //   in terms of U, breaking U ties by EPR. Then, we assign the read to one of
+        //   in terms of U, breaking U ties by mean atom EPR. Then, we assign the read to one of
         //   the two randomly, with probability proportional to the number U of each SV
         //   (e.g., if SV1 has U=6 and SV2 has U=4, then the read is assigned to SV1 with probability 0.6 and to SV2 with probability 0.4)
 
@@ -861,16 +868,14 @@ struct evidence_map_t {
         for (const std::string& read_name : read_names_with_multiple_svs) {
             std::vector<sv_with_bp_t>& sv_w_bps = read_to_multiple_svs[read_name];
             std::sort(sv_w_bps.begin(), sv_w_bps.end());
-            // Find top two SVs, prioritizing variants above MIN_EPR, then U, then EPR.
+            // Find top two SVs, prioritizing variants above MIN_EPR, then U, then mean atom EPR.
             std::vector<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>> sv_U_vec;
             for (const auto& sv_w_bp : sv_w_bps) {
                 int hpid = sv_hpid_map[sv_w_bp.first];
                 int U = hpid_to_U_map[hpid];
                 float epr = sv_epr_map[sv_w_bp.first];
                 bool passes_min_epr = epr >= MIN_EPR;
-                // Rank all pieces by the main event so a high-EPR AUX piece cannot win a haplotype tie.
-                auto main_epr_it = hpid_main_epr_map.find(hpid);
-                float ranking_epr = main_epr_it != hpid_main_epr_map.end() ? main_epr_it->second : epr;
+                float ranking_epr = hpid_mean_epr_map[hpid];
                 sv_U_vec.push_back({{passes_min_epr, U, ranking_epr}, sv_w_bp});
             }
             std::sort(sv_U_vec.begin(), sv_U_vec.end(), std::greater<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>>());
@@ -898,7 +903,7 @@ struct evidence_map_t {
                 if (sv1_passes_min_epr != sv2_passes_min_epr) {
                     assigned_hpid = sv_hpid_map[sv1.first];
                 } else if (total_U == 0) {
-                    // both sides have no usable unique reads, so the higher pass-1 EPR wins
+                    // both sides have no usable unique reads, so the higher mean atom pass-1 EPR wins
                     float e1 = std::get<2>(sv_U_vec[0].first);
                     float e2 = std::get<2>(sv_U_vec[sv2_idx].first);
                     assigned_hpid = e2 > e1 ? sv_hpid_map[sv2.first] : sv_hpid_map[sv1.first];
