@@ -692,7 +692,7 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
 #undef ADD_RATIO
 
     std::vector<double> md = get_format_numbers(hdr, record, "MD", {0, 0, 0, 0});
-    double aju = get_format_number(hdr, record, "AJU", NAN_VALUE), rju = get_format_number(hdr, record, "RJU", NAN_VALUE);
+    double aju = get_alt_count_number(hdr, record, "AJU", NAN_VALUE), rju = get_format_number(hdr, record, "RJU", NAN_VALUE);
     features["AJU_OVER_DEPTH"] = std::isnan(aju) ? NAN_VALUE : aju/std::max(1.0, (md[0]+md[3])/2);
     features["AJU_FRAC"] = std::isnan(aju) || std::isnan(rju) ? NAN_VALUE : aju/std::max(1.0, aju+rju);
     features["MDLF"] = piecewise_normalise(md[0], min_depth, max_depth); features["MDSP"] = piecewise_normalise(md[1], min_depth, max_depth); features["MDSF"] = piecewise_normalise(md[2], min_depth, max_depth); features["MDRF"] = piecewise_normalise(md[3], min_depth, max_depth);
