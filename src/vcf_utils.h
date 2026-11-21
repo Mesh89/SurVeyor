@@ -354,7 +354,7 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_run_s_norm_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_FMT, "HPAS");
-	const char* hp_stutter_alpha_tag = "##FORMAT=<ID=HPAS,Number=1,Type=Float,Description=\"Stutter-correction factor applied to this homopolymer record's ALT-support read counts (NNLS deconvolution of the run read-length histogram with the library stutter profile).\">";
+	const char* hp_stutter_alpha_tag = "##FORMAT=<ID=HPAS,Number=1,Type=Float,Description=\"Stutter-correction factor for this homopolymer record's ALT-support read counts (NNLS deconvolution of the run read-length histogram with the library stutter profile). FORMAT counts are raw; extract_features applies this factor.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, hp_stutter_alpha_tag, &len));
 
 	bcf_hdr_remove(hdr, BCF_HL_INFO, "REF1_HP_LEN");

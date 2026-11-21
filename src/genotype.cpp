@@ -78,69 +78,55 @@ bool load_evidence_maps = false;
 evidence_mode_t evidence_mode = evidence_mode_t::CACHED;
 std::string reads_association_dir;
 
-void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_info_t bp_reads_info, std::string prefix, int bp_number, double count_scale) {
+void update_record_bp_reads_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_reads_info_t bp_reads_info, std::string prefix, int bp_number) {
     if (!bp_reads_info.computed) return;
 
     std::string bp_number_str = std::to_string(bp_number);
     std::string read_fmt_prefix = prefix + "R" + bp_number_str;
 
-    // Preserve tag presence from the original counts; scale only values written to the VCF.
-    int scaled_count = (int) std::nearbyint(bp_reads_info.reads * count_scale);
-    bcf_update_format_int32(out_hdr, b, read_fmt_prefix.c_str(), &scaled_count, 1);
+    bcf_update_format_int32(out_hdr, b, read_fmt_prefix.c_str(), &(bp_reads_info.reads), 1);
 
     int consistent_reads = bp_reads_info.consistent_reads();
     int consistent_exact_reads = bp_reads_info.consistent_exact_reads();
     int exact_reads = bp_reads_info.exact_reads();
     if (bp_reads_info.reads) {
-        scaled_count = (int) std::nearbyint(consistent_reads * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "C").c_str(), &scaled_count, 1);
-        scaled_count = (int) std::nearbyint(exact_reads * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), &scaled_count, 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "C").c_str(), &consistent_reads, 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "E").c_str(), &exact_reads, 1);
     }
     if (consistent_reads) {
-        scaled_count = (int) std::nearbyint(consistent_exact_reads * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CE").c_str(), &scaled_count, 1);
-        scaled_count = (int) std::nearbyint(bp_reads_info.consistent_fwd * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CF").c_str(), &scaled_count, 1);
-        scaled_count = (int) std::nearbyint(bp_reads_info.consistent_rev * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CR").c_str(), &scaled_count, 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CE").c_str(), &consistent_exact_reads, 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CF").c_str(), &(bp_reads_info.consistent_fwd), 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CR").c_str(), &(bp_reads_info.consistent_rev), 1);
         float rcas = bp_reads_info.consistent_avg_score;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CAS").c_str(), &rcas, 1);
         float rcss = bp_reads_info.consistent_stddev_score;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CSS").c_str(), &rcss, 1);
-        scaled_count = (int) std::nearbyint(bp_reads_info.consistent_high_mq * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CHQ").c_str(), &scaled_count, 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CHQ").c_str(), &(bp_reads_info.consistent_high_mq), 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CmQ").c_str(), &(bp_reads_info.consistent_min_mq), 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CMQ").c_str(), &(bp_reads_info.consistent_max_mq), 1);
         float rcavmq = bp_reads_info.consistent_avg_mq;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CAQ").c_str(), &rcavmq, 1);
         float rcstdmq = bp_reads_info.consistent_stddev_mq;
         bcf_update_format_float(out_hdr, b, (read_fmt_prefix + "CSQ").c_str(), &rcstdmq, 1);
-        int mate_cov_bps[] = {(int) std::nearbyint(bp_reads_info.fwd_mate_cov_bps * count_scale), (int) std::nearbyint(bp_reads_info.rev_mate_cov_bps * count_scale)};
+        int mate_cov_bps[] = {bp_reads_info.fwd_mate_cov_bps, bp_reads_info.rev_mate_cov_bps};
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CMSPAN").c_str(), mate_cov_bps, 2);
-        int hq_mate_cov_bps[] = {(int) std::nearbyint(bp_reads_info.fwd_hq_mate_cov_bps * count_scale), (int) std::nearbyint(bp_reads_info.rev_hq_mate_cov_bps * count_scale)};
+        int hq_mate_cov_bps[] = {bp_reads_info.fwd_hq_mate_cov_bps, bp_reads_info.rev_hq_mate_cov_bps};
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CMHQSPAN").c_str(), hq_mate_cov_bps, 2);
 
         if (consistent_exact_reads) {
-            scaled_count = (int) std::nearbyint(bp_reads_info.consistent_exact_high_mq * count_scale);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEHQ").c_str(), &scaled_count, 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEHQ").c_str(), &(bp_reads_info.consistent_exact_high_mq), 1);
             bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEmQ").c_str(), &(bp_reads_info.consistent_exact_min_mq), 1);
             bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEMQ").c_str(), &(bp_reads_info.consistent_exact_max_mq), 1);
-            scaled_count = (int) std::nearbyint(bp_reads_info.consistent_exact_fwd * count_scale);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEF").c_str(), &scaled_count, 1);
-            scaled_count = (int) std::nearbyint(bp_reads_info.consistent_exact_rev * count_scale);
-            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CER").c_str(), &scaled_count, 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CEF").c_str(), &(bp_reads_info.consistent_exact_fwd), 1);
+            bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "CER").c_str(), &(bp_reads_info.consistent_exact_rev), 1);
         }
     }
     if (exact_reads) {
-        scaled_count = (int) std::nearbyint(bp_reads_info.exact_high_mq * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), &scaled_count, 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EHQ").c_str(), &(bp_reads_info.exact_high_mq), 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EmQ").c_str(), &(bp_reads_info.exact_min_mq), 1);
         bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EMQ").c_str(), &(bp_reads_info.exact_max_mq), 1);
-        scaled_count = (int) std::nearbyint(bp_reads_info.exact_fwd * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), &scaled_count, 1);
-        scaled_count = (int) std::nearbyint(bp_reads_info.exact_rev * count_scale);
-        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), &scaled_count, 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "EF").c_str(), &(bp_reads_info.exact_fwd), 1);
+        bcf_update_format_int32(out_hdr, b, (read_fmt_prefix + "ER").c_str(), &(bp_reads_info.exact_rev), 1);
     }
 }
 
@@ -218,8 +204,8 @@ void reset_record_bp_pairs_info(bcf_hdr_t* out_hdr, bcf1_t* b, std::string prefi
     bcf_update_format_float(out_hdr, b, (pairs_fmt_prefix + "NMS").c_str(), NULL, 0);
 }
 
-void update_record_bp_consensus_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_consensus_info_t bp_consensus_info, std::string prefix, int bp_number, double count_scale) {
-    update_record_bp_reads_info(out_hdr, b, bp_consensus_info.reads_info, prefix, bp_number, count_scale);
+void update_record_bp_consensus_info(bcf_hdr_t* out_hdr, bcf1_t* b, sv_t::bp_consensus_info_t bp_consensus_info, std::string prefix, int bp_number) {
+    update_record_bp_reads_info(out_hdr, b, bp_consensus_info.reads_info, prefix, bp_number);
     update_record_bp_pairs_info(out_hdr, b, bp_consensus_info.pairs_info, prefix, bp_number);
 }
 
@@ -517,11 +503,10 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     reset_record_bp_pairs_info(out_hdr, sv->vcf_entry, "S", 1);
     reset_record_bp_pairs_info(out_hdr, sv->vcf_entry, "S", 2);
 
-    double alt_count_scale = std::isnan(sv->hp_stutter_alpha) ? 1.0 : sv->hp_stutter_alpha;
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp1, "A", 1, alt_count_scale);
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp2, "A", 2, alt_count_scale);
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp1, "R", 1, 1.0);
-    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp2, "R", 2, 1.0);
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp1, "A", 1);
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.alt_bp2, "A", 2);
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp1, "R", 1);
+    update_record_bp_consensus_info(out_hdr, sv->vcf_entry, sv->sample_info.ref_bp2, "R", 2);
     update_record_bp_pairs_info(out_hdr, sv->vcf_entry, sv->sample_info.neutral_bp1_pairs, "N", 1);
     update_record_bp_pairs_info(out_hdr, sv->vcf_entry, sv->sample_info.neutral_bp2_pairs, "N", 2);
     update_record_bp_pairs_info(out_hdr, sv->vcf_entry, sv->sample_info.bp1_stray_pairs, "S", 1);

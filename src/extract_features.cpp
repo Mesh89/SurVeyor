@@ -184,6 +184,19 @@ std::vector<double> get_format_numbers(bcf_hdr_t* hdr, bcf1_t* record, const cha
     return values;
 }
 
+std::vector<double> get_alt_count_numbers(bcf_hdr_t* hdr, bcf1_t* record, const char* key, std::initializer_list<double> defaults) {
+    std::vector<double> default_values(defaults);
+    std::vector<double> values = get_format_numbers(hdr, record, key, std::vector<double>(default_values.size(), NAN_VALUE));
+    double scale = get_format_number(hdr, record, "HPAS", 1.0);
+    for (size_t i = 0; i < values.size(); i++) values[i] = std::isnan(values[i]) ? (i < default_values.size() ? default_values[i] : default_values.back()) : std::nearbyint(values[i]*scale);
+    if (values.size() < default_values.size()) values.resize(default_values.size(), default_values.back());
+    return values;
+}
+
+double get_alt_count_number(bcf_hdr_t* hdr, bcf1_t* record, const char* key, double default_value, double norm_factor = 1.0) {
+    return get_alt_count_numbers(hdr, record, key, {default_value})[0]/norm_factor;
+}
+
 std::vector<double> get_info_numbers(bcf_hdr_t* hdr, bcf1_t* record, const char* key) {
     int id = bcf_hdr_id2int(hdr, BCF_DT_ID, key);
     if (id < 0 || !has_info(hdr, record, key)) return {};
@@ -543,8 +556,8 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     add_base_count_features(features, get_info_numbers(hdr, record, "INS_SUFFIX_BASE_COUNT"), "INS_SUFFIX_", "MAX_INS_SUFFIX_BASE_COUNT_RATIO");
     features["TD"] = get_format_number(hdr, record, "TD", 0);
 
-    double ar1 = get_format_number(hdr, record, "AR1", 0), ar1c = get_format_number(hdr, record, "AR1C", 0), ar1chq = get_format_number(hdr, record, "AR1CHQ", 0);
-    double ar1ce = get_format_number(hdr, record, "AR1CE", 0), ar1cehq = get_format_number(hdr, record, "AR1CEHQ", 0), ar1e = get_format_number(hdr, record, "AR1E", 0), ar1ehq = get_format_number(hdr, record, "AR1EHQ", 0);
+    double ar1 = get_alt_count_number(hdr, record, "AR1", 0), ar1c = get_alt_count_number(hdr, record, "AR1C", 0), ar1chq = get_alt_count_number(hdr, record, "AR1CHQ", 0);
+    double ar1ce = get_alt_count_number(hdr, record, "AR1CE", 0), ar1cehq = get_alt_count_number(hdr, record, "AR1CEHQ", 0), ar1e = get_alt_count_number(hdr, record, "AR1E", 0), ar1ehq = get_alt_count_number(hdr, record, "AR1EHQ", 0);
     double ar1cas = get_format_number(hdr, record, "AR1CAS", NAN_VALUE), ar1css = get_format_number(hdr, record, "AR1CSS", NAN_VALUE);
     double ar1_adj = exp_alt_reads_freq1 > 0 ? ar1/exp_alt_reads_freq1 : ar1, ar1c_adj = exp_alt_reads_freq1 > 0 ? ar1c/exp_alt_reads_freq1 : ar1c;
     features["AR1"] = piecewise_normalise(ar1, min_depth, max_depth); features["AR1C"] = piecewise_normalise(ar1c, min_depth, max_depth);
@@ -555,9 +568,9 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     features["AR1E_HQ_RATIO"] = ar1ehq/std::max(1.0, ar1e); features["AR1E_RATIO"] = ar1e/std::max(1.0, ar1);
     features["AR1CE"] = piecewise_normalise(ar1ce, min_depth, max_depth); features["AR1CEmQ"] = get_format_number(hdr, record, "AR1CEmQ", NAN_VALUE); features["AR1CEMQ"] = get_format_number(hdr, record, "AR1CEMQ", NAN_VALUE);
     features["AR1CE_HQ_RATIO"] = ar1cehq/std::max(1.0, ar1ce); features["AR1CE_RATIO"] = ar1ce/std::max(1.0, ar1c);
-    std::pair<double, double> spans = normalise_mate_coverage_spans(get_format_numbers(hdr, record, "AR1CMSPAN", {0, 0}), ar1c, read_len);
+    std::pair<double, double> spans = normalise_mate_coverage_spans(get_alt_count_numbers(hdr, record, "AR1CMSPAN", {0, 0}), ar1c, read_len);
     features["AR1CMSPAN_1"] = spans.first; features["AR1CMSPAN_2"] = spans.second;
-    spans = normalise_mate_coverage_spans(get_format_numbers(hdr, record, "AR1CMHQSPAN", {0, 0}), ar1chq, read_len);
+    spans = normalise_mate_coverage_spans(get_alt_count_numbers(hdr, record, "AR1CMHQSPAN", {0, 0}), ar1chq, read_len);
     features["AR1CMHQSPAN_1"] = spans.first; features["AR1CMHQSPAN_2"] = spans.second;
     features["AR1HPMODE"] = get_format_number(hdr, record, "AR1HPMODE", NAN_VALUE); features["AR1CHPMODE"] = get_format_number(hdr, record, "AR1CHPMODE", NAN_VALUE);
     features["AR1HPMODE_AR1CHPMODE_DIFF"] = features["AR1HPMODE"]-features["AR1CHPMODE"];
@@ -565,8 +578,8 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     for (const char* key : {"AR1CHPIQR", "AR1CHPmQ", "AR1CHPMQ", "AR1CHPAQ", "AR1CHPSQ", "AR1HP5PMR", "AR1HP3PMR"}) features[key] = get_format_number(hdr, record, key, NAN_VALUE);
 
     bool has_ar2 = has_format(hdr, record, "AR2");
-    double ar2 = get_format_number(hdr, record, "AR2", 0), ar2c = get_format_number(hdr, record, "AR2C", 0), ar2chq = get_format_number(hdr, record, "AR2CHQ", 0);
-    double ar2ce = get_format_number(hdr, record, "AR2CE", 0), ar2cehq = get_format_number(hdr, record, "AR2CEHQ", 0), ar2e = get_format_number(hdr, record, "AR2E", 0), ar2ehq = get_format_number(hdr, record, "AR2EHQ", 0);
+    double ar2 = get_alt_count_number(hdr, record, "AR2", 0), ar2c = get_alt_count_number(hdr, record, "AR2C", 0), ar2chq = get_alt_count_number(hdr, record, "AR2CHQ", 0);
+    double ar2ce = get_alt_count_number(hdr, record, "AR2CE", 0), ar2cehq = get_alt_count_number(hdr, record, "AR2CEHQ", 0), ar2e = get_alt_count_number(hdr, record, "AR2E", 0), ar2ehq = get_alt_count_number(hdr, record, "AR2EHQ", 0);
     double ar2cas = get_format_number(hdr, record, "AR2CAS", NAN_VALUE), ar2css = get_format_number(hdr, record, "AR2CSS", NAN_VALUE);
     if (!has_ar2) ar2 = ar1, ar2c = ar1c, ar2chq = ar1chq, ar2ce = ar1ce, ar2cehq = ar1cehq, ar2e = ar1e, ar2ehq = ar1ehq, ar2cas = ar1cas, ar2css = ar1css;
     double ar2_adj = has_ar2 && exp_alt_reads_freq2 > 0 ? ar2/exp_alt_reads_freq2 : (has_ar2 ? ar2 : ar1_adj), ar2c_adj = has_ar2 && exp_alt_reads_freq2 > 0 ? ar2c/exp_alt_reads_freq2 : (has_ar2 ? ar2c : ar1c_adj);
@@ -578,19 +591,19 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     features["AR2E_HQ_RATIO"] = ar2ehq/std::max(1.0, ar2e); features["AR2E_RATIO"] = ar2e/std::max(1.0, ar2);
     features["AR2CE"] = piecewise_normalise(ar2ce, min_depth, max_depth); features["AR2CEmQ"] = has_ar2 ? get_format_number(hdr, record, "AR2CEmQ", NAN_VALUE) : features["AR1CEmQ"]; features["AR2CEMQ"] = has_ar2 ? get_format_number(hdr, record, "AR2CEMQ", NAN_VALUE) : features["AR1CEMQ"];
     features["AR2CE_HQ_RATIO"] = ar2cehq/std::max(1.0, ar2ce); features["AR2CE_RATIO"] = ar2ce/std::max(1.0, ar2c);
-    spans = has_ar2 ? normalise_mate_coverage_spans(get_format_numbers(hdr, record, "AR2CMSPAN", {0, 0}), ar2c, read_len) : std::make_pair(features["AR1CMSPAN_1"], features["AR1CMSPAN_2"]);
+    spans = has_ar2 ? normalise_mate_coverage_spans(get_alt_count_numbers(hdr, record, "AR2CMSPAN", {0, 0}), ar2c, read_len) : std::make_pair(features["AR1CMSPAN_1"], features["AR1CMSPAN_2"]);
     features["AR2CMSPAN_1"] = spans.first; features["AR2CMSPAN_2"] = spans.second;
-    spans = has_ar2 ? normalise_mate_coverage_spans(get_format_numbers(hdr, record, "AR2CMHQSPAN", {0, 0}), ar2chq, read_len) : std::make_pair(features["AR1CMHQSPAN_1"], features["AR1CMHQSPAN_2"]);
+    spans = has_ar2 ? normalise_mate_coverage_spans(get_alt_count_numbers(hdr, record, "AR2CMHQSPAN", {0, 0}), ar2chq, read_len) : std::make_pair(features["AR1CMHQSPAN_1"], features["AR1CMHQSPAN_2"]);
     features["AR2CMHQSPAN_1"] = spans.first; features["AR2CMHQSPAN_2"] = spans.second;
 
-    double ar1cf_count = get_format_number(hdr, record, "AR1CF", 0), ar1cr_count = get_format_number(hdr, record, "AR1CR", 0), ar2cf_count = get_format_number(hdr, record, "AR2CF", 0), ar2cr_count = get_format_number(hdr, record, "AR2CR", 0);
+    double ar1cf_count = get_alt_count_number(hdr, record, "AR1CF", 0), ar1cr_count = get_alt_count_number(hdr, record, "AR1CR", 0), ar2cf_count = get_alt_count_number(hdr, record, "AR2CF", 0), ar2cr_count = get_alt_count_number(hdr, record, "AR2CR", 0);
     double ar1cf = ar1cf_count/std::max(1.0, ar1c), ar1cr = ar1cr_count/std::max(1.0, ar1c), ar2cf = has_ar2 ? ar2cf_count/std::max(1.0, ar2c) : ar1cf, ar2cr = has_ar2 ? ar2cr_count/std::max(1.0, ar2c) : ar1cr;
     features["ARCF"] = ar1cf+ar2cf; features["ARCR"] = ar1cr+ar2cr; features["MAXARCD"] = std::max(features["ARCF"], features["ARCR"]);
-    double ar1cef = get_format_number(hdr, record, "AR1CEF", 0, std::max(1.0, ar1ce)), ar1cer = get_format_number(hdr, record, "AR1CER", 0, std::max(1.0, ar1ce));
-    double ar2cef = has_ar2 ? get_format_number(hdr, record, "AR2CEF", 0, std::max(1.0, ar2ce)) : ar1cef, ar2cer = has_ar2 ? get_format_number(hdr, record, "AR2CER", 0, std::max(1.0, ar2ce)) : ar1cer;
+    double ar1cef = get_alt_count_number(hdr, record, "AR1CEF", 0, std::max(1.0, ar1ce)), ar1cer = get_alt_count_number(hdr, record, "AR1CER", 0, std::max(1.0, ar1ce));
+    double ar2cef = has_ar2 ? get_alt_count_number(hdr, record, "AR2CEF", 0, std::max(1.0, ar2ce)) : ar1cef, ar2cer = has_ar2 ? get_alt_count_number(hdr, record, "AR2CER", 0, std::max(1.0, ar2ce)) : ar1cer;
     features["ARCEF"] = ar1cef+ar2cef; features["ARCER"] = ar1cer+ar2cer; features["MAXARCED"] = std::max(features["ARCEF"], features["ARCER"]);
-    double ar1ef = get_format_number(hdr, record, "AR1EF", 0, std::max(1.0, ar1e)), ar1er = get_format_number(hdr, record, "AR1ER", 0, std::max(1.0, ar1e));
-    double ar2ef = has_ar2 ? get_format_number(hdr, record, "AR2EF", 0, std::max(1.0, ar2e)) : ar1ef, ar2er = has_ar2 ? get_format_number(hdr, record, "AR2ER", 0, std::max(1.0, ar2e)) : ar1er;
+    double ar1ef = get_alt_count_number(hdr, record, "AR1EF", 0, std::max(1.0, ar1e)), ar1er = get_alt_count_number(hdr, record, "AR1ER", 0, std::max(1.0, ar1e));
+    double ar2ef = has_ar2 ? get_alt_count_number(hdr, record, "AR2EF", 0, std::max(1.0, ar2e)) : ar1ef, ar2er = has_ar2 ? get_alt_count_number(hdr, record, "AR2ER", 0, std::max(1.0, ar2e)) : ar1er;
     features["AREF"] = ar1ef+ar2ef; features["ARER"] = ar1er+ar2er; features["MAXARED"] = std::max(features["AREF"], features["ARER"]);
 
     selected_alt_read_metrics_t other1 = select_alt_read_metrics_for_oar_vids(hdr, record, "OAR1VID", 0, alt_reads_by_vid), other2 = select_alt_read_metrics_for_oar_vids(hdr, record, "OAR2VID", 1, alt_reads_by_vid);
@@ -803,9 +816,9 @@ std::unordered_map<std::string, std::vector<alt_read_metrics_t>> load_alt_read_m
     while (bcf_sr_next_line(reader)) {
         bcf1_t* record = bcf_sr_get_line(reader, 0);
         bcf_unpack(record, BCF_UN_ALL);
-        double ar1 = get_format_number(hdr, record, "AR1", 0), ar2 = get_format_number(hdr, record, "AR2", ar1);
+        double ar1 = get_alt_count_number(hdr, record, "AR1", 0), ar2 = get_alt_count_number(hdr, record, "AR2", ar1);
         double rr1 = get_format_number(hdr, record, "RR1", 0), rr2 = get_format_number(hdr, record, "RR2", rr1), rr1c = get_format_number(hdr, record, "RR1C", 0), rr2c = get_format_number(hdr, record, "RR2C", rr1c), rr1e = get_format_number(hdr, record, "RR1E", 0), rr2e = get_format_number(hdr, record, "RR2E", rr1e);
-        double ar1c = get_format_number(hdr, record, "AR1C", 0), ar2c = get_format_number(hdr, record, "AR2C", ar1c), ar1chq = get_format_number(hdr, record, "AR1CHQ", 0), ar2chq = get_format_number(hdr, record, "AR2CHQ", ar1chq), ar1e = get_format_number(hdr, record, "AR1E", 0), ar2e = get_format_number(hdr, record, "AR2E", ar1e);
+        double ar1c = get_alt_count_number(hdr, record, "AR1C", 0), ar2c = get_alt_count_number(hdr, record, "AR2C", ar1c), ar1chq = get_alt_count_number(hdr, record, "AR1CHQ", 0), ar2chq = get_alt_count_number(hdr, record, "AR2CHQ", ar1chq), ar1e = get_alt_count_number(hdr, record, "AR1E", 0), ar2e = get_alt_count_number(hdr, record, "AR2E", ar1e);
         double oar1 = get_format_number(hdr, record, "OAR1", 0), oar1c = get_format_number(hdr, record, "OAR1C", 0), oar1e = get_format_number(hdr, record, "OAR1E", 0);
         bool has_ar2 = has_format(hdr, record, "AR2");
         double oar2 = has_ar2 ? get_format_number(hdr, record, "OAR2", 0) : oar1, oar2c = has_ar2 ? get_format_number(hdr, record, "OAR2C", 0) : oar1c, oar2e = has_ar2 ? get_format_number(hdr, record, "OAR2E", 0) : oar1e;
