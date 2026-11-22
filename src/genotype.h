@@ -30,6 +30,7 @@
 struct hp_mismatch_rate_thresholds_t;
 
 constexpr double MIN_EPR = 0.05;
+constexpr double CALL_EPR = 0.5;
 constexpr hts_pos_t GENOTYPE_CONSENSUS_EXTENSION = 500;
 
 inline void count_exact_junction_reads(sv_t* sv, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, hts_pos_t start, hts_pos_t end, std::string left, std::string right) {
@@ -818,9 +819,10 @@ struct evidence_map_t {
         // Then, we assign reads as follows:
         // - we assign each read with a unique best association to that SV
         // - when a read has multiple equally good best associations, we keep the best two
-        //   in terms of U, breaking U ties by mean atom EPR. Then, we assign the read to one of
-        //   the two randomly, with probability proportional to the number U of each SV
-        //   (e.g., if SV1 has U=6 and SV2 has U=4, then the read is assigned to SV1 with probability 0.6 and to SV2 with probability 0.4)
+        //   by whether they pass MIN_EPR, whether they were called in pass 1, U, then mean atom EPR.
+        //   If the candidates agree on both EPR thresholds, we draw in proportion to U,
+        //   treating U below 3 as zero and using mean atom EPR when both are zero.
+        // The pass-1 call priority keeps ambiguous reads with accepted haplotypes.
 
         using sv_with_bp_t = std::pair<std::string, int>;
         std::unordered_map<int, int> hpid_to_U_map;
@@ -868,17 +870,18 @@ struct evidence_map_t {
         for (const std::string& read_name : read_names_with_multiple_svs) {
             std::vector<sv_with_bp_t>& sv_w_bps = read_to_multiple_svs[read_name];
             std::sort(sv_w_bps.begin(), sv_w_bps.end());
-            // Find top two SVs, prioritizing variants above MIN_EPR, then U, then mean atom EPR.
-            std::vector<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>> sv_U_vec;
+            // Find top two SVs, prioritizing those that pass MIN_EPR, then pass-1 calls, then U, then mean atom EPR.
+            std::vector<std::pair<std::tuple<bool, bool, int, float>, sv_with_bp_t>> sv_U_vec;
             for (const auto& sv_w_bp : sv_w_bps) {
                 int hpid = sv_hpid_map[sv_w_bp.first];
                 int U = hpid_to_U_map[hpid];
                 float epr = sv_epr_map[sv_w_bp.first];
                 bool passes_min_epr = epr >= MIN_EPR;
+                bool called_in_pass1 = epr >= CALL_EPR;
                 float ranking_epr = hpid_mean_epr_map[hpid];
-                sv_U_vec.push_back({{passes_min_epr, U, ranking_epr}, sv_w_bp});
+                sv_U_vec.push_back({{passes_min_epr, called_in_pass1, U, ranking_epr}, sv_w_bp});
             }
-            std::sort(sv_U_vec.begin(), sv_U_vec.end(), std::greater<std::pair<std::tuple<bool, int, float>, sv_with_bp_t>>());
+            std::sort(sv_U_vec.begin(), sv_U_vec.end(), std::greater<std::pair<std::tuple<bool, bool, int, float>, sv_with_bp_t>>());
             sv_with_bp_t sv1 = sv_U_vec[0].second;
 
             // pick best SV that has a different HPID than sv1 (if any)
@@ -892,20 +895,22 @@ struct evidence_map_t {
             } else {
                 sv_with_bp_t sv2 = sv_U_vec[sv2_idx].second;
 
-                int U1 = std::get<1>(sv_U_vec[0].first);
-                int U2 = std::get<1>(sv_U_vec[sv2_idx].first);
+                int U1 = std::get<2>(sv_U_vec[0].first);
+                int U2 = std::get<2>(sv_U_vec[sv2_idx].first);
                 bool sv1_passes_min_epr = std::get<0>(sv_U_vec[0].first);
                 bool sv2_passes_min_epr = std::get<0>(sv_U_vec[sv2_idx].first);
+                bool sv1_called_in_pass1 = std::get<1>(sv_U_vec[0].first);
+                bool sv2_called_in_pass1 = std::get<1>(sv_U_vec[sv2_idx].first);
 
                 if (U1 < 3) U1 = 0; // we require a minimum number of 3 uniquely assigned reads
                 if (U2 < 3) U2 = 0; // we require a minimum number of 3 uniquely assigned reads
                 int total_U = U1 + U2;
-                if (sv1_passes_min_epr != sv2_passes_min_epr) {
+                if (sv1_passes_min_epr != sv2_passes_min_epr || sv1_called_in_pass1 != sv2_called_in_pass1) {
                     assigned_hpid = sv_hpid_map[sv1.first];
                 } else if (total_U == 0) {
                     // both sides have no usable unique reads, so the higher mean atom pass-1 EPR wins
-                    float e1 = std::get<2>(sv_U_vec[0].first);
-                    float e2 = std::get<2>(sv_U_vec[sv2_idx].first);
+                    float e1 = std::get<3>(sv_U_vec[0].first);
+                    float e2 = std::get<3>(sv_U_vec[sv2_idx].first);
                     assigned_hpid = e2 > e1 ? sv_hpid_map[sv2.first] : sv_hpid_map[sv1.first];
                 } else {
                     int r = read_assignment_draw(config.seed, chr, read_name, total_U);
