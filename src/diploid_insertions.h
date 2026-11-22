@@ -2,10 +2,13 @@
 #define DIPLOID_INSERTIONS_H_
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -13,7 +16,16 @@
 #include <vector>
 
 #include "dc_remapper.h"
+#include "hp_mismatch_rate_thresholds.h"
+#include "hp_stutter.h"
 #include "../libs/ssw_selected.h"
+
+const hp_stutter_profile_t* tail_stutter_profile = nullptr;
+int tail_min_clip_len;
+double tail_max_seq_error;
+const int TAIL_MIN_RUN = 15;
+const int TAIL_MIN_READS = 3;
+const double TAIL_MIN_LLR = 5.0;
 
 struct insertion_read_evidence_t {
 	int read_end; // BAM read-end flags from get_read_key.
@@ -316,6 +328,7 @@ struct reconstructed_insertion_junction_t {
 	std::vector<hts_pos_t> before, after; // Original boundaries before/after inserted bases.
 	std::vector<hts_pair_pos_t> assembled_contig_intervals;
 	bool haplotype;
+	bool tail;
 };
 
 bool build_reconstructed_insertion_junction(const std::string& primary, std::vector<junction_edit_t> edits, const std::vector<hts_pair_pos_t>& intervals, reconstructed_insertion_junction_t& result) {
@@ -329,6 +342,7 @@ bool build_reconstructed_insertion_junction(const std::string& primary, std::vec
 	result.after.assign(primary.length()+1, 0);
 	result.assembled_contig_intervals.clear();
 	result.haplotype = false;
+	result.tail = false;
 	int pos = 0, previous_insertion = -1;
 	for (const auto& edit : edits) {
 		if (edit.begin < pos || (edit.begin == edit.end && edit.begin == previous_insertion)) continue;
@@ -356,6 +370,68 @@ bool build_reconstructed_insertion_junction(const std::string& primary, std::vec
 		if (begin < end) result.assembled_contig_intervals.push_back({begin, end});
 	}
 	return true;
+}
+
+std::vector<reconstructed_insertion_junction_t> propose_tail_length_alternatives(const std::string& primary, const std::vector<insertion_fragment_evidence_t>& fragments, const std::vector<hts_pair_pos_t>& intervals) {
+	if (tail_stutter_profile == nullptr) throw std::runtime_error("HP tail stutter profile is not initialized.");
+	std::vector<hp_run_context_t> runs;
+	for (int beg = 0; beg < primary.length();) {
+		int end = beg+1;
+		while (end < primary.length() && primary[end] == primary[beg]) end++;
+		if (junction_canonical_base(primary[beg]) && end-beg >= TAIL_MIN_RUN) runs.emplace_back(beg, end, primary[beg]);
+		beg = end;
+	}
+	if (runs.empty()) return {};
+
+	std::string junction = primary;
+	char* junction_seq = &junction[0];
+	int junction_len = junction.length();
+	static const StripedSmithWaterman::Aligner tail_aligner(2, 2, 6, 1, false);
+	StripedSmithWaterman::Filter filter;
+	std::vector<std::map<int, int>> histograms(runs.size());
+	for (const auto& fragment : fragments) {
+		for (const auto& read : fragment.reads) {
+			if (read.seq.length() < 50) continue;
+			StripedSmithWaterman::Alignment alignment;
+			if (!tail_aligner.Align(read.seq.c_str(), junction_seq, junction_len, filter, &alignment, 15) || alignment.cigar.empty()) continue;
+			for (int i = 0; i < runs.size(); i++) {
+				const auto& run = runs[i];
+				if (alignment.ref_end < run.beg || alignment.ref_begin >= run.end) continue;
+				hp_read_info_t info = calculate_hp_read_info(alignment, read.seq, {run.beg, run.end}, run.base, junction_seq, junction_len, read.reverse, bp_support_read_t(), 10, true, true, 1.0);
+				info.read.seq = read.seq;
+				bool clipped_3p = read.reverse ? get_left_clip_size(alignment) > 0 : get_right_clip_size(alignment) > 0;
+				subtract_hp_3p_tail_gap(info, run, junction_seq, junction_len, read.reverse, clipped_3p, tail_min_clip_len);
+				if (is_usable_hp_read(info, tail_min_clip_len, tail_max_seq_error)) histograms[i][info.hp_len]++;
+			}
+		}
+	}
+
+	std::vector<reconstructed_insertion_junction_t> alternatives;
+	for (int i = 0; i < runs.size(); i++) {
+		const auto& run = runs[i];
+		const auto& histogram = histograms[i];
+		int L1 = run.end-run.beg, L2 = 0, n2 = 0;
+		for (const auto& observation : histogram) {
+			if (observation.first != L1 && observation.second >= n2) {
+				L2 = observation.first;
+				n2 = observation.second;
+			}
+		}
+		if (L2 < TAIL_MIN_RUN || n2 < TAIL_MIN_READS) continue;
+		double llr = 0;
+		for (const auto& observation : histogram) {
+			double k1 = tail_stutter_profile->K(observation.first, L1, run.base), k2 = tail_stutter_profile->K(observation.first, L2, run.base);
+			llr += observation.second*(std::log(0.5*k1+0.5*k2)-std::log(k1));
+		}
+		if (llr < TAIL_MIN_LLR) continue;
+		junction_edit_t edit = L2 > L1 ? junction_edit_t{int(run.beg), int(run.beg), std::string(L2-L1, run.base), false} : junction_edit_t{int(run.beg), int(run.beg)+L1-L2, "", false};
+		reconstructed_insertion_junction_t alternative;
+		if (build_reconstructed_insertion_junction(primary, {edit}, intervals, alternative)) {
+			alternative.tail = true;
+			alternatives.push_back(std::move(alternative));
+		}
+	}
+	return alternatives;
 }
 
 std::vector<reconstructed_insertion_junction_t> reconstruct_insertion_junctions(const std::string& primary, const insertion_junction_differences_t& differences, const std::vector<hts_pair_pos_t>& intervals = {}) {
@@ -458,6 +534,9 @@ std::vector<reconstructed_insertion_junction_t> reconstruct_polished_insertion_j
 	std::set<std::string> sequences;
 	for (auto& alternative : alternatives) {
 		if (polish_insertion_junction(primary, fragments, alternative, aligner) && alternative.seq != primary && sequences.insert(alternative.seq).second) polished.push_back(std::move(alternative));
+	}
+	for (auto& alternative : propose_tail_length_alternatives(primary, fragments, intervals)) {
+		if (alternative.seq != primary && sequences.insert(alternative.seq).second) polished.push_back(std::move(alternative));
 	}
 	return polished;
 }

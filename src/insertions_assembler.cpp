@@ -346,6 +346,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
             } else {
                 candidate = detect_de_novo_insertion_from_junction(contig_name, contigs, alternative.seq, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, config, stats);
             }
+            if (candidate != NULL && alternative.tail && candidate->incomplete_ins_seq()) candidate = NULL;
             if (candidate != NULL) append_distinct_insertion_candidate(found, candidate, contigs.get_seq(contig_name));
         }
     };
@@ -1180,6 +1181,10 @@ int main(int argc, char* argv[]) {
     config.parse(workdir + "/config.txt");
     stats.parse(workdir + "/stats.txt", config.per_contig_stats);
     hp_tail_quality_model = read_hp_tail_quality_model(workdir + "/hp_3p_tail_error_probabilities.txt");
+    static const hp_stutter_profile_t tail_profile(workdir + "/" + HP_STUTTER_PROFILE_FILENAME);
+    tail_stutter_profile = &tail_profile;
+    tail_min_clip_len = config.min_clip_len;
+    tail_max_seq_error = config.max_seq_error;
 
     contigs.read_fasta_into_map(reference_fname, true, config.threads);
     contig_map.load(workdir);
