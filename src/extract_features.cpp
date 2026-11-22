@@ -63,7 +63,7 @@ const std::vector<std::string>& default_feature_names() {
         "OTHER1_XAAS_XARS_DIFF_TO_LEN", "OTHER2_XAAS_XARS_DIFF_TO_LEN", "OAR1C", "OAR2C", "OAR1CHQ", "OAR2CHQ", "OAR1C_HQ_RATIO", "OAR2C_HQ_RATIO", "OAR1E", "OAR2E", "NAR1",
         "NAR2", "NAR1C", "NAR2C", "NAR1CHQ", "NAR2CHQ", "NAR1C_HQ_RATIO", "NAR2C_HQ_RATIO", "NAR1CE", "NAR2CE", "NAR1E", "NAR2E", "ER1_DEVIATION", "ER2_DEVIATION", "ER_HQ_RATIO",
         "AR1CMSPAN_1", "AR1CMSPAN_2", "AR1CMHQSPAN_1", "AR1CMHQSPAN_2", "AR2CMSPAN_1", "AR2CMSPAN_2", "AR2CMHQSPAN_1", "AR2CMHQSPAN_2", "RR1CMSPAN_1", "RR1CMSPAN_2",
-        "RR1CMHQSPAN_1", "RR1CMHQSPAN_2", "RR2CMSPAN_1", "RR2CMSPAN_2", "RR2CMHQSPAN_1", "RR2CMHQSPAN_2", "AR1_RR1_CAS_Z_SCORE", "AR2_RR2_CAS_Z_SCORE", "AR1_OVER_RR1",
+        "RR1CMHQSPAN_1", "RR1CMHQSPAN_2", "RR2CMSPAN_1", "RR2CMSPAN_2", "RR2CMHQSPAN_1", "RR2CMHQSPAN_2", "AR1_RR1_CAS_Z_SCORE", "AR2_RR2_CAS_Z_SCORE", "AR1_RR1_CAQ_Z_SCORE", "AR2_RR2_CAQ_Z_SCORE", "AR1_OVER_RR1",
         "AR2_OVER_RR2", "AR1C_OVER_RR1C", "AR2C_OVER_RR2C", "AR1CE_OVER_RR1CE", "AR2CE_OVER_RR2CE", "AR1E_OVER_RR1E", "AR2E_OVER_RR2E", "AR1_OVER_OAR1", "AR2_OVER_OAR2",
         "AR1C_OVER_OAR1C", "AR2C_OVER_OAR2C", "AR1CE_OVER_OAR1E", "AR2CE_OVER_OAR2E", "AR1E_OVER_OAR1E", "AR2E_OVER_OAR2E", "OAR1_OVER_NAR1", "OAR2_OVER_NAR2", "OAR1C_OVER_NAR1C",
         "OAR2C_OVER_NAR2C", "OAR1E_OVER_NAR1CE", "OAR2E_OVER_NAR2CE", "OAR1E_OVER_NAR1E", "OAR2E_OVER_NAR2E", "OAR1_OVER_TOTAL1", "OAR2_OVER_TOTAL2", "OAR1C_OVER_TOTAL1C",
@@ -676,6 +676,12 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     double er = get_format_number(hdr, record, "ER", 0), erhq = get_format_number(hdr, record, "ERHQ", 0), er1_total = er+ar1+rr1, er2_total = er+ar2+rr2;
     features["ER1_DEVIATION"] = er1_total > 0 ? er/er1_total-(1-exp_alt_reads_freq1) : NAN_VALUE; features["ER2_DEVIATION"] = er2_total > 0 ? er/er2_total-(1-exp_alt_reads_freq2) : NAN_VALUE; features["ER_HQ_RATIO"] = er > 0 ? erhq/er : NAN_VALUE;
     features["AR1_RR1_CAS_Z_SCORE"] = calculate_z_score(ar1cas, ar1css, ar1c, rr1cas, rr1css, rr1c); features["AR2_RR2_CAS_Z_SCORE"] = calculate_z_score(ar2cas, ar2css, ar2c, rr2cas, rr2css, rr2c);
+    double ar1caq = get_format_number(hdr, record, "AR1CAQ", NAN_VALUE), ar1csq = get_format_number(hdr, record, "AR1CSQ", NAN_VALUE);
+    double ar2caq = has_ar2 ? get_format_number(hdr, record, "AR2CAQ", NAN_VALUE) : ar1caq, ar2csq = has_ar2 ? get_format_number(hdr, record, "AR2CSQ", NAN_VALUE) : ar1csq;
+    double rr1caq = get_format_number(hdr, record, "RR1CAQ", NAN_VALUE), rr1csq = get_format_number(hdr, record, "RR1CSQ", NAN_VALUE);
+    double rr2caq = has_rr2 ? get_format_number(hdr, record, "RR2CAQ", NAN_VALUE) : rr1caq, rr2csq = has_rr2 ? get_format_number(hdr, record, "RR2CSQ", NAN_VALUE) : rr1csq;
+    features["AR1_RR1_CAQ_Z_SCORE"] = calculate_z_score(ar1caq, ar1csq, ar1c, rr1caq, rr1csq, rr1c);
+    features["AR2_RR2_CAQ_Z_SCORE"] = calculate_z_score(ar2caq, ar2csq, ar2c, rr2caq, rr2csq, rr2c);
 
 #define ADD_RATIO(NAME, NUM, DEN) features[NAME] = (NUM)/std::max(1.0, (DEN))
     ADD_RATIO("AR1_OVER_RR1", ar1, ar1+rr1); ADD_RATIO("AR2_OVER_RR2", ar2, ar2+rr2); ADD_RATIO("AR1C_OVER_RR1C", ar1c, ar1c+rr1c); ADD_RATIO("AR2C_OVER_RR2C", ar2c, ar2c+rr2c);
