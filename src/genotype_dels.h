@@ -122,10 +122,10 @@ del_read_evidence_t collect_cached_del_read_evidence(deletion_t* del, open_samFi
     char* regions[2];
     regions[0] = strdup(l_region.str().c_str());
     regions[1] = strdup(r_region.str().c_str());
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions, 2);
+    region_read_itr_t iter = query_read_regions(bam_file, regions, 2);
     bam1_t* read = bam_init1();
 
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
@@ -168,7 +168,6 @@ del_read_evidence_t collect_cached_del_read_evidence(deletion_t* del, open_samFi
     free(regions[0]);
     free(regions[1]);
     bam_destroy1(read);
-    hts_itr_destroy(iter);
     return result;
 }
 
@@ -464,6 +463,7 @@ inline void genotype_dels(int id, std::string contig_name, char* contig_seq, int
     evidence_map_t* evidence_map = chromosome_data.second;
 
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
+    auto read_cache = load_region_read_cache(bam_file, contig_name, dels, std::max(stats.max_is + stats.read_len, config.flanking_size) + 2);
 
     std::vector<hts_pair_pos_t> target_ivals;
     for (deletion_t* del : dels) {

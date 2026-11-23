@@ -21,6 +21,7 @@
 #include "htslib/sam.h"
 #include "../libs/ssw_selected.h"
 #include "extend_1sr_consensus.h"
+#include "region_read_cache.h"
 #include "sam_utils.h"
 #include "original_bam_score.h"
 #include "types.h"
@@ -61,16 +62,15 @@ inline void count_exact_junction_reads(sv_t* sv, open_samFile_t* bam_file, char*
         sv->sample_info.alt_junction_reads = sv->sample_info.ref_junction_reads = 0;
         std::stringstream region;
         region << sv->chr << ":" << std::max(hts_pos_t(1), start) << "-" << end+1;
-        hts_itr_t* iter = sam_itr_querys(bam_file->idx, bam_file->header, region.str().c_str());
+        region_read_itr_t iter = query_read_region(bam_file, region.str());
         bam1_t* read = bam_init1();
-        while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+        while (next_region_read(iter, read) >= 0) {
             if (is_unmapped(read) || !is_primary(read) || (read->core.flag & BAM_FDUP)) continue;
             std::string seq = get_sequence(read);
             if (seq.find(alt) != std::string::npos) sv->sample_info.alt_junction_reads++;
             else if (seq.find(ref) != std::string::npos || seq.find(aux_ref) != std::string::npos) sv->sample_info.ref_junction_reads++;
         }
         bam_destroy1(read);
-        hts_itr_destroy(iter);
         return;
     }
 }

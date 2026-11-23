@@ -323,7 +323,7 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     std::stringstream region;
     region << dup->chr << ":" << ref_start << "-" << ref_end;
 
-	hts_itr_t* iter = sam_itr_querys(bam_file->idx, bam_file->header, region.str().c_str());
+	region_read_itr_t iter = query_read_region(bam_file, region.str());
 	
     bam1_t* read = bam_init1();
 
@@ -332,7 +332,7 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     std::vector<std::vector<int>> alt_better_read_positions(alt_seqs.size());
     std::vector<std::vector<int>> alt_better_reads_scores(alt_seqs.size());
 
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
@@ -478,7 +478,6 @@ inline void genotype_small_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     set_bp_consensus_info(dup->sample_info.ref_bp1.reads_info, ref_better_reads, ref_is_consistent_read, ref_is_exact_read, ref_avg_score, ref_stddev_score);
 
     bam_destroy1(read);
-    hts_itr_destroy(iter);
 }
 
 inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
@@ -511,7 +510,7 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     regions[0] = strdup(l_region.str().c_str());
     regions[1] = strdup(r_region.str().c_str());
 
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions, 2);
+    region_read_itr_t iter = query_read_regions(bam_file, regions, 2);
 
     bam1_t* read = bam_init1();
 
@@ -520,7 +519,7 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     std::vector<int> alt_better_reads_scores;
     std::vector<bool> alt_better_read_spans_bp1, alt_better_read_spans_bp2;
 
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
@@ -681,7 +680,6 @@ inline void genotype_large_dup(duplication_t* dup, open_samFile_t* bam_file, Int
     free(regions[1]);
 
     bam_destroy1(read);
-    hts_itr_destroy(iter);
 }
 
 inline void genotype_dups(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::vector<duplication_t*> dups,
@@ -697,6 +695,7 @@ inline void genotype_dups(int id, std::string contig_name, char* contig_seq, hts
     evidence_map_t* evidence_map = chromosome_data.second;
 
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
+    auto read_cache = load_region_read_cache(bam_file, contig_name, dups, std::max(stats.max_is + stats.read_len, config.flanking_size) + 2);
 
     std::vector<hts_pair_pos_t> target_ivals;
     for (duplication_t* dup : dups) {

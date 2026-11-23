@@ -16,6 +16,7 @@
 #include "utils.h"
 #include "sw_utils.h"
 #include "sam_utils.h"
+#include "region_read_cache.h"
 #include "types.h"
 
 struct ext_read_t {
@@ -537,9 +538,9 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 	};
 	std::priority_queue<ext_read_t*, std::vector<ext_read_t*>, ext_read_cmp_mapq> lc_reads_pq;
 
-	// HTSlib merges the expanded regions and returns each record once, in file order.
-	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	// Query the union of expanded regions in file order.
+	region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read)) continue;
 		if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
 
@@ -600,7 +601,6 @@ std::vector<ext_read_t*> get_extension_reads(std::string contig_name, std::vecto
 		lc_reads_pq.pop();
 	}
 
-	hts_itr_destroy(iter);
 	bam_destroy1(read);
 
 	return reads;

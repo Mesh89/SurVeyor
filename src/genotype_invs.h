@@ -92,7 +92,7 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
         regions.push_back(strdup(region.str().c_str()));
     }
 
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+    region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
 
     bam1_t* read = bam_init1();
 
@@ -101,7 +101,7 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
 
     StripedSmithWaterman::Filter filter_with_score_only(false, false, 0, 32767);
     StripedSmithWaterman::Alignment alt_aln, ref_aln;
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
@@ -240,7 +240,6 @@ void genotype_small_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     
     for (char* region : regions) free(region);
     bam_destroy1(read);
-    hts_itr_destroy(iter);
 }
 
 void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree<ext_read_t*>& candidate_reads_for_extension_itree, 
@@ -324,7 +323,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     regions[3] = strdup(ss.str().c_str());
     ss.str("");
 
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions, 4);
+    region_read_itr_t iter = query_read_regions(bam_file, regions, 4);
 
     bam1_t* read = bam_init1();
 
@@ -333,7 +332,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
 
     StripedSmithWaterman::Filter filter_with_score_only(false, false, 0, 32767);
     StripedSmithWaterman::Alignment alt1_aln, alt2_aln, ref1_aln, ref2_aln;
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
@@ -438,7 +437,7 @@ void genotype_large_inv(inversion_t* inv, open_samFile_t* bam_file, IntervalTree
     free(regions[2]);
     free(regions[3]);
     bam_destroy1(read);
-    hts_itr_destroy(iter);
+    iter = {};
 
     sv_consensus_cache::session_t consensus_cache(inv, {{alt_bp1_seq, alt_bp1_better_reads, sv_consensus_cache::LEFT_ANCHOR, alt_bp1_better_reads_isrc}, {alt_bp2_seq, alt_bp2_better_reads, sv_consensus_cache::RIGHT_ANCHOR, alt_bp2_better_reads_isrc}, {ref_bp1_seq.c_str(), ref_bp1_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp1_better_reads_isrc}, {ref_bp2_seq.c_str(), ref_bp2_better_reads, sv_consensus_cache::NO_ANCHORS, ref_bp2_better_reads_isrc}});
     std::string alt_bp1_consensus_seq, alt_bp2_consensus_seq, ref_bp1_consensus_seq, ref_bp2_consensus_seq;
@@ -614,15 +613,17 @@ void genotype_invs(int id, std::string contig_name, char* contig_seq, int contig
     auto chromosome_data = acquire_chromosome_data(contig_id);
     auto mateseqs_w_mapq_chr = chromosome_data.first;
 
+    open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
+    auto read_cache = load_region_read_cache(bam_file, contig_name, invs, std::max(stats.max_is + stats.read_len, config.flanking_size) + 2);
+
     std::vector<hts_pair_pos_t> target_ivals;
     for (inversion_t* inv : invs) {
         target_ivals.push_back({std::max<hts_pos_t>(0, inv->start-GENOTYPE_CONSENSUS_EXTENSION), std::min<hts_pos_t>(contig_len, inv->start+GENOTYPE_CONSENSUS_EXTENSION)});
         target_ivals.push_back({std::max<hts_pos_t>(0, inv->end-GENOTYPE_CONSENSUS_EXTENSION), std::min<hts_pos_t>(contig_len, inv->end+GENOTYPE_CONSENSUS_EXTENSION)});
     }
     std::vector<ext_read_t*> candidate_reads_for_extension;
-    IntervalTree<ext_read_t*> candidate_reads_for_extension_itree = get_candidate_reads_for_extension_itree(contig_name, contig_len, target_ivals, bam_pool->get_bam_reader(id), candidate_reads_for_extension);
+    IntervalTree<ext_read_t*> candidate_reads_for_extension_itree = get_candidate_reads_for_extension_itree(contig_name, contig_len, target_ivals, bam_file, candidate_reads_for_extension);
 
-    open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
     for (inversion_t* inv : invs) {
         if (is_small_inv(inv, stats, config)) {
             genotype_small_inv(inv, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner);

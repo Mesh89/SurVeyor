@@ -253,7 +253,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
     regions[0] = strdup(l_region.str().c_str());
     regions[1] = strdup(r_region.str().c_str());
 
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions, 2);
+    region_read_itr_t iter = query_read_regions(bam_file, regions, 2);
 
     bam1_t* read = bam_init1();
 
@@ -264,7 +264,7 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
     hts_pos_t alt_bp2_pos = alignment_targets.alt_bp2_pos;
 
     int aln_reads = 0;
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
         if (has_sequencing_3prime_poly_g_clip(read)) continue;
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
@@ -473,7 +473,6 @@ inline void genotype_ins(insertion_t* ins, open_samFile_t* bam_file, IntervalTre
     free(regions[1]);
 
     bam_destroy1(read);
-    hts_itr_destroy(iter);
 }
 
 inline void genotype_inss(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<insertion_t*> inss,
@@ -488,15 +487,17 @@ inline void genotype_inss(int id, std::string contig_name, char* contig_seq, int
     auto mateseqs_w_mapq_chr = chromosome_data.first;
     evidence_map_t* evidence_map = chromosome_data.second;
 
+    open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
+    auto read_cache = load_region_read_cache(bam_file, contig_name, inss, std::max(stats.max_is + stats.read_len, config.flanking_size) + 2);
+
     std::vector<hts_pair_pos_t> target_ivals;
     for (insertion_t* ins : inss) {
         target_ivals.push_back({std::max<hts_pos_t>(0, ins->start-GENOTYPE_CONSENSUS_EXTENSION), std::min<hts_pos_t>(contig_len, ins->start+GENOTYPE_CONSENSUS_EXTENSION)});
         target_ivals.push_back({std::max<hts_pos_t>(0, ins->end-GENOTYPE_CONSENSUS_EXTENSION), std::min<hts_pos_t>(contig_len, ins->end+GENOTYPE_CONSENSUS_EXTENSION)});
     }
     std::vector<ext_read_t*> candidate_reads_for_extension;
-    IntervalTree<ext_read_t*> candidate_reads_for_extension_itree = get_candidate_reads_for_extension_itree(contig_name, contig_len, target_ivals, bam_pool->get_bam_reader(id), candidate_reads_for_extension);
+    IntervalTree<ext_read_t*> candidate_reads_for_extension_itree = get_candidate_reads_for_extension_itree(contig_name, contig_len, target_ivals, bam_file, candidate_reads_for_extension);
 
-    open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
     for (insertion_t* ins : inss) {
         genotype_ins(ins, bam_file, candidate_reads_for_extension_itree, *mateseqs_w_mapq_chr, contig_seq, contig_len, stats, config, aligner, evidence_map, hp_mismatch_rate_thresholds);
     }

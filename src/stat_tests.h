@@ -12,6 +12,7 @@
 #include "../libs/ssw_selected.h"
 #include "../libs/ks-test.h"
 #include "genotype.h"
+#include "region_read_cache.h"
 #include "htslib/hts.h"
 #include "types.h"
 #include "utils.h"
@@ -116,10 +117,10 @@ void depth_filter_indel(std::string contig_name, std::vector<sv_t*>& svs, open_s
     }
     merged_regions_of_interest.emplace_back(curr_region.start, curr_region.end);
 
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+    region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
 	bam1_t* read = bam_init1();
 	int curr_pos = 0;
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
 
         hts_pos_t rs = read->core.pos, re = bam_endpos(read);
@@ -167,7 +168,6 @@ void depth_filter_indel(std::string contig_name, std::vector<sv_t*>& svs, open_s
     for (char* region : regions) {
         delete[] region;
     }
-    hts_itr_destroy(iter);
     bam_destroy1(read);
 }
 
@@ -309,9 +309,9 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 	std::vector<stray_read_t> stray_reads;
 
 	int curr_pos = 0;
-	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, l_cluster_regions.data(), l_cluster_regions.size());
+	region_read_itr_t iter = query_read_regions(bam_file, l_cluster_regions.data(), l_cluster_regions.size());
 	bam1_t* read = bam_init1();
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read) || bam_is_rev(read)) continue;
 
 		while (curr_pos < deletions.size() && deletions[curr_pos]->start < read->core.pos) curr_pos++;
@@ -321,7 +321,7 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, read->core.qual, int(get_mq(read)), int(get_nm(read)), 0});
 		}
 	}
-	hts_itr_destroy(iter);
+	iter = {};
 
 	for (int i = 0; i < deletions.size(); i++) {
 		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && deletions[i]->start-stats.max_is <= r.endpos && r.pos <= deletions[i]->start; };
@@ -335,8 +335,8 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 	stray_reads.clear();
 
 	curr_pos = 0;
-	iter = sam_itr_regarray(bam_file->idx, bam_file->header, r_cluster_regions.data(), r_cluster_regions.size());
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	iter = query_read_regions(bam_file, r_cluster_regions.data(), r_cluster_regions.size());
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read) || !bam_is_rev(read)) continue;
 
 		while (curr_pos < deletions.size() && deletions[curr_pos]->end+stats.max_is < read->core.pos) curr_pos++;
@@ -345,7 +345,7 @@ void count_stray_pairs(std::string contig_name, std::vector<deletion_t*> deletio
 			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, int(get_mq(read)), read->core.qual, 0, int(get_nm(read))});
 		}
 	}
-	hts_itr_destroy(iter);
+	iter = {};
 
 	for (int i = 0; i < deletions.size(); i++) {
 		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && deletions[i]->end <= r.endpos && r.pos <= deletions[i]->end+stats.max_is; };
@@ -385,8 +385,8 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 
 	bam1_t* read = bam_init1();
 	int curr_pos = 0;
-	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, rc_cluster_regions.data(), rc_cluster_regions.size());
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	region_read_itr_t iter = query_read_regions(bam_file, rc_cluster_regions.data(), rc_cluster_regions.size());
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read) || !bam_is_rev(read)) continue;
 
 		while (curr_pos < duplications.size() && duplications[curr_pos]->start+stats.max_is < read->core.pos) curr_pos++;
@@ -395,7 +395,7 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, int(get_mq(read)), read->core.qual, 0, int(get_nm(read))});
 		}
 	}
-	hts_itr_destroy(iter);
+	iter = {};
 
 	for (int i = 0; i < duplications.size(); i++) {
 		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && duplications[i]->start <= r.endpos && r.pos <= duplications[i]->start+stats.max_is; };
@@ -413,8 +413,8 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 	stray_reads.clear();
 
 	curr_pos = 0;
-	iter = sam_itr_regarray(bam_file->idx, bam_file->header, lc_cluster_regions.data(), lc_cluster_regions.size());
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	iter = query_read_regions(bam_file, lc_cluster_regions.data(), lc_cluster_regions.size());
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read) || bam_is_rev(read)) continue;
 
 		while (curr_pos < duplications.size() && duplications[curr_pos]->end < read->core.pos) curr_pos++;
@@ -423,7 +423,7 @@ void count_stray_pairs(std::string contig_name, std::vector<duplication_t*>& dup
 			stray_reads.push_back({read->core.pos, bam_endpos(read), curr_pos, read->core.qual, int(get_mq(read)), int(get_nm(read)), 0});
 		}
 	}
-	hts_itr_destroy(iter);
+	iter = {};
 
 	for (int i = 0; i < duplications.size(); i++) {
 		auto takes_read = [&](const stray_read_t& r) { return i >= r.first_candidate && duplications[i]->end-stats.max_is <= r.endpos && r.pos <= duplications[i]->end; };
@@ -471,10 +471,10 @@ void calculate_confidence_interval_size(std::string contig_name, const std::vect
     }
 
 	int curr_pos = 0;
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+    region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
     bam1_t* read = bam_init1();
     std::vector<std::vector<double> > local_dists(svs.size());
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
 
     	if (is_unmapped(read) || is_mate_unmapped(read) || !is_primary(read)) continue;
         if (!is_samechr(read) || is_samestr(read) || bam_is_rev(read) || read->core.isize <= 0) continue;
@@ -515,7 +515,6 @@ void calculate_confidence_interval_size(std::string contig_name, const std::vect
     for (char* region : regions) {
         delete[] region;
     }
-    hts_itr_destroy(iter);
     bam_destroy1(read);
 }
 
@@ -648,9 +647,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<deletion_t*>& dele
 	std::vector<pairs_data_t> neutral_bp1_pairs_data(deletions.size()), neutral_bp2_pairs_data(deletions.size());
 
 	int curr_del_bystart_idx = 0, curr_del_byend_idx = 0;
-	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+	region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
 	bam1_t* read = bam_init1();
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read) || bam_is_rev(read)) continue;
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read) || read->core.isize <= 0) continue;
 
@@ -727,9 +726,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<duplication_t*>& d
 
 	int curr_dup_dp_idx = 0;
 	int curr_dup_bystart_idx = 0, curr_dup_byend_idx = 0;
-	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+	region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
 	bam1_t* read = bam_init1();
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read)) continue;
 		if (is_mate_unmapped(read) || !is_samechr(read) || is_samestr(read)) continue;
 
@@ -826,9 +825,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
 	std::unordered_map<std::string, pending_pair_t> pairs_waiting_for_neg_nm;
 
 	int curr_del_bystart_idx = 0, curr_del_byend_idx = 0;
-    hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+    region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
     bam1_t* read = bam_init1();
-    while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+    while (next_region_read(iter, read) >= 0) {
         if (is_unmapped(read) || !is_primary(read)) continue;
 
         while (curr_del_bystart_idx < insertions_by_start.size() && insertions_by_start[curr_del_bystart_idx]->start < read->core.pos) curr_del_bystart_idx++;
@@ -927,7 +926,6 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<insertion_t*>& ins
     }
 
     for (char* region : regions) free(region);
-    hts_itr_destroy(iter);
     bam_destroy1(read);
 
 }
@@ -962,9 +960,9 @@ void calculate_ptn_ratio(std::string contig_name, std::vector<inversion_t*>& inv
 	std::vector<std::vector<int> > supp_pairs_bp2_pos_mqs(inversions.size()), supp_pairs_bp2_neg_mqs(inversions.size());
 	
 	int by_start_idx = 0, by_end_idx = 0;
-	hts_itr_t* iter = sam_itr_regarray(bam_file->idx, bam_file->header, regions.data(), regions.size());
+	region_read_itr_t iter = query_read_regions(bam_file, regions.data(), regions.size());
 	bam1_t* read = bam_init1();
-	while (sam_itr_next(bam_file->file, iter, read) >= 0) {
+	while (next_region_read(iter, read) >= 0) {
 		if (is_unmapped(read) || !is_primary(read) || !is_samechr(read) || !is_samestr(read)) continue;
 
 		if (bam_is_rev(read)) {
