@@ -808,6 +808,9 @@ static int8_t* seq_reverse(const int8_t* seq, int32_t end)	/* end is 0-based ali
 }
 
 #include "ssw_avx2_fallback.h"
+#define ssw_valid_cigar ssw_avx2_valid_cigar
+#include "ssw_consensus_impl.h"
+#undef ssw_valid_cigar
 
 s_profile* ssw_init (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n, const int8_t score_size) {
 	return ssw_init_ref(read, readLen, mat, n, n, score_size);

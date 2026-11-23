@@ -929,6 +929,8 @@ static int ssw_valid_cigar(const s_profile* p,const int8_t* ref,const s_align* a
     return score==a->score1&&q==a->read_end1+1&&r==a->ref_end1+1;
 }
 
+#include "ssw_consensus_impl.h"
+
 s_profile* ssw_init (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n, const int8_t score_size) {
 	return ssw_init_ref(read, readLen, mat, n, n, score_size);
 }

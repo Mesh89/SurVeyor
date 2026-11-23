@@ -21,6 +21,8 @@ ssw_avx2_profile* ssw_avx2_init_ref(const int8_t*, int32_t, const int8_t*, int32
 void ssw_avx2_init_destroy(ssw_avx2_profile*);
 s_align* ssw_avx2_align(const ssw_avx2_profile*, const int8_t*, int32_t,
                       uint8_t, uint8_t, uint8_t, uint16_t, int32_t, int32_t);
+enum ssw_consensus_path ssw_avx2_try_align_consensus(const int8_t*, int32_t, const int8_t*, int32_t,
+                                                  const int8_t*, int32_t, uint8_t, uint8_t, s_align*);
 void ssw_avx2_align_destroy(s_align*);
 s_align* ssw_avx2_align_clip(const ssw_avx2_profile*, const int8_t*, int32_t, uint8_t, uint8_t, uint8_t, uint8_t, uint16_t, int32_t, int32_t);
 s_align_semiglobal* ssw_avx2_align_semiglobal(const ssw_avx2_profile*, const int8_t*, int32_t, uint8_t, uint8_t, uint8_t, int32_t, int32_t, int32_t);
@@ -38,6 +40,7 @@ static inline uint32_t ssw_avx2_to_cigar_int(uint32_t len, unsigned char op) {
 #define ssw_init ssw_avx2_init
 #define ssw_init_ref ssw_avx2_init_ref
 #define ssw_align ssw_avx2_align
+#define ssw_try_align_consensus ssw_avx2_try_align_consensus
 #define ssw_align_clip ssw_avx2_align_clip
 #define ssw_align_semiglobal ssw_avx2_align_semiglobal
 #define align_destroy_semiglobal ssw_avx2_align_destroy_semiglobal

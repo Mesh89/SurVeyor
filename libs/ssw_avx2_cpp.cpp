@@ -419,6 +419,18 @@ bool Aligner::Align(const char* query, const Filter& filter,
 bool Aligner::Align(const char* query, const char* ref, const int& ref_len,
                     const Filter& filter, Alignment* alignment, const int32_t maskLen) const
 {
+  return AlignReference(query, ref, ref_len, filter, alignment, maskLen, false);
+}
+
+bool Aligner::AlignConsensus(const char* query, const char* ref, const int& ref_len,
+                             const Filter& filter, Alignment* alignment, int32_t maskLen) const
+{
+  return AlignReference(query, ref, ref_len, filter, alignment, maskLen, true);
+}
+
+bool Aligner::AlignReference(const char* query, const char* ref, int ref_len, const Filter& filter,
+                             Alignment* alignment, int32_t maskLen, bool consensus) const
+{
   if (!translation_matrix_) return false;
   if (ref_len <= 0) return false;
 
@@ -456,19 +468,21 @@ bool Aligner::Align(const char* query, const char* ref, const int& ref_len,
   TranslateBase(ref, valid_ref_len, translated_ref);
 
 
-  const int8_t score_size = 2;
-  s_profile* profile = ssw_init_ref(translated_query, query_len, score_matrix_,
-                                score_matrix_size_, target_alphabet_size_, score_size);
-
+  s_align fast_alignment{};
   uint8_t flag = 0;
   SetFlag(filter, &flag);
-  s_align* s_al = ssw_align(profile, translated_ref, valid_ref_len,
-                                 static_cast<int>(gap_opening_penalty_),
-				 static_cast<int>(gap_extending_penalty_),
-				 flag, filter.score_filter, filter.distance_filter, maskLen);
+  bool fast = consensus && flag == 0x0f && maskLen < 15 && filter.score_filter == 0 && filter.distance_filter == 32767 && target_alphabet_size_ <= score_matrix_size_ &&
+              ssw_try_align_consensus(translated_query, query_len, translated_ref, valid_ref_len, score_matrix_, score_matrix_size_, gap_opening_penalty_, gap_extending_penalty_, &fast_alignment) != SSW_CONSENSUS_FULL;
+  s_align* s_al = &fast_alignment;
+  if (!fast) {
+    const int8_t score_size = 2;
+    s_profile* profile = ssw_init_ref(translated_query, query_len, score_matrix_, score_matrix_size_, target_alphabet_size_, score_size);
+    s_al = ssw_align(profile, translated_ref, valid_ref_len, gap_opening_penalty_, gap_extending_penalty_, flag, filter.score_filter, filter.distance_filter, maskLen);
+    init_destroy(profile);
+  }
 
   alignment->Clear();
-  if (!s_al) { delete [] translated_query; delete [] translated_ref; init_destroy(profile); return false; }
+  if (!s_al) { delete [] translated_query; delete [] translated_ref; return false; }
   ConvertAlignment(*s_al, query_len, alignment);
   // for some reason, when the alignment is empty, ref_begin is -1 but cigar is 1M. This causes an out of bound access in CalculateNumberMismatch
   alignment->mismatches = alignment->ref_begin < 0 ? 0 : CalculateNumberMismatch(&*alignment, translated_ref, translated_query, query_len);
@@ -476,8 +490,8 @@ bool Aligner::Align(const char* query, const char* ref, const int& ref_len,
   // Free memory
   delete [] translated_query;
   delete [] translated_ref;
-  align_destroy(s_al);
-  init_destroy(profile);
+  if (fast) free(fast_alignment.cigar);
+  else align_destroy(s_al);
 
   cache.store(std::move(cache_key), *alignment);
 

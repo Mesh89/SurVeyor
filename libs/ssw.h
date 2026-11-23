@@ -69,6 +69,15 @@ typedef struct {
 	uint16_t* prefix_scores;
 } s_align;
 
+enum ssw_consensus_path { SSW_CONSENSUS_FULL, SSW_CONSENSUS_EXACT, SSW_CONSENSUS_BANDED };
+
+/* Opt-in fast path for genotype's unfiltered local CIGAR, with no secondary
+ * or prefix scores. On success the caller owns result->cigar. FULL means
+ * the caller must use ssw_align with the original arguments. */
+enum ssw_consensus_path ssw_try_align_consensus(const int8_t* read, int32_t readLen,
+		const int8_t* ref, int32_t refLen, const int8_t* mat, int32_t n,
+		uint8_t gap_open, uint8_t gap_extend, s_align* result);
+
 /* Full-query alignment with free reference flanks. Scores are signed; an
  * insertion-only alignment has ref_begin1 = 0, ref_end1 = -1. An unavailable
  * second score is INT32_MIN, with ref_end2 = -1. Prefix scores consume the

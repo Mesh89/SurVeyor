@@ -230,6 +230,10 @@ class Aligner {
   bool Align(const char* query, const char* ref, const int& ref_len,
              const Filter& filter, Alignment* alignment, const int32_t maskLen) const;
 
+  // Opt in to genotype's exact local-alignment shortcuts.
+  bool AlignConsensus(const char* query, const char* ref, const int& ref_len,
+                      const Filter& filter, Alignment* alignment, int32_t maskLen) const;
+
   // Local alignment with a fixed penalty for each nonempty clipped query end.
   // Scores/filters include the penalties; nonpositive scores give an empty result.
   // Prefix scores include clipping relative to the full query, floored at zero.
@@ -280,6 +284,9 @@ class Aligner {
 	  const int&    translation_matrix_size);
 
  private:
+  bool AlignReference(const char* query, const char* ref, int ref_len, const Filter& filter,
+                      Alignment* alignment, int32_t maskLen, bool consensus) const;
+
   int8_t* score_matrix_;
   int     score_matrix_size_;
   int     target_alphabet_size_;
