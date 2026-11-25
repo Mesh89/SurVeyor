@@ -29,6 +29,10 @@
 #include "vcf_utils.h"
 
 struct hp_mismatch_rate_thresholds_t;
+struct hp_stutter_profile_t;
+struct hp_stutter_run_t;
+
+void annotate_hp_stutter(open_samFile_t* bam_file, const std::string& contig_name, char* contig_seq, hts_pos_t contig_len, const std::vector<const hp_stutter_run_t*>& runs, const hp_stutter_profile_t& profile, const config_t& config, const stats_t& stats);
 
 constexpr double MIN_EPR = 0.05;
 constexpr double CALL_EPR = 0.5;

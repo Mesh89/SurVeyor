@@ -15,6 +15,7 @@
 
 #include "hp_read_info.h"
 #include "consensus.h"
+#include "region_read_cache.h"
 #include "sw_utils.h"
 #include "ungapped_alignment.h"
 
@@ -494,11 +495,11 @@ inline hp_read_info_t estimate_hp_read_for_calibration(bam1_t* read, const hp_ru
 inline void collect_hp_5p_blocker_evidence(open_samFile_t* alignment_file, const std::string& contig_name, std::vector<hp_run_context_t>& hp_runs, const config_t& config, const stats_t& stats) {
     if (hp_runs.empty()) return;
     std::string region = contig_name + ":" + std::to_string(hp_runs.front().beg + 1) + "-" + std::to_string(hp_runs.back().end);
-    std::unique_ptr<hts_itr_t, decltype(&hts_itr_destroy)> iter(sam_itr_querys(alignment_file->idx, alignment_file->header, region.c_str()), &hts_itr_destroy);
-    if (!iter) throw std::runtime_error("Unable to query alignments for " + region + ".");
+    region_read_itr_t iter = query_read_region(alignment_file, region);
+    if (!iter.cache && !iter.hts_iter) throw std::runtime_error("Unable to query alignments for " + region + ".");
     std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read(bam_init1(), &bam_destroy1);
     int status;
-    while ((status = sam_itr_next(alignment_file->file, iter.get(), read.get())) >= 0) {
+    while ((status = next_region_read(iter, read.get())) >= 0) {
         auto first = std::upper_bound(hp_runs.begin(), hp_runs.end(), read->core.pos, [](hts_pos_t pos, const hp_run_context_t& run) { return pos < run.end; });
         for (auto run = first; run != hp_runs.end() && run->beg < bam_endpos(read.get()); run++) add_hp_5p_blocker_evidence(read.get(), *run, config, stats);
     }
@@ -514,12 +515,12 @@ inline std::map<int,int> measure_hp_run_length_histogram(open_samFile_t* f, cons
     collect_hp_5p_blocker_evidence(f, contig_name, runs, config, stats);
     run = runs[0];
     std::string region = contig_name + ":" + std::to_string(beg + 1) + "-" + std::to_string(end);
-    std::unique_ptr<hts_itr_t, decltype(&hts_itr_destroy)> iter(sam_itr_querys(f->idx, f->header, region.c_str()), &hts_itr_destroy);
-    if (!iter) throw std::runtime_error("Unable to query alignments for " + region + ".");
+    region_read_itr_t iter = query_read_region(f, region);
+    if (!iter.cache && !iter.hts_iter) throw std::runtime_error("Unable to query alignments for " + region + ".");
     std::unique_ptr<bam1_t, decltype(&bam_destroy1)> read(bam_init1(), &bam_destroy1);
     std::map<int,int> hist;
     int status;
-    while ((status = sam_itr_next(f->file, iter.get(), read.get())) >= 0) {
+    while ((status = next_region_read(iter, read.get())) >= 0) {
         if (is_unmapped(read.get()) || !is_primary(read.get()) || read->core.l_qseq <= 0) continue;
         hp_read_info_t info = estimate_hp_read_for_calibration(read.get(), run, contig_seq, contig_len, config);
         if (is_usable_hp_read(info, config.min_clip_len, config.max_seq_error)) hist[info.hp_len]++;

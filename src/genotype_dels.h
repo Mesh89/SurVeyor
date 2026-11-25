@@ -452,7 +452,8 @@ inline void genotype_del(deletion_t* del, open_samFile_t* bam_file, IntervalTree
 
 inline void genotype_dels(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<deletion_t*> dels,
     bcf_hdr_t* in_vcf_header, bcf_hdr_t* out_vcf_header, stats_t& stats, config_t& config, contig_map_t& contig_map,
-    bam_pool_t* bam_pool, std::string workdir, std::vector<double>* global_crossing_isize_dist, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds) {
+    bam_pool_t* bam_pool, std::string workdir, std::vector<double>* global_crossing_isize_dist, const hp_mismatch_rate_thresholds_t* hp_mismatch_rate_thresholds,
+    const std::vector<const hp_stutter_run_t*>& hp_stutter_runs, const hp_stutter_profile_t& hp_stutter_profile) {
 
     surveyor_cache::start_block();
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
@@ -464,6 +465,7 @@ inline void genotype_dels(int id, std::string contig_name, char* contig_seq, int
 
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
     auto read_cache = load_region_read_cache(bam_file, contig_name, dels, std::max(stats.max_is + stats.read_len, config.flanking_size) + 2);
+    annotate_hp_stutter(bam_file, contig_name, contig_seq, contig_len, hp_stutter_runs, hp_stutter_profile, config, stats);
 
     std::vector<hts_pair_pos_t> target_ivals;
     for (deletion_t* del : dels) {

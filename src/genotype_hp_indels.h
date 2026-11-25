@@ -1137,7 +1137,8 @@ inline void genotype_hp_indels_group(std::vector<sv_t*>& hp_indels, hts_pair_pos
 
 // hp_indels are guaranteed to be on the same chromosome
 inline void genotype_hp_indels(int id, std::string contig_name, char* contig_seq, int contig_len, std::vector<sv_t*> hp_indels,
-    stats_t& stats, config_t& config, contig_map_t& contig_map, bam_pool_t* bam_pool, std::vector<double>* global_crossing_isize_dist, evidence_mode_t evidence_mode) {
+    stats_t& stats, config_t& config, contig_map_t& contig_map, bam_pool_t* bam_pool, std::vector<double>* global_crossing_isize_dist, evidence_mode_t evidence_mode,
+    const std::vector<const hp_stutter_run_t*>& hp_stutter_runs, const hp_stutter_profile_t& hp_stutter_profile) {
 
     surveyor_cache::start_block();
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
@@ -1154,6 +1155,7 @@ inline void genotype_hp_indels(int id, std::string contig_name, char* contig_seq
     }
 
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
+    annotate_hp_stutter(bam_file, contig_name, contig_seq, contig_len, hp_stutter_runs, hp_stutter_profile, config, stats);
 
     for (auto& kv : hp_indels_by_ref_hp_range) {
         std::vector<sv_t*>& hp_indels_in_range = kv.second;

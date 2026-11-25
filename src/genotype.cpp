@@ -257,22 +257,9 @@ bool genotype_when_reassigning_evidence(const sv_t* sv) {
     return config.training_mode || sv->sample_info.epr >= MIN_EPR;
 }
 
-// Write only hp_stutter_alpha, hp_run_s and hp_run_s_norm for the run groups in runs.
-// id selects a reader from bam_pool; contig_name/contig_seq/contig_len identify the reference.
-// profile supplies stutter rates; reassign_evidence skips groups with no records selected for pass 2.
-void annotate_hp_stutter(int id, std::string contig_name, char* contig_seq, hts_pos_t contig_len, std::vector<const hp_stutter_run_t*> runs, const hp_stutter_profile_t* profile, bam_pool_t* bam_pool, bool reassign_evidence) {
-    open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
+// Each run has one worker, which annotates all its alleles using the same histogram.
+void annotate_hp_stutter(open_samFile_t* bam_file, const std::string& contig_name, char* contig_seq, hts_pos_t contig_len, const std::vector<const hp_stutter_run_t*>& runs, const hp_stutter_profile_t& profile, const config_t& config, const stats_t& stats) {
     for (const hp_stutter_run_t* run : runs) {
-        if (reassign_evidence) {
-            bool any_genotyped = false;
-            for (const auto& record : run->records) {
-                if (genotype_when_reassigning_evidence(record.first)) {
-                    any_genotyped = true;
-                    break;
-                }
-            }
-            if (!any_genotyped) continue;
-        }
         std::map<int,int> h = measure_hp_run_length_histogram(bam_file, contig_name, run->range.beg, run->range.end, run->base, contig_seq, contig_len, config, stats);
         if (h.empty()) continue;
         int R = run->range.end - run->range.beg;
@@ -280,11 +267,21 @@ void annotate_hp_stutter(int id, std::string contig_name, char* contig_seq, hts_
         for (const auto& observation : h) n += observation.second;
         std::vector<int> T = candidate_true_lengths(h, run->allele_lengths);
         for (const auto& record : run->records) {
-            record.first->hp_run_s = hp_stutter_run_score(*profile, run->base, h, T, record.second);
-            record.first->hp_run_s_norm = record.first->hp_run_s / std::max(hp_stutter_expected_run_score(*profile, run->base, R, run->allele_lengths, record.second, n), 1e-3);
-            record.first->hp_stutter_alpha = hp_stutter_alpha(*profile, run->base, h, run->allele_lengths, record.second);
+            record.first->hp_run_s = hp_stutter_run_score(profile, run->base, h, T, record.second);
+            record.first->hp_run_s_norm = record.first->hp_run_s / std::max(hp_stutter_expected_run_score(profile, run->base, R, run->allele_lengths, record.second, n), 1e-3);
+            record.first->hp_stutter_alpha = hp_stutter_alpha(profile, run->base, h, run->allele_lengths, record.second);
         }
     }
+}
+
+template<typename Variant>
+std::vector<const hp_stutter_run_t*> hp_stutter_runs_for_block(const std::vector<Variant*>& records, const std::unordered_map<const sv_t*, const hp_stutter_run_t*>& runs_by_owner) {
+    std::vector<const hp_stutter_run_t*> runs;
+    for (Variant* record : records) {
+        auto run = runs_by_owner.find(record);
+        if (run != runs_by_owner.end()) runs.push_back(run->second);
+    }
+    return runs;
 }
 
 void update_other_read_support_fields(bcf_hdr_t* out_hdr, bcf1_t* record, const std::string& prefix, int bp_number, bool computed, int reads, int consistent, int consistent_hq, int exact) {
@@ -1563,7 +1560,6 @@ int main(int argc, char* argv[]) {
     ctpl::thread_pool thread_pool(config.threads);
     std::vector<std::future<void> > futures;
     const int BLOCK_SIZE = 20;
-    const int HP_STUTTER_BLOCK_SIZE = 1000;
     auto register_block = [&](int contig_id) {
         std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
         remaining_blocks_per_chr[contig_id]++;
@@ -1571,6 +1567,17 @@ int main(int argc, char* argv[]) {
 
     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
 	    	std::string contig_name = contig_map.get_name(contig_id);
+
+        // Assign the run to the first eligible allele. All alleles still contribute to scoring.
+        std::unordered_map<const sv_t*, const hp_stutter_run_t*> hp_stutter_runs_by_owner;
+        for (const auto& entry : hp_stutter_runs_by_contig[contig_id]) {
+            const hp_stutter_run_t& run = entry.second;
+            for (const auto& record : run.records) {
+                if (reassign_evidence && !genotype_when_reassigning_evidence(record.first)) continue;
+                hp_stutter_runs_by_owner.emplace(record.first, &run);
+                break;
+            }
+        }
 
         std::vector<std::shared_ptr<sv_t>>& hps = hp_by_chr[contig_name];
         std::vector<hts_pair_pos_t> ref_hp_ranges;
@@ -1584,9 +1591,7 @@ int main(int argc, char* argv[]) {
             if ((i == hps.size()-1 && !block_hps.empty()) 
             || (block_hps.size() >= BLOCK_SIZE && ref_hp_ranges[i].beg != ref_hp_ranges[i+1].beg)) {
                 register_block(contig_id);
-                std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name),
-                        chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool,
-                        &global_crossing_isize_dist, evidence_mode);
+                std::future<void> future = thread_pool.push(genotype_hp_indels, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_hps, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, &global_crossing_isize_dist, evidence_mode, hp_stutter_runs_for_block(block_hps, hp_stutter_runs_by_owner), std::cref(hp_stutter_profile));
                 futures.push_back(std::move(future));
                 block_hps.clear();
             }
@@ -1600,7 +1605,7 @@ int main(int argc, char* argv[]) {
             }
             if (block_dels.size() == BLOCK_SIZE || (i == dels.size()-1 && !block_dels.empty())) {
                 register_block(contig_id);
-                std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
+                std::future<void> future = thread_pool.push(genotype_dels, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_dels, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, workdir, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds, hp_stutter_runs_for_block(block_dels, hp_stutter_runs_by_owner), std::cref(hp_stutter_profile));
                 futures.push_back(std::move(future));
                 block_dels.clear();
             }
@@ -1628,7 +1633,7 @@ int main(int argc, char* argv[]) {
             }
             if (block_inss.size() == BLOCK_SIZE || (i == inss.size()-1 && !block_inss.empty())) {
                 register_block(contig_id);
-                std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds);
+                std::future<void> future = thread_pool.push(genotype_inss, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_inss, in_vcf_header, out_vcf_header, std::ref(stats), std::ref(config), std::ref(contig_map), bam_pool, &global_crossing_isize_dist, &hp_mismatch_rate_thresholds, hp_stutter_runs_for_block(block_inss, hp_stutter_runs_by_owner), std::cref(hp_stutter_profile));
                 futures.push_back(std::move(future));
                 block_inss.clear();
             }
@@ -1648,14 +1653,6 @@ int main(int argc, char* argv[]) {
                 futures.push_back(std::move(future));
                 block_invs.clear();
             }
-        }
-        auto& hp_stutter_runs = hp_stutter_runs_by_contig[contig_id];
-        auto run = hp_stutter_runs.begin();
-        while (run != hp_stutter_runs.end()) {
-            std::vector<const hp_stutter_run_t*> block_runs;
-            for (int i = 0; i < HP_STUTTER_BLOCK_SIZE && run != hp_stutter_runs.end(); i++, run++) block_runs.push_back(&run->second);
-            std::future<void> future = thread_pool.push(annotate_hp_stutter, contig_name, chr_seqs.get_seq(contig_name), chr_seqs.get_len(contig_name), block_runs, &hp_stutter_profile, bam_pool, reassign_evidence);
-            futures.push_back(std::move(future));
         }
         std::lock_guard<std::mutex> lock(mutex_per_chr[contig_id]);
         if (--remaining_blocks_per_chr[contig_id] == 0) {
