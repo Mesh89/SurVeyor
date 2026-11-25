@@ -2,6 +2,7 @@
 #define VAR_UTILS_H
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <stdexcept>
 #include "types.h"
@@ -45,6 +46,48 @@ inline bool is_homopolymer_indel(sv_t* sv, char* chr_seq) {
 		return true;
 	}
 	return false;
+}
+
+inline bool get_adjacent_hp(sv_t* sv, const char* chr_seq, hts_pos_t chr_len, int32_t& hp_len, int32_t& hp_side) {
+	if (sv->hp_genotyped) return false;
+	std::string svtype = sv->svtype();
+	bool is_del = svtype == "DEL";
+	if (is_del) {
+		if (!sv->ins_seq.empty() || sv->start >= sv->end) return false;
+	} else if (svtype != "INS" || sv->start != sv->end || sv->ins_seq.empty()) return false;
+
+	hts_pos_t right_start = sv->end+1;
+	char left_base = toupper(chr_seq[sv->start]);
+	char right_base = right_start < chr_len ? toupper(chr_seq[right_start]) : '\0';
+	hts_pos_t m = 0, k = 0;
+	if (is_del) {
+		hts_pos_t n = sv->end-sv->start;
+		while (m < n && toupper(chr_seq[sv->start+1+m]) == left_base) m++;
+		if (m == n) return false;
+		if (right_start < chr_len) {
+			while (k < n && toupper(chr_seq[sv->end-k]) == right_base) k++;
+			if (k == n) return false;
+		}
+	} else {
+		char ins_base = toupper(sv->ins_seq[0]);
+		if ((ins_base == left_base || (right_start < chr_len && ins_base == right_base)) && std::all_of(sv->ins_seq.begin(), sv->ins_seq.end(), [ins_base](unsigned char c) { return toupper(c) == ins_base; })) return false;
+	}
+
+	hts_pos_t left_len = 0, right_len = 0;
+	if (left_base == 'A' || left_base == 'C' || left_base == 'G' || left_base == 'T') {
+		hts_pos_t left_beg = sv->start;
+		while (left_beg > 0 && toupper(chr_seq[left_beg-1]) == left_base) left_beg--;
+		left_len = sv->start+m-left_beg+1;
+	}
+	if (right_base == 'A' || right_base == 'C' || right_base == 'G' || right_base == 'T') {
+		hts_pos_t right_end = right_start;
+		while (right_end < chr_len && toupper(chr_seq[right_end]) == right_base) right_end++;
+		right_len = right_end-right_start+k;
+	}
+	if (left_len == right_len) return false;
+	hp_len = std::max(left_len, right_len);
+	hp_side = left_len > right_len ? -1 : 1;
+	return true;
 }
 
 inline char get_homopolymer_base(sv_t* sv, char* chr_seq) {

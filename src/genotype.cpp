@@ -458,6 +458,14 @@ void update_record(bcf_hdr_t* in_hdr, bcf_hdr_t* out_hdr, sv_t* sv, char* chr_se
     }
     if (sv->ref1_hp_len >= 0) bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF1_HP_LEN", &sv->ref1_hp_len, 1);
     else bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF1_HP_LEN", NULL, 0);
+    int32_t adj_hp_len, adj_hp_side;
+    if (get_adjacent_hp(sv, chr_seq, chr_len, adj_hp_len, adj_hp_side)) {
+        bcf_update_info_int32(out_hdr, sv->vcf_entry, "ADJ_HP_LEN", &adj_hp_len, 1);
+        bcf_update_info_int32(out_hdr, sv->vcf_entry, "ADJ_HP_SIDE", &adj_hp_side, 1);
+    } else {
+        bcf_update_info_int32(out_hdr, sv->vcf_entry, "ADJ_HP_LEN", NULL, 0);
+        bcf_update_info_int32(out_hdr, sv->vcf_entry, "ADJ_HP_SIDE", NULL, 0);
+    }
     if (sv->ref2_hp_len >= 0) bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF2_HP_LEN", &sv->ref2_hp_len, 1);
     else bcf_update_info_int32(out_hdr, sv->vcf_entry, "REF2_HP_LEN", NULL, 0);
     if (sv->alt1_hp_len >= 0) bcf_update_info_int32(out_hdr, sv->vcf_entry, "ALT1_HP_LEN", &sv->alt1_hp_len, 1);

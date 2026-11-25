@@ -361,6 +361,14 @@ void add_fmt_tags(bcf_hdr_t* hdr) {
 	const char* ref1_hp_len_tag = "##INFO=<ID=REF1_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longest homopolymer in the breakpoint 1 reference allele sequence.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ref1_hp_len_tag, &len));
 
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "ADJ_HP_LEN");
+	const char* adj_hp_len_tag = "##INFO=<ID=ADJ_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longer reference homopolymer directly adjacent to the bases changed by this indel, including deleted bases that continue it. Missing for homopolymer-length indels and ties.\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, adj_hp_len_tag, &len));
+
+	bcf_hdr_remove(hdr, BCF_HL_INFO, "ADJ_HP_SIDE");
+	const char* adj_hp_side_tag = "##INFO=<ID=ADJ_HP_SIDE,Number=1,Type=Integer,Description=\"-1 if the ADJ_HP_LEN homopolymer is left of the changed bases (forward-strand reads cross it first), +1 if right (reverse-strand reads cross it first).\">";
+	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, adj_hp_side_tag, &len));
+
 	bcf_hdr_remove(hdr, BCF_HL_INFO, "REF2_HP_LEN");
 	const char* ref2_hp_len_tag = "##INFO=<ID=REF2_HP_LEN,Number=1,Type=Integer,Description=\"Length of the longest homopolymer in the breakpoint 2 reference allele sequence.\">";
 	bcf_hdr_add_hrec(hdr, bcf_hdr_parse_line(hdr, ref2_hp_len_tag, &len));
