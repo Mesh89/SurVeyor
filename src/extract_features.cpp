@@ -78,6 +78,7 @@ const std::vector<std::string>& default_feature_names() {
         "SSP1mQ_2", "SSP1MQ_1", "SSP1MQ_2", "SSP2mQ_1", "SSP2mQ_2", "SSP2MQ_1", "SSP2MQ_2", "SSP1_RSP1_1_NM_Z_SCORE", "SSP1_RSP1_2_NM_Z_SCORE", "SSP2_RSP2_1_NM_Z_SCORE",
         "SSP2_RSP2_2_NM_Z_SCORE",
         "HP_RUN_S_NORM",
+        "ADJ_HP_LEN", "ADJ_HP_EXPOSED_ALT_SHARE", "ADJ_HP_CLEAN_ALT_FRAC",
     };
     return names;
 }
@@ -510,6 +511,16 @@ void add_read_pair_features(features_t& features, bcf_hdr_t* hdr, bcf1_t* record
     features[prefix+"MQ_1"] = max_mq[0]; features[prefix+"MQ_2"] = max_mq[1];
 }
 
+std::pair<double, double> adjacent_hp_strand_features(double side, double alt_forward, double alt_reverse, double ref_forward, double ref_reverse) {
+    if (std::isnan(side)) return {NAN_VALUE, NAN_VALUE};
+    bool forward_exposed = side == -1;
+    double exposed_alt = forward_exposed ? alt_forward : alt_reverse;
+    double clean_alt = forward_exposed ? alt_reverse : alt_forward;
+    double clean_ref = forward_exposed ? ref_reverse : ref_forward;
+    double total_alt = exposed_alt+clean_alt, clean_total = clean_alt+clean_ref;
+    return {total_alt == 0 ? NAN_VALUE : exposed_alt/total_alt, clean_total == 0 ? NAN_VALUE : clean_alt/clean_total};
+}
+
 std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const stats_t& stats, const std::vector<std::string>& feature_names, const std::unordered_map<std::string, std::vector<alt_read_metrics_t>>& alt_reads_by_vid) {
     std::string chrom = bcf_seqname(hdr, record);
     double min_depth = get_stat(stats, "min_depth", chrom), max_depth = get_stat(stats, "max_depth", chrom);
@@ -658,6 +669,13 @@ std::vector<double> record_to_features(bcf_hdr_t* hdr, bcf1_t* record, const sta
     double rr1cf = get_format_number(hdr, record, "RR1CF", 0), rr1cr = get_format_number(hdr, record, "RR1CR", 0), rr2cf = has_rr2 ? get_format_number(hdr, record, "RR2CF", 0) : rr1cf, rr2cr = has_rr2 ? get_format_number(hdr, record, "RR2CR", 0) : rr1cr;
     double rr1cf_ratio = rr1cf/std::max(1.0, rr1cf+rr1cr), rr1cr_ratio = rr1cr/std::max(1.0, rr1cf+rr1cr), rr2cf_ratio = rr2cf/std::max(1.0, rr2cf+rr2cr), rr2cr_ratio = rr2cr/std::max(1.0, rr2cf+rr2cr);
     features["RRCF"] = rr1cf_ratio+rr2cf_ratio; features["RRCR"] = rr1cr_ratio+rr2cr_ratio; features["MAXRRCD"] = std::max(features["RRCF"], features["RRCR"]);
+
+    features["ADJ_HP_LEN"] = get_info_number(hdr, record, "ADJ_HP_LEN", NAN_VALUE);
+    double adj_hp_side = get_info_number(hdr, record, "ADJ_HP_SIDE", NAN_VALUE);
+    double alt_forward = ar1cf_count+(has_ar2 ? ar2cf_count : ar1cf_count), alt_reverse = ar1cr_count+(has_ar2 ? ar2cr_count : ar1cr_count);
+    auto adj_hp_strand = adjacent_hp_strand_features(adj_hp_side, alt_forward, alt_reverse, rr1cf+rr2cf, rr1cr+rr2cr);
+    features["ADJ_HP_EXPOSED_ALT_SHARE"] = adj_hp_strand.first; features["ADJ_HP_CLEAN_ALT_FRAC"] = adj_hp_strand.second;
+
     double rr1cef = get_format_number(hdr, record, "RR1CEF", 0, std::max(1.0, rr1ce)), rr1cer = get_format_number(hdr, record, "RR1CER", 0, std::max(1.0, rr1ce));
     double rr2cef = has_rr2 ? get_format_number(hdr, record, "RR2CEF", 0, std::max(1.0, rr2ce)) : rr1cef, rr2cer = has_rr2 ? get_format_number(hdr, record, "RR2CER", 0, std::max(1.0, rr2ce)) : rr1cer;
     features["RRCEF"] = rr1cef+rr2cef; features["RRCER"] = rr1cer+rr2cer; features["MAXRRCED"] = std::max(features["RRCEF"], features["RRCER"]);
