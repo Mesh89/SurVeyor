@@ -69,6 +69,12 @@ std::vector<ext_mate_map_t> mateseqs_w_mapq;
 std::vector<std::unique_ptr<std::unordered_map<std::string, int64_t>>> long_mate_nms_by_contig, outward_mate_nms_by_contig;
 std::vector<int> active_threads_per_chr;
 std::vector<int> remaining_blocks_per_chr;
+std::vector<std::once_flag> first_load, request_prefetch;
+std::vector<int> next_contig_with_blocks;
+std::vector<std::future<void>> prefetch_jobs;
+std::atomic<bool> prefetch_busy{false};
+// Accessed under the per-contig mutex. Each element has independent storage.
+std::vector<char> first_acquire;
 std::vector<std::mutex> mutex_per_chr;
 std::mutex trim_mutex;
 std::vector<std::vector<sv_t*>> evidence_svs_by_contig;
@@ -1198,16 +1204,18 @@ std::vector<bool> gen_consensus_and_classify_seqs(std::string ref_seq,
     return is_consistent_read;
 }
 
-std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_id) {
-    mutex_per_chr[contig_id].lock();
-    if (active_threads_per_chr[contig_id] == 0) {
-		std::string fname = workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt";
-		std::ifstream fin(fname);
-		std::string qname, read_seq, qual; int mapq;
-		while (fin >> qname >> read_seq >> qual >> mapq) {
-			mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
-		}
+static void load_mates(int contig_id) {
+    std::string fname = workdir + "/workspace/mateseqs/" + std::to_string(contig_id) + ".txt";
+    std::ifstream fin(fname);
+    std::string qname, read_seq, qual; int mapq;
+    while (fin >> qname >> read_seq >> qual >> mapq) {
+        mateseqs_w_mapq[contig_id][qname] = {read_seq, qual, mapq};
     }
+}
+
+static void prepare_chromosome(int contig_id) {
+    load_mates(contig_id);
+
 	if (load_evidence_maps && !evidence_maps_by_contig[contig_id]) {
         std::string contig_name = contig_map.get_name(contig_id);
         std::string alt_fname = reads_association_dir + "/" + std::to_string(contig_id) + ".alt.txt";
@@ -1227,7 +1235,30 @@ std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_i
             evidence_maps_by_contig[contig_id]->load(contig_name, has_alt ? alt_fname : "", has_ref ? ref_fname : "", has_er ? er_fname : "", evidence_svs_by_contig[contig_id], config, reassigns_evidence(evidence_mode), [&](evidence_map_t& evidence) { validate_aux_snp_contexts(evidence, contig_name, evidence_svs_by_contig[contig_id], chr_seqs, stats, config, bam_fname, reference_fname, aligner); });
         }
 	}
-	active_threads_per_chr[contig_id]++;
+}
+
+static void ensure_chromosome(int contig_id) {
+    std::call_once(first_load[contig_id], prepare_chromosome, contig_id);
+}
+
+std::pair<ext_mate_map_t*, evidence_map_t*> acquire_chromosome_data(int contig_id) {
+    ensure_chromosome(contig_id);
+    int next = next_contig_with_blocks[contig_id];
+    if (next >= 0 && config.threads > 1) {
+        std::call_once(request_prefetch[contig_id], [contig_id, next] {
+            if (prefetch_busy.exchange(true)) return;
+            prefetch_jobs[contig_id] = std::async(std::launch::async, [next] {
+                struct release_slot { ~release_slot() { prefetch_busy.store(false); } } guard;
+                ensure_chromosome(next);
+            });
+        });
+    }
+    mutex_per_chr[contig_id].lock();
+    // Consume the prepared mate map once. Later acquire/release cycles use the
+    // original reload policy, so the experiment only changes the first load.
+    if (first_acquire[contig_id]) first_acquire[contig_id] = false;
+    else if (active_threads_per_chr[contig_id] == 0) load_mates(contig_id);
+    active_threads_per_chr[contig_id]++;
 	evidence_map_t* evidence_map = evidence_maps_by_contig[contig_id] ? evidence_maps_by_contig[contig_id].get() : &empty_evidence_map;
 	mutex_per_chr[contig_id].unlock();
 	return {&mateseqs_w_mapq[contig_id], evidence_map};
@@ -1564,6 +1595,23 @@ int main(int argc, char* argv[]) {
     };
     std::vector<output_block_t> output_blocks;
 
+    first_load = std::vector<std::once_flag>(contig_map.size());
+    request_prefetch = std::vector<std::once_flag>(contig_map.size());
+    first_acquire.assign(contig_map.size(), true);
+    prefetch_jobs.resize(contig_map.size());
+    next_contig_with_blocks.assign(contig_map.size(), -1);
+    int next = -1;
+    for (int id = int(contig_map.size()) - 1; id >= 0; --id) {
+        const auto& calls = evidence_svs_by_contig[id];
+        bool has_blocks = std::any_of(calls.begin(), calls.end(), [reassign_evidence](const sv_t* sv) {
+            return !reassign_evidence || (USE_HP_SPECIFIC_PATH && sv->hp_genotyped) || genotype_when_reassigning_evidence(sv);
+        });
+        if (has_blocks) {
+            next_contig_with_blocks[id] = next;
+            next = id;
+        }
+    }
+
     // genotype chrs in descending order of svs
     ctpl::thread_pool thread_pool(config.threads);
     std::vector<std::future<void> > futures;
@@ -1672,6 +1720,7 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < futures.size(); i++) {
         futures[i].get();
     }
+    for (auto& job : prefetch_jobs) if (job.valid()) job.get();
     futures.clear();
     // if (reassign_evidence) {
     //     for (int contig_id = 0; contig_id < contig_map.size(); contig_id++) {
