@@ -5,6 +5,7 @@
 
 #include "genotype.h"
 #include "quality_read_scoring.h"
+#include "interchrom_mate.h"
 #include "var_consensus_cache.h"
 
 struct ins_alignment_targets_t {
@@ -115,7 +116,8 @@ ins_read_evidence_t get_cached_ins_read_evidence(insertion_t* ins, bam1_t* read,
     return result;
 }
 
-void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger) {
+void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger, interchrom_mate_check_t& mates, int worker) {
+    mate_alt_context_t mate_context;
     ins_alignment_targets_t targets = build_ins_alignment_targets(ins, contig_seq, contig_len, stats);
     std::stringstream l_region, r_region;
     l_region << ins->chr << ":" << targets.ref_bp1_start << "-" << targets.ref_bp1_end;
@@ -175,6 +177,13 @@ void write_aligned_ins_read_evidence(insertion_t* ins, open_samFile_t* bam_file,
         if (alt_aln.sw_score > ref_aln.sw_score) {
             // Keep a vetoed ALT read out of the existing REF/ER branches.
             bool alt_eligible = quality_passes_original_bam_alt_veto(read, contig_seq, contig_len, encoded, alt_aln.sw_score);
+            bool first = alt1_covers_bp1 && alt1_aln.sw_score >= alt2_aln.sw_score;
+            bool second = alt2_covers_bp2 && alt2_aln.sw_score >= alt1_aln.sw_score;
+            if (alt_eligible && (first || second) && mapped_interchrom_pair(read)) {
+                hts_pos_t left = first ? mate_anchor(read,alt1_aln,-targets.alt_bp1_pos) : HTS_POS_MAX;
+                hts_pos_t right = second ? mate_anchor(read,alt2_aln,hts_pos_t(ins->ins_seq.size())-targets.alt_bp2_pos) : HTS_POS_MAX;
+                alt_eligible = mates.supports(worker,ins,read,{left,right},stats.max_is,stats.read_len,contig_seq,contig_len,config,mate_context);
+            }
             if (alt_eligible && alt1_aln.sw_score >= alt2_aln.sw_score && alt1_covers_bp1) {
                 alt_bp1_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
                 alt_bp1_scores.push_back(alt1_aln.sw_score);

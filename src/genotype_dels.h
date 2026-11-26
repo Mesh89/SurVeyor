@@ -11,6 +11,7 @@
 
 #include "genotype.h"
 #include "quality_read_scoring.h"
+#include "interchrom_mate.h"
 #include "var_consensus_cache.h"
 
 
@@ -131,8 +132,10 @@ del_read_evidence_t collect_cached_del_read_evidence(deletion_t* del, open_samFi
         if (is_dc_pair(read) && !is_stable_end(read, config)) continue;
         if (get_unclipped_end(read) < del_start || del_end < get_unclipped_start(read)) continue;
         if (del_start < get_unclipped_start(read) && get_unclipped_end(read) < del_end) continue;
-        if (!is_samechr(read) || is_samestr(read)) continue;
-        if (!bam_is_mrev(read)) {
+        if (mapped_interchrom_pair(read)) {
+            if (evidence_map->get_read_alt_pos(read,del,1)<0 && evidence_map->get_read_alt_pos(read,del,2)<0) continue;
+        } else if (!is_samechr(read) || is_samestr(read)) continue;
+        else if (!bam_is_mrev(read)) {
             if (read->core.mpos < del_start-stats.max_is) continue;
             if (read->core.mpos > del_start && (abs(read->core.pos-read->core.mpos) > 5 || !is_left_clipped(read, config.min_clip_len))) continue;
         } else {
@@ -171,7 +174,8 @@ del_read_evidence_t collect_cached_del_read_evidence(deletion_t* del, open_samFi
     return result;
 }
 
-void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger) {
+void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, char* contig_seq, hts_pos_t contig_len, stats_t& stats, config_t& config, evidence_logger_t& evidence_logger, interchrom_mate_check_t& mates, int worker) {
+    mate_alt_context_t mate_context;
     int del_start = del->start + 1, del_end = del->end + 1;
     del_read_alignment_sequences_t sequences = build_del_read_alignment_sequences(del, contig_seq, contig_len, del_start, del_end, stats);
     const del_read_alignment_targets_t& targets = sequences.targets;
@@ -201,8 +205,10 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
         if (del_start < get_unclipped_start(read) && get_unclipped_end(read) < del_end) continue;
 
         std::string seq;
-        if (!is_samechr(read) || is_samestr(read)) continue;
-        if (!bam_is_mrev(read)) {
+        bool cross = mapped_interchrom_pair(read);
+        if (cross) seq=get_sequence(read);
+        else if (!is_samechr(read) || is_samestr(read)) continue;
+        else if (!bam_is_mrev(read)) {
             if (read->core.mpos < del_start-stats.max_is) continue;
             if (read->core.mpos > del_start && (abs(read->core.pos-read->core.mpos) > 5 || !is_left_clipped(read, config.min_clip_len))) continue;
             seq = get_sequence(read, true);
@@ -213,9 +219,9 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
             if (mate_endpos < del_end && (abs(mate_endpos-bam_endpos(read)) > 5 || !is_right_clipped(read, config.min_clip_len))) continue;
             seq = get_sequence(read, true);
         }
-        quality_read_encoding_t encoded = encode_quality_read(read, seq, bool(bam_is_rev(read)) != !bam_is_mrev(read), contig_seq, contig_len, config);
+        quality_read_encoding_t encoded = encode_quality_read(read, seq, !cross && (bool(bam_is_rev(read)) != !bam_is_mrev(read)), contig_seq, contig_len, config);
 
-        bp_reads++;
+        if (!cross) bp_reads++;
         if (bp_reads > 4 * stats.get_max_depth(del->chr)) {
             del->sample_info.too_deep = true;
             break;
@@ -242,7 +248,8 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
         bool alt_spans_bp2 = alt_aln.ref_begin < alt_right_flank_pos && alt_aln.ref_end >= alt_right_flank_pos;
         bool alt_better = alt_aln.sw_score > ref_aln_score && (alt_spans_bp1 || alt_spans_bp2);
         if (alt_better) {
-            if (quality_passes_original_bam_alt_veto(read, contig_seq, contig_len, encoded, alt_aln.sw_score)) {
+            if (quality_passes_original_bam_alt_veto(read, contig_seq, contig_len, encoded, alt_aln.sw_score) &&
+                (!cross || mates.supports(worker,del,read,{mate_anchor(read,alt_aln,-targets.alt_lh_len)},stats.max_is,stats.read_len,contig_seq,contig_len,config,mate_context))) {
                 std::shared_ptr<bam1_t> alt_read(bam_dup1(read), bam_destroy1);
                 if (alt_spans_bp1) {
                     alt_bp1_reads.push_back(alt_read);
@@ -255,7 +262,8 @@ void write_aligned_del_read_evidence(deletion_t* del, open_samFile_t* bam_file, 
                     alt_bp2_positions.push_back(alt_aln.ref_begin);
                 }
             }
-        } else if (ref_aln_score > alt_aln.sw_score) {
+        } else if (cross) continue;
+        else if (ref_aln_score > alt_aln.sw_score) {
             if (ref_bp1_better) {
                 ref_bp1_reads.push_back(std::shared_ptr<bam1_t>(bam_dup1(read), bam_destroy1));
             }

@@ -74,7 +74,7 @@ void write_too_deep_variants(const std::string& association_dir, int contig_id, 
     }
 }
 
-void generate_read_evidence_block(int id, int contig_id, const std::string& chr, char* contig_seq, hts_pos_t contig_len, std::vector<sv_t*> svs, stats_t& stats, config_t& config, bam_pool_t* bam_pool, const std::string& workdir, evidence_logger_t* evidence_logger) {
+void generate_read_evidence_block(int id, int contig_id, const std::string& chr, char* contig_seq, hts_pos_t contig_len, std::vector<sv_t*> svs, stats_t& stats, config_t& config, bam_pool_t* bam_pool, const std::string& workdir, evidence_logger_t* evidence_logger, interchrom_mate_check_t* pair_check) {
     open_samFile_t* bam_file = bam_pool->get_bam_reader(id);
     StripedSmithWaterman::Aligner aligner(1, 4, 6, 1, false);
     std::unordered_map<std::string, std::vector<sv_t*>> hp_indels_by_range;
@@ -88,14 +88,14 @@ void generate_read_evidence_block(int id, int contig_id, const std::string& chr,
                 hp_indels_by_range[std::to_string(ref_hp_range.beg) + ":" + std::to_string(ref_hp_range.end)].push_back(sv);
             } else if (sv->svtype() == "DEL") {
                 deletion_t* del = static_cast<deletion_t*>(sv);
-                write_aligned_del_read_evidence(del, bam_file, contig_seq, contig_len, stats, config, *evidence_logger);
+                write_aligned_del_read_evidence(del, bam_file, contig_seq, contig_len, stats, config, *evidence_logger, *pair_check, id);
             } else if (sv->svtype() == "DUP") {
                 duplication_t* dup = static_cast<duplication_t*>(sv);
                 if (dup->svlen() <= stats.read_len-2*config.min_clip_len) write_aligned_small_dup_read_evidence(dup, bam_file, contig_seq, contig_len, stats, config, *evidence_logger);
                 else write_aligned_large_dup_read_evidence(dup, bam_file, contig_seq, contig_len, stats, config, *evidence_logger);
             } else if (sv->svtype() == "INS") {
                 insertion_t* ins = static_cast<insertion_t*>(sv);
-                write_aligned_ins_read_evidence(ins, bam_file, contig_seq, contig_len, stats, config, *evidence_logger);
+                write_aligned_ins_read_evidence(ins, bam_file, contig_seq, contig_len, stats, config, *evidence_logger, *pair_check, id);
             }
         }
     }
@@ -133,6 +133,7 @@ int main(int argc, char* argv[]) {
     chr_seqs.read_fasta_into_map(reference_fname, true, config.threads);
     bam_pool_t bam_pool(config.threads, bam_fname, reference_fname);
     for (open_samFile_t* reader : bam_pool.pool) hts_set_cache_size(reader->file, config.bam_reader_cache_size);
+    interchrom_mate_check_t mates(config.threads, bam_fname, reference_fname, chr_seqs);
     evidence_logger_t evidence_logger(association_dir, contig_map);
 
     htsFile* in_vcf_file = bcf_open(in_vcf_fname.c_str(), "r");
@@ -165,7 +166,7 @@ int main(int argc, char* argv[]) {
         }
 
         auto schedule_block = [&](std::vector<sv_t*>& block) {
-            std::future<void> future = thread_pool.push(generate_read_evidence_block, contig_id, chr, contig_seq, contig_len, block, std::ref(stats), std::ref(config), &bam_pool, workdir, &evidence_logger);
+            std::future<void> future = thread_pool.push(generate_read_evidence_block, contig_id, chr, contig_seq, contig_len, block, std::ref(stats), std::ref(config), &bam_pool, workdir, &evidence_logger, &mates);
             futures.push_back(std::move(future));
             block.clear();
         };
