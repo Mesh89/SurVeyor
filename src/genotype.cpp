@@ -851,7 +851,7 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<bp_
             if (is_consistent) bp_reads_info.consistent_fwd++;
             if (is_exact) bp_reads_info.exact_fwd++;
             if (is_consistent && is_exact) bp_reads_info.consistent_exact_fwd++;
-            if (is_consistent) {
+            if (is_consistent && !read.mate_on_other_contig) {
                 rev_mate_positions.push_back({read.mate_pos, read.mate_endpos});
                 if (mq >= config.high_confidence_mapq) {
                     rev_hq_mate_positions.push_back({read.mate_pos, read.mate_endpos});
@@ -861,7 +861,7 @@ void set_bp_consensus_info(sv_t::bp_reads_info_t& bp_reads_info, std::vector<bp_
             if (is_consistent) bp_reads_info.consistent_rev++;
             if (is_exact) bp_reads_info.exact_rev++;
             if (is_consistent && is_exact) bp_reads_info.consistent_exact_rev++;
-            if (is_consistent) {
+            if (is_consistent && !read.mate_on_other_contig) {
                 fwd_mate_positions.push_back({read.mate_pos, read.mate_endpos});
                 if (mq >= config.high_confidence_mapq) {
                     fwd_hq_mate_positions.push_back({read.mate_pos, read.mate_endpos});

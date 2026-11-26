@@ -8,11 +8,6 @@
 #include "genotype.h"
 #include "quality_read_scoring.h"
 
-inline bool mapped_interchrom_pair(const bam1_t* b) {
-    return (b->core.flag & BAM_FPAIRED) && !(b->core.flag & (BAM_FUNMAP | BAM_FMUNMAP))
-        && b->core.tid >= 0 && b->core.mtid >= 0 && b->core.tid != b->core.mtid;
-}
-
 struct mate_alt_context_t {
     std::string sequence;
     hts_pos_t left = 0;

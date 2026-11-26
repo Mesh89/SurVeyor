@@ -458,23 +458,29 @@ std::string remove_svid_dup_suffix(const std::string& sv_id) {
     return sv_id;
 }
 
+inline bool mapped_interchrom_pair(const bam1_t* b) {
+    return (b->core.flag & BAM_FPAIRED) && !(b->core.flag & (BAM_FUNMAP | BAM_FMUNMAP))
+        && b->core.tid >= 0 && b->core.mtid >= 0 && b->core.tid != b->core.mtid;
+}
+
 struct bp_support_read_t {
     std::string read_name;
     int64_t mapq, mate_mapq;
     std::string seq;
-    bool mate_is_reverse;
+    bool mate_is_reverse, mate_on_other_contig;
     hts_pos_t mate_pos;
     hts_pos_t mate_endpos;
     bool is_first_in_pair;
 
-    bp_support_read_t() : mapq(0), mate_mapq(0), mate_is_reverse(false), mate_pos(-1), mate_endpos(-1), is_first_in_pair(false) {}
+    bp_support_read_t() : mapq(0), mate_mapq(0), mate_is_reverse(false), mate_on_other_contig(false), mate_pos(-1), mate_endpos(-1), is_first_in_pair(false) {}
 
     explicit bp_support_read_t(bam1_t* read) :
         read_name(bam_get_qname(read)),
         mapq(read->core.qual),
         mate_mapq(get_mq(read)),
         seq(get_sequence(read)),
-        mate_is_reverse(bam_is_mrev(read)),
+        mate_is_reverse(mapped_interchrom_pair(read) ? !bam_is_rev(read) : bam_is_mrev(read)),
+        mate_on_other_contig(mapped_interchrom_pair(read)),
         mate_pos(read->core.mpos),
         mate_endpos(get_mate_endpos(read)),
         is_first_in_pair(is_first_read(read))
