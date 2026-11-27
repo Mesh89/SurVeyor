@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <mutex>
@@ -88,6 +90,53 @@ void build_graph(std::vector<std::string>& read_seqs, std::vector<int>& order, s
 	cache.store(std::move(cache_key), std::move(additions));
 }
 
+// Find strongly connected components with iterative Tarjan and leave singleton ids at -1.
+std::vector<int> cycle_components(const std::vector<std::vector<edge_t> >& l_adj) {
+	struct frame_t {
+		int vertex;
+		size_t next_edge;
+	};
+	int n = l_adj.size(), next_index = 0;
+	std::vector<int> index(n, -1), low(n), components(n, -1), stack;
+	std::vector<bool> on_stack(n);
+	std::vector<frame_t> dfs;
+	for (int root = 0; root < n; root++) {
+		if (index[root] != -1) continue;
+		dfs.push_back({root, 0});
+		while (!dfs.empty()) {
+			frame_t& frame = dfs.back();
+			int v = frame.vertex;
+			if (index[v] == -1) {
+				index[v] = low[v] = next_index++;
+				stack.push_back(v);
+				on_stack[v] = true;
+			}
+			if (frame.next_edge < l_adj[v].size()) {
+				int next = l_adj[v][frame.next_edge++].next;
+				if (index[next] == -1) dfs.push_back({next, 0});
+				else if (on_stack[next]) low[v] = std::min(low[v], index[next]);
+				continue;
+			}
+			if (low[v] == index[v]) {
+				int component = stack.back() == v ? -1 : v;
+				int member;
+				do {
+					member = stack.back();
+					stack.pop_back();
+					on_stack[member] = false;
+					components[member] = component;
+				} while (member != v);
+			}
+			dfs.pop_back();
+			if (!dfs.empty()) {
+				int parent = dfs.back().vertex;
+				low[parent] = std::min(low[parent], low[v]);
+			}
+		}
+	}
+	return components;
+}
+
 std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_consensus_t>& read_contigs, const std::vector<path_permission_t>& path_permissions,
 		std::vector<int>& order, config_t& config, stats_t& stats) {
 
@@ -106,17 +155,78 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
+	// Cycles indicate repeats. In order of decreasing reliability, prune short overlaps in cycles
+	// and at branches, remove contradicted short overlaps, rebuild with exact overlaps only,
+	// and remove the weakest edge in each component of a small cyclic core.
+	// Keep the result of the last two stages only if its best path joins both sides of the insertion.
 	if (rev_topological_order.size() < n) {
+		// Preserve short overlaps that are the only link between reads outside cycles.
 		auto prune_short_overlaps = [&]() {
 			for (int min_overlap = config.min_clip_len+10; rev_topological_order.size() < n && min_overlap <= stats.read_len/2; min_overlap += 10) {
-				remove_assembly_edges(out_edges, l_adj, l_adj_rev, [min_overlap](int from, const edge_t& e) { return e.overlap < min_overlap; });
+				std::vector<int> components = cycle_components(l_adj);
+				std::vector<size_t> out_degree(n), in_degree(n);
+				for (int i = 0; i < n; i++) {
+					out_degree[i] = l_adj[i].size();
+					in_degree[i] = l_adj_rev[i].size();
+				}
+				remove_assembly_edges(out_edges, l_adj, l_adj_rev, [&](int from, const edge_t& e) {
+					bool inside_cycle = components[from] >= 0 && components[from] == components[e.next];
+					return e.overlap < min_overlap && (inside_cycle || out_degree[from] > 1 || in_degree[e.next] > 1);
+				});
 				rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 			}
 		};
 		prune_short_overlaps();
 
+		// Short overlaps that disagree with reliable overlaps may link different repeat copies.
+		// Keep the other short overlaps to preserve paths through thinly covered reads.
+		if (rev_topological_order.size() == read_seqs.size()) {
+			int min_reliable_overlap = config.min_clip_len+20;
+			auto contradicted = [&](int from, const edge_t& e) {
+				if (e.overlap >= min_reliable_overlap) return false;
+				const std::string& left = read_seqs[from];
+				const std::string& right = read_seqs[e.next];
+
+				// Align the right read inside the alternative successor using the overlap difference.
+				for (const edge_t& alt : l_adj[from]) {
+					if (alt.next == e.next || alt.overlap < min_reliable_overlap) continue;
+					const std::string& other = read_seqs[alt.next];
+					int begin = alt.overlap-e.overlap;
+					int len = std::min(int(other.length())-begin, int(right.length()));
+					if (len > 0 && number_of_mismatches_fast(other.data()+begin, right.data(), len, len) > len*config.max_seq_error) return true;
+				}
+
+				// Align the end of the left read inside the alternative predecessor the same way.
+				for (const edge_t& alt : l_adj_rev[e.next]) {
+					if (alt.next == from || alt.overlap < min_reliable_overlap) continue;
+					const std::string& other = read_seqs[alt.next];
+					int end = int(other.length())-(alt.overlap-e.overlap);
+					int len = std::min(end, int(left.length()));
+					if (len > 0 && number_of_mismatches_fast(other.data()+end-len, left.data()+left.length()-len, len, len) > len*config.max_seq_error) return true;
+				}
+				return false;
+			};
+
+			// Check every overlap against the same graph before removing any of them.
+			std::set<std::pair<int, int> > contradicted_edges;
+			for (int from = 0; from < n; from++) {
+				for (const edge_t& e : l_adj[from]) {
+					if (contradicted(from, e)) contradicted_edges.emplace(from, e.next);
+				}
+			}
+			remove_assembly_edges(out_edges, l_adj, l_adj_rev, [&](int from, const edge_t& e) {
+				return contradicted_edges.count({from, e.next}) > 0;
+			});
+			rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+		}
+
+		// Stable reads can anchor the result after the exact-overlap retry.
+		bool has_sides = std::any_of(order.begin(), order.end(), [](int read_order) { return read_order != 2; });
+		bool deep = false;
+
 		// Still cyclic: rebuild with exact overlaps only and prune again.
 		if (rev_topological_order.size() < n) {
+			deep = true;
 			std::fill(out_edges.begin(), out_edges.end(), 0);
 			for (int i = 0; i < n; i++) {
 				l_adj[i].clear();
@@ -126,8 +236,52 @@ std::vector<assembly_consensus_t> assemble_contigs(const std::vector<assembly_co
 			rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 			prune_short_overlaps();
 		}
+
+		// For a small cyclic core, remove each component's weakest internal edge by score then overlap.
+		if (rev_topological_order.size() < read_seqs.size() && has_sides) {
+			const int MAX_CYCLIC_CORE = 10;
+			struct cycle_edge_t {
+				int from;
+				edge_t edge;
+			};
+			std::vector<int> components = cycle_components(l_adj);
+			const int cyclic_core = n-std::count(components.begin(), components.end(), -1);
+			while (cyclic_core <= MAX_CYCLIC_CORE && rev_topological_order.size() < read_seqs.size()) {
+				std::map<int, cycle_edge_t> weakest_edges;
+				// Keep the first edge encountered when score and overlap tie.
+				for (int from = 0; from < n; from++) {
+					int component = components[from];
+					if (component < 0) continue;
+					for (const edge_t& e : l_adj[from]) {
+						if (components[e.next] != component) continue;
+						auto weakest = weakest_edges.find(component);
+						if (weakest == weakest_edges.end() || std::tie(e.score, e.overlap) < std::tie(weakest->second.edge.score, weakest->second.edge.overlap)) {
+							weakest_edges[component] = {from, e};
+						}
+					}
+				}
+				if (weakest_edges.empty()) break;
+				remove_assembly_edges(out_edges, l_adj, l_adj_rev, [&](int from, const edge_t& e) {
+					auto weakest = weakest_edges.find(components[from]);
+					return weakest != weakest_edges.end() && weakest->second.from == from && weakest->second.edge.next == e.next;
+				});
+				rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
+				components = cycle_components(l_adj);
+			}
+		}
+
+		// Path selection requires an acyclic graph.
 		if (rev_topological_order.size() < n) {
-			return {{"HAS_CYCLE", {}}};
+			return {{"HAS_CYCLE", {}, {}}};
+		}
+
+		// After the exact rebuild, require any best path to join the two stable sides.
+		if (deep && has_sides) {
+			std::vector<bool> probe_used(n);
+			assembly_path_t best = select_assembly_path(l_adj_rev, rev_topological_order, path_permissions, probe_used);
+			if (!best.vertices.empty() && (order[best.vertices.front()] != 1 || order[best.vertices.back()] != 3)) {
+				return {{"HAS_CYCLE", {}, {}}};
+			}
 		}
 	}
 
