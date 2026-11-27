@@ -807,16 +807,43 @@ std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t
 		});
 	
 		// complement holes in contigs with reference
+		// A contig that overlaps the previous one by sequence continues it directly: not after a template-filled hole (the template
+		// between their placements is a guess; its predicted inserted sequence can be longer than the real one) and not appended
+		// whole when their template placements overlap (which would repeat the shared sequence). The merge may only skip template
+		// bases of the predicted inserted sequence: skipping flank bases (real reference) would collapse a repeat into a deletion.
+		const int min_direct_overlap = config.min_clip_len+20;
 		int cur = 0;
+		std::string* prev_contig = nullptr; // aln_suffix_prefix takes non-const strings
+		int prev_span_end = 0;
 		for (auto& p : contigs_sorted_by_pos) {
 			int span_begin = std::max(0, p.second.ref_begin-p.second.query_begin);
 			int span_end = std::min(int(full_junction_sequence.length())-1, p.second.ref_end+int(p.first.length())-1-p.second.query_end);
-			if (span_begin > cur) corrected_junction_seq += full_junction_sequence.substr(cur, span_begin-cur);
-			hts_pos_t contig_begin = corrected_junction_seq.length();
-			corrected_junction_seq += p.first;
-			// Half-open coordinates in the corrected junction, excluding template-filled gaps.
-			assembled_contig_intervals.push_back({contig_begin, hts_pos_t(corrected_junction_seq.length())});
+			int direct_overlap = 0;
+			if (prev_contig != nullptr) {
+				suffix_prefix_aln_t spa = aln_suffix_prefix(*prev_contig, p.first, 1, -4, config.max_seq_error, min_direct_overlap);
+				if (spa.overlap && !reject_assembly_overlap(*prev_contig, p.first, spa.overlap)) {
+					// template position where the merge starts this contig, against where its own alignment places it
+					int merged_begin = prev_span_end+1-spa.overlap, shift = span_begin-merged_begin;
+					int pred_begin = left_flanking_str.length(), pred_end = pred_begin+int(pred_ins_seq_str.length())-overlap12;
+					bool consistent = std::abs(shift) <= 10;
+					bool skips_pred_only = shift > 10 && merged_begin >= pred_begin-10 && span_begin <= pred_end+10;
+					if (consistent || skips_pred_only) direct_overlap = spa.overlap;
+				}
+			}
+			if (direct_overlap) {
+				corrected_junction_seq.resize(corrected_junction_seq.length()-direct_overlap);
+				corrected_junction_seq += p.first;
+				assembled_contig_intervals.back().end = corrected_junction_seq.length();
+			} else {
+				if (span_begin > cur) corrected_junction_seq += full_junction_sequence.substr(cur, span_begin-cur);
+				hts_pos_t contig_begin = corrected_junction_seq.length();
+				corrected_junction_seq += p.first;
+				// Half-open coordinates in the corrected junction, excluding template-filled gaps.
+				assembled_contig_intervals.push_back({contig_begin, hts_pos_t(corrected_junction_seq.length())});
+			}
 			cur = std::max(cur, span_end+1);
+			prev_contig = &p.first;
+			prev_span_end = span_end;
 		}
 		corrected_junction_seq += full_junction_sequence.substr(cur);
 	}
