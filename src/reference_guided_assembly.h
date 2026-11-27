@@ -1,6 +1,8 @@
 #ifndef GUIDED_REFERENCE_ASSEMBLE_H
 #define GUIDED_REFERENCE_ASSEMBLE_H
 
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -25,14 +27,38 @@ struct aln_guided_contig_t {
 
 void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<int>& out_edges,
 		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev, config_t& config, bool allow_at_homopolymer_overlaps = false) {
+	struct overlap_cache_entry_t {
+		uint32_t left_id, right_id;
+		int min_overlap, score, overlap; // Zero overlap records no edge.
+	};
+	static thread_local struct {
+		std::unordered_map<std::string, uint32_t> sequence_ids;
+		std::array<overlap_cache_entry_t, 32768> slots{};
+		double max_seq_error = 0;
+		bool allow_at_homopolymer_overlaps = false;
+	} cache;
+	if (cache.sequence_ids.size() > 8192 || cache.max_seq_error != config.max_seq_error || cache.allow_at_homopolymer_overlaps != allow_at_homopolymer_overlaps) {
+		cache.sequence_ids.clear();
+		cache.slots.fill({});
+		cache.max_seq_error = config.max_seq_error;
+		cache.allow_at_homopolymer_overlaps = allow_at_homopolymer_overlaps;
+	}
+
 	std::sort(alns.begin(), alns.end(),
 			[](aln_guided_contig_t& aln1, aln_guided_contig_t& aln2) {
 		return get_unclipped_start(aln1.aln) < get_unclipped_start(aln2.aln);
 	});
 
+	std::vector<uint32_t> sequence_ids(alns.size());
 	for (int i = 0; i < alns.size(); i++) {
+		uint32_t& id = cache.sequence_ids[alns[i].contig->seq];
+		if (!id) id = cache.sequence_ids.size(); // ID zero marks empty slots.
+		sequence_ids[i] = id;
+	}
+
+	for (int i = 0; i < alns.size(); i++) {
+		uint32_t left_id = sequence_ids[i];
 		for (int j = i+1; j < alns.size() && get_unclipped_end(alns[i].aln)-get_unclipped_start(alns[j].aln) >= config.min_clip_len; j++) {
-			if (is_contained(alns[i].contig->seq, alns[j].contig->seq, config.max_seq_error)) continue;
 			int min_overlap = config.min_clip_len;
 			// In principle, the suffix-prefix alignment should be the same as the overlap between the two alignments on the reference
 			// This may not be the case if there are insertions or deletions in between the reads. However, in that case,
@@ -42,16 +68,27 @@ void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<
 				int unclipped_j_start = get_unclipped_start(alns[j].aln);
 				min_overlap = std::max(min_overlap, unclipped_i_end - unclipped_j_start);
 			}
-			suffix_prefix_aln_t spa = aln_suffix_prefix(alns[i].contig->seq, alns[j].contig->seq, 1, -4, config.max_seq_error, min_overlap);
-			bool rejected = reject_assembly_overlap(alns[i].contig->seq, alns[j].contig->seq, spa.overlap);
-			// Contig joins may bridge an exact A/T-rich overlap; the completed junction
-			// gets its HP length re-estimated from reads after assembly.
-			if (rejected && allow_at_homopolymer_overlaps && spa.overlap >= 10 && spa.mismatches == 0) {
-				char hp_base = is_homopolymer(alns[j].contig->seq.data(), spa.overlap);
-				if (hp_base == 'A' || hp_base == 'T') rejected = false;
+			uint32_t right_id = sequence_ids[j];
+			size_t slot = (left_id*73856093u ^ right_id*19349663u ^ min_overlap*83492791u) & (cache.slots.size()-1);
+			overlap_cache_entry_t& entry = cache.slots[slot];
+			if (entry.left_id != left_id || entry.right_id != right_id || entry.min_overlap != min_overlap) {
+				entry = {left_id, right_id, min_overlap, 0, 0};
+				if (is_contained(alns[i].contig->seq, alns[j].contig->seq, config.max_seq_error)) continue;
+				suffix_prefix_aln_t spa = aln_suffix_prefix(alns[i].contig->seq, alns[j].contig->seq, 1, -4, config.max_seq_error, min_overlap);
+				bool rejected = reject_assembly_overlap(alns[i].contig->seq, alns[j].contig->seq, spa.overlap);
+				// Contig joins may bridge an exact A/T-rich overlap; the completed junction
+				// gets its HP length re-estimated from reads after assembly.
+				if (rejected && allow_at_homopolymer_overlaps && spa.overlap >= 10 && spa.mismatches == 0) {
+					char hp_base = is_homopolymer(alns[j].contig->seq.data(), spa.overlap);
+					if (hp_base == 'A' || hp_base == 'T') rejected = false;
+				}
+				if (spa.overlap && !rejected) {
+					entry.score = spa.score;
+					entry.overlap = spa.overlap;
+				}
 			}
-			if (spa.overlap && !rejected) {
-				add_assembly_edge(i, {j, spa.score, spa.overlap}, out_edges, l_adj, l_adj_rev);
+			if (entry.overlap) {
+				add_assembly_edge(i, {j, entry.score, entry.overlap}, out_edges, l_adj, l_adj_rev);
 			}
 		}
 	}
