@@ -192,6 +192,12 @@ std::shared_ptr<sv_t> confirmed_de_novo_insertion(std::string& contig_name, std:
     return best;
 }
 
+struct junction_support_t {
+    hts_pos_t start;
+    std::string ins_seq;
+    int pref, anti, pref_clean, anti_clean;
+};
+
 // Insertions from assembled contigs that the primary does not use: a second allele, or the only complete allele.
 // A contig is tried as assembled and after read correction. Its insertion is kept when both reference anchors are at least
 // 50 bp, the reads of the assembly confirm its junction (confirm_complete_junction),
@@ -208,7 +214,7 @@ void add_de_novo_contig_insertions(std::string& contig_name, const std::string& 
                    std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
                    std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
                    StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& aligner_to_base,
-                   stats_t& stats, std::vector<std::shared_ptr<sv_t>>& extra) {
+                   stats_t& stats, std::vector<std::shared_ptr<sv_t>>& extra, bool gated = false, std::vector<junction_support_t>* support = nullptr) {
     auto canonical = [](const std::string& seq) { return !seq.empty() && std::all_of(seq.begin(), seq.end(), junction_canonical_base); };
     if (complete_primary && !canonical(primary_junction)) return;
     std::vector<std::string> junctions;
@@ -256,7 +262,7 @@ void add_de_novo_contig_insertions(std::string& contig_name, const std::string& 
         size_t ins_pos = junction.find(candidate->ins_seq);
         bool located = ins_pos != std::string::npos;
         int ins_begin = located ? ins_pos : 0, ins_end = ins_begin+candidate->ins_seq.length();
-        int aligned = 0, clean = 0, preferring = 0, preferring_clean = 0, left_spanning = 0, right_spanning = 0;
+        int aligned = 0, clean = 0, preferring = 0, preferring_clean = 0, anti = 0, anti_clean = 0, left_spanning = 0, right_spanning = 0;
         std::vector<int> depth_changes(junction.length()+1, 0);
         for (const auto& read : reads) {
             junction_read_alignment_t alignment;
@@ -264,6 +270,9 @@ void add_de_novo_contig_insertions(std::string& contig_name, const std::string& 
             aligned++;
             bool prefers = read.second >= 0 && alignment.score > read.second;
             preferring += prefers;
+            bool prefers_primary = read.second >= 0 && alignment.score < read.second;
+            anti += prefers_primary;
+            anti_clean += prefers_primary && alignment.clean;
             if (!alignment.clean) continue;
             clean++;
             preferring_clean += prefers;
@@ -281,7 +290,10 @@ void add_de_novo_contig_insertions(std::string& contig_name, const std::string& 
         bool supported;
         if (complete_primary) supported = (covered && n_contigs <= 20 && preferring_clean >= 2) || (preferring_clean >= 3 && preferring_clean*5 >= preferring*2);
         else supported = covered && left_spanning >= 2 && right_spanning >= 2 && clean*3 >= aligned;
+        // Gated callers offer extra contigs from graphs the pair does not otherwise use and need stronger read support.
+        if (gated && (clean*2 < aligned || (complete_primary && preferring*2 < anti))) supported = false;
         if (supported) extra.push_back(candidate);
+        if (support != nullptr) support->push_back({candidate->start, candidate->ins_seq, preferring, anti, preferring_clean, anti_clean});
         return true;
     };
     for (const std::string& junction : junctions) {
@@ -334,7 +346,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
     std::string primary_junction_seq;
     std::vector<std::string> selected_contigs;
     std::vector<assembly_read_t> assembly_reads;
-    auto add_alternatives = [&](const std::string& primary_junction, const std::vector<hts_pair_pos_t>* intervals) {
+    auto add_alternatives = [&](const std::string& primary_junction, const std::vector<hts_pair_pos_t>* intervals, std::vector<std::shared_ptr<sv_t>>& out) {
         std::vector<insertion_fragment_evidence_t> fragments = collect_insertion_read_evidence(r_cluster, l_cluster, mateseqs, matequals);
         std::vector<reconstructed_insertion_junction_t> alternatives = reconstruct_polished_insertion_junctions(primary_junction, fragments, aligner, intervals ? *intervals : std::vector<hts_pair_pos_t>{});
         for (auto& alternative : alternatives) {
@@ -347,7 +359,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
                 candidate = detect_de_novo_insertion_from_junction(contig_name, contigs, alternative.seq, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, config, stats);
             }
             if (candidate != NULL && alternative.tail && candidate->incomplete_ins_seq()) candidate = NULL;
-            if (candidate != NULL) append_distinct_insertion_candidate(found, candidate, contigs.get_seq(contig_name));
+            if (candidate != NULL) append_distinct_insertion_candidate(out, candidate, contigs.get_seq(contig_name));
         }
     };
     if (regions.empty()) {
@@ -358,7 +370,7 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
                 
         if (ins != NULL) {
             found.push_back(ins);
-            add_alternatives(primary_junction_seq, nullptr);
+            add_alternatives(primary_junction_seq, nullptr, found);
             return true;
 		}
 		return false;
@@ -378,8 +390,9 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 
     // build corrected consensus sequence and realign reads to it
     std::vector<hts_pair_pos_t> assembled_contig_intervals;
+    std::vector<std::string> rga_dropped_contigs;
     std::string corrected_consensus_sequence = generate_consensus_sequences(contig_name, contigs, contig_map, r_cluster, l_cluster, ro_remap_side, lo_remap_side,
-					best_region, is_rc, assembled_contig_intervals, mateseqs, matequals, aligner, harsh_aligner, config, stats, hp_tail_quality_model);
+					best_region, is_rc, assembled_contig_intervals, mateseqs, matequals, aligner, harsh_aligner, config, stats, hp_tail_quality_model, &rga_dropped_contigs, flank_bam);
 
     /* == Try assembly == */
 	int rc_accepted_reads = 0, lc_accepted_reads = 0;
@@ -390,7 +403,8 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
         lc_accepted_reads += lo_remap_side.read_remap_infos[i].accepted;
     }
 	int tot_reads = r_cluster->cluster->reads.size() + l_cluster->cluster->reads.size();
-	if (rc_accepted_reads == 0 || lc_accepted_reads == 0 || double(rc_accepted_reads+lc_accepted_reads)/tot_reads < 0.5) {
+	bool rga_route = rc_accepted_reads > 0 && lc_accepted_reads > 0 && double(rc_accepted_reads+lc_accepted_reads)/tot_reads >= 0.5;
+	if (!rga_route) {
 		std::shared_ptr<sv_t> ins = detect_de_novo_insertion(contig_name, contigs, r_cluster, l_cluster, mateseqs, matequals, failed_no_seq, failed_cycle, failed_too_many_reads,
 				aligner_to_base, harsh_aligner, config, stats, hp_tail_quality_model, flank_bam, primary_junction_seq, selected_contigs, assembly_reads);
 		ins = confirmed_de_novo_insertion(contig_name, ins, primary_junction_seq, selected_contigs, assembly_reads, r_cluster, l_cluster, mateseqs, matequals, aligner_to_base, stats);
@@ -398,20 +412,36 @@ bool find_insertion_from_cluster_pair(std::shared_ptr<insertion_cluster_t> r_clu
 
 		if (ins != NULL) {
             found.push_back(ins);
-			add_alternatives(primary_junction_seq, nullptr);
+			add_alternatives(primary_junction_seq, nullptr, found);
 			return true;
 		}
 	}
 
-	if (corrected_consensus_sequence.empty()) return false;
-
     bool success = false;
-    std::shared_ptr<insertion_t> insertion = detect_reference_guided_assembly_insertion(contig_name, contigs.get_seq(contig_name), contigs.get_len(contig_name), 
-        corrected_consensus_sequence, r_cluster, l_cluster, ro_remap_side, lo_remap_side, best_region, is_rc, assembled_contig_intervals, aligner, stats, config);
-    if (insertion != NULL) {
-        found.push_back(insertion);
-        add_alternatives(corrected_consensus_sequence, &assembled_contig_intervals);
-        success = true;
+    std::shared_ptr<insertion_t> insertion = NULL;
+    if (!corrected_consensus_sequence.empty()) {
+        insertion = detect_reference_guided_assembly_insertion(contig_name, contigs.get_seq(contig_name), contigs.get_len(contig_name),
+            corrected_consensus_sequence, r_cluster, l_cluster, ro_remap_side, lo_remap_side, best_region, is_rc, assembled_contig_intervals, aligner, stats, config);
+        if (insertion != NULL) {
+            found.push_back(insertion);
+            add_alternatives(corrected_consensus_sequence, &assembled_contig_intervals, found);
+            success = true;
+        }
+        // Contigs the reference-guided assembly built but did not keep (it keeps one contig per stretch of the template, so the
+        // second allele of a two-allele site is dropped) are offered as gated extra insertions, judged against the
+        // reference-guided junction when it gives a complete ACGT insertion. Their junctions are confirmed by the pair's reads.
+        if (!rga_dropped_contigs.empty()) {
+            bool rga_complete = insertion != NULL && !insertion->incomplete_ins_seq() &&
+                std::all_of(corrected_consensus_sequence.begin(), corrected_consensus_sequence.end(), junction_canonical_base);
+            std::vector<assembly_read_t> rga_reads;
+            for (const auto& fragment : collect_insertion_read_evidence(r_cluster, l_cluster, mateseqs, matequals)) {
+                for (const auto& read : fragment.reads) {
+                    if (read.quals.size() == read.seq.length()) rga_reads.push_back({read.seq, read.quals});
+                }
+            }
+            add_de_novo_contig_insertions(contig_name, rga_complete ? corrected_consensus_sequence : std::string(), rga_complete, rga_dropped_contigs, rga_reads,
+                r_cluster, l_cluster, mateseqs, matequals, aligner, aligner_to_base, stats, extra, true);
+        }
     }
     return success;
 }

@@ -8,6 +8,7 @@
 #include <memory>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "../libs/ssw_selected.h"
 #include "htslib/sam.h"
@@ -26,7 +27,7 @@ struct aln_guided_contig_t {
 };
 
 void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<int>& out_edges,
-		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev, config_t& config, bool allow_at_homopolymer_overlaps = false) {
+		std::vector<std::vector<edge_t> >& l_adj, std::vector<std::vector<edge_t> >& l_adj_rev, config_t& config, bool allow_at_homopolymer_overlaps = false, bool remove_hq_mismatch_overlaps = false) {
 	struct overlap_cache_entry_t {
 		uint32_t left_id, right_id;
 		int min_overlap, score, overlap; // Zero overlap records no edge.
@@ -88,6 +89,9 @@ void build_aln_guided_graph(std::vector<aln_guided_contig_t>& alns, std::vector<
 				}
 			}
 			if (entry.overlap) {
+				// High-quality mismatches suggest different haplotypes or repeat copies. Low-quality ones may be sequencing errors.
+				// Check qualities outside the sequence overlap cache because identical sequences can have different qualities.
+				if (remove_hq_mismatch_overlaps && entry.score != entry.overlap && count_hq_mismatches(*alns[i].contig, *alns[j].contig, entry.overlap, 20) > 0) continue;
 				add_assembly_edge(i, {j, entry.score, entry.overlap}, out_edges, l_adj, l_adj_rev);
 			}
 		}
@@ -159,7 +163,7 @@ std::vector<std::pair<assembly_consensus_t, StripedSmithWaterman::Alignment> > r
 }
 
 std::vector<assembly_consensus_t> generate_reference_guided_contigs(std::string reference, std::vector<assembly_consensus_t>& read_contigs,
-	std::vector<assembly_consensus_t>& discarded_contigs, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config, bool allow_at_homopolymer_overlaps = false) {
+	std::vector<assembly_consensus_t>& discarded_contigs, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config, bool allow_at_homopolymer_overlaps = false, bool remove_hq_mismatch_overlaps = false) {
 	StripedSmithWaterman::Filter filter;
 	StripedSmithWaterman::Alignment aln;
 
@@ -171,7 +175,7 @@ std::vector<assembly_consensus_t> generate_reference_guided_contigs(std::string 
 		harsh_aligner.Align(contig.seq.c_str(), reference.c_str(), reference.length(), filter, &aln, 0);
 		alns.push_back({&contig, aln});
 	}
-	build_aln_guided_graph(alns, out_edges, l_adj, l_adj_rev, config, allow_at_homopolymer_overlaps);
+	build_aln_guided_graph(alns, out_edges, l_adj, l_adj_rev, config, allow_at_homopolymer_overlaps, remove_hq_mismatch_overlaps);
 
 	std::vector<int> rev_topological_order = find_rev_topological_order(n, out_edges, l_adj_rev);
 
@@ -242,7 +246,9 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		const std::vector<const uint8_t*>& quals_lf, const std::vector<const uint8_t*>& quals_is, const std::vector<const uint8_t*>& quals_rf,
 		StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner,
 		std::vector<StripedSmithWaterman::Alignment>& consensus_contigs_alns, config_t& config, stats_t& stats,
-		bool scaffold = true, bool retain_initial_contigs = false, const std::vector<const uint8_t*>* trim_quals = nullptr) {
+		bool scaffold = true, bool retain_initial_contigs = false, const std::vector<const uint8_t*>* trim_quals = nullptr,
+		std::vector<std::string>* dropped_contigs = nullptr,
+		const std::vector<read_correction::correction_input_t>* flank_reads = nullptr, hts_pos_t max_flank = 0) {
 
 	std::vector<std::string> read_seqs;
 	for (std::string& seq : seqs_lf) {
@@ -260,10 +266,28 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 
 	std::vector<std::string> corrected_read_seqs = read_seqs;
 	if (trim_quals != nullptr) {
+		// Use recalibrated qualities for correction and keep raw qualities for base votes.
 		std::vector<read_correction::correction_input_t> correction_inputs;
 		for (int i = 0; i < read_seqs.size(); i++) {
-			const uint8_t* quals = read_quals.empty() ? nullptr : read_quals[i];
+			const uint8_t* quals = (*trim_quals)[i];
 			correction_inputs.push_back({read_seqs[i], quals ? std::vector<uint8_t>(quals, quals+read_seqs[i].length()) : std::vector<uint8_t>(), quals != nullptr});
+		}
+		if (flank_reads != nullptr) {
+			// Use flank reads as k-mer context and avoid counting assembly reads again in either orientation.
+			std::unordered_set<std::string> graph_sequences(read_seqs.begin(), read_seqs.end());
+			hts_pos_t kept_flank = 0;
+			for (const read_correction::correction_input_t& read : *flank_reads) {
+				if (graph_sequences.count(read.seq)) continue;
+				std::string reverse_seq = read.seq;
+				rc(reverse_seq);
+				if (graph_sequences.count(reverse_seq)) continue;
+				correction_inputs.push_back(read);
+				// Drop the flank context if it exceeds the depth budget.
+				if (++kept_flank > max_flank) {
+					correction_inputs.resize(read_seqs.size());
+					break;
+				}
+			}
 		}
 		std::vector<read_correction::correction_flip_t> flips = read_correction::correct_reads(correction_inputs);
 		for (const read_correction::correction_flip_t& flip : flips) corrected_read_seqs[flip.input][flip.pos] = flip.new_base;
@@ -274,7 +298,26 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		read_contigs.push_back(make_read_contig(corrected_read_seqs[i], read_quals.empty() ? nullptr : read_quals[i], trim_quals == nullptr ? nullptr : (*trim_quals)[i]));
 	}
 	std::vector<assembly_consensus_t> discarded_contigs;
-	std::vector<assembly_consensus_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config);
+	std::vector<assembly_consensus_t> assembled_contigs = generate_reference_guided_contigs(reference, read_contigs, discarded_contigs, harsh_aligner, config, false, trim_quals != nullptr);
+	// Contigs assembled at any stage but not returned (dropped_contigs): one contig is kept per stretch of the template, so a
+	// second allele at the same place is dropped. Candidates must be long enough for two 50 bp anchors and a 50 bp insertion.
+	std::vector<std::string> candidate_sequences;
+	auto add_candidates = [&](const std::vector<assembly_consensus_t>& stage) {
+		if (dropped_contigs == nullptr) return;
+		for (const assembly_consensus_t& contig : stage) {
+			if (contig.seq.length() >= 150) candidate_sequences.push_back(contig.seq);
+		}
+	};
+	auto fill_dropped = [&](const std::vector<std::string>& returned) {
+		if (dropped_contigs == nullptr) return;
+		dropped_contigs->clear();
+		for (const std::string& seq : candidate_sequences) {
+			if (std::find(dropped_contigs->begin(), dropped_contigs->end(), seq) != dropped_contigs->end()) continue;
+			if (std::any_of(returned.begin(), returned.end(), [&seq](const std::string& r) { return r.find(seq) != std::string::npos; })) continue;
+			dropped_contigs->push_back(seq);
+		}
+	};
+	add_candidates(assembled_contigs);
 	std::vector<std::string> initial_sequences;
 	if (retain_initial_contigs) {
 		for (const assembly_consensus_t& contig : assembled_contigs) initial_sequences.push_back(contig.seq);
@@ -288,6 +331,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		// Removing unreliable ends can expose exact overlaps between previously separate contigs.
 		join_reference_guided_contigs(reference, assembled_contigs, aligner, harsh_aligner, config, true);
 	}
+	add_candidates(assembled_contigs);
 	// score the retained contigs
 	StripedSmithWaterman::Filter filter;
 	StripedSmithWaterman::Alignment aln;
@@ -337,6 +381,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		std::vector<std::string> sequences;
 		for (assembly_consensus_t& contig : retained_contigs) sequences.push_back(std::move(contig.seq));
 		append_initial_sequences(sequences);
+		fill_dropped(sequences);
 		return sequences;
 	}
 
@@ -396,6 +441,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 		}
 	}
 	scaffolded_contigs.push_back(polish_assembly_path(path_inputs, std::move(assembly)));
+	add_candidates(scaffolded_contigs);
 
 	std::vector<std::tuple<int, assembly_consensus_t, StripedSmithWaterman::Alignment> > scaffolded_w_score;
 	for (assembly_consensus_t& contig : scaffolded_contigs) {
@@ -412,13 +458,16 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	}
 
 	append_initial_sequences(sequences);
+	fill_dropped(sequences);
 	return sequences;
 }
 
 std::vector<std::string> generate_reference_guided_consensus(std::string reference, 
 		std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster,
 		std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals, StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner,
-		std::vector<StripedSmithWaterman::Alignment>& consensus_contigs_alns, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model) {
+		std::vector<StripedSmithWaterman::Alignment>& consensus_contigs_alns, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model,
+		std::vector<std::string>* dropped_contigs = nullptr,
+		const std::vector<read_correction::correction_input_t>* flank_reads = nullptr, hts_pos_t max_flank = 0) {
 
 	// Build raw base-voting and recalibrated trimming evidence for the same inputs.
 	// Each quality stream follows its sequence's assembly orientation, so HP 3' tails
@@ -559,7 +608,7 @@ std::vector<std::string> generate_reference_guided_consensus(std::string referen
 	std::vector<const uint8_t*> trim_quals = trim_quals_lf;
 	trim_quals.insert(trim_quals.end(), trim_quals_is.begin(), trim_quals_is.end());
 	trim_quals.insert(trim_quals.end(), trim_quals_rf.begin(), trim_quals_rf.end());
-	return generate_reference_guided_consensus(reference, seqs_lf, seqs_is, seqs_rf, quals_lf, quals_is, quals_rf, aligner, harsh_aligner, consensus_contigs_alns, config, stats, true, false, &trim_quals);
+	return generate_reference_guided_consensus(reference, seqs_lf, seqs_is, seqs_rf, quals_lf, quals_is, quals_rf, aligner, harsh_aligner, consensus_contigs_alns, config, stats, true, false, &trim_quals, dropped_contigs, flank_reads, max_flank);
 }
 
 // Re-estimate junction HP lengths from reads anchored on both sides. The sequencing-3'
@@ -704,9 +753,11 @@ std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t
 			std::shared_ptr<insertion_cluster_t> r_cluster, std::shared_ptr<insertion_cluster_t> l_cluster, 
 	        remap_side_t& rc_remap_side, remap_side_t& lc_remap_side, region_t& best_region, bool is_rc, 
 			std::vector<hts_pair_pos_t>& assembled_contig_intervals, std::unordered_map<std::string, std::string>& mateseqs, std::unordered_map<std::string, std::string>& matequals,
-			StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model) {
+			StripedSmithWaterman::Aligner& aligner, StripedSmithWaterman::Aligner& harsh_aligner, config_t& config, stats_t& stats, const hp_tail_quality_model_t& hp_tail_quality_model,
+			std::vector<std::string>* dropped_contigs = nullptr, open_samFile_t* flank_bam = nullptr) {
 
 	assembled_contig_intervals.clear();
+	if (dropped_contigs != nullptr) dropped_contigs->clear();
 
 	if (best_region.score.remap_start >= best_region.score.remap_end) return "";
 
@@ -785,9 +836,30 @@ std::string generate_consensus_sequences(std::string contig_name, chr_seqs_map_t
 	delete[] right_flanking;
 
 
+	std::vector<read_correction::correction_input_t> flank_reads;
+	hts_pos_t max_flank = 0;
+	if (flank_bam != nullptr) {
+		// Fetch the same region and depth budget as de novo read correction.
+		hts_pos_t beg = std::max(hts_pos_t(0), std::min(r_cluster->start, l_cluster->start)), end = std::max(r_cluster->end, l_cluster->end);
+		max_flank = stats.get_max_depth(contig_name) * (end-beg+stats.read_len) / stats.read_len;
+		int tid = bam_name2id(flank_bam->header, contig_name.c_str());
+		hts_itr_t* flank_iter = sam_itr_queryi(flank_bam->idx, tid, beg, end);
+		if (flank_iter) {
+			bam1_t* flank_read = bam_init1();
+			while (sam_itr_next(flank_bam->file, flank_iter, flank_read) >= 0) {
+				if (flank_read->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP | BAM_FQCFAIL)) continue;
+				flank_reads.push_back({get_sequence(flank_read), get_qual(flank_read), false});
+				// Bound the raw fetch before filtering out assembly reads.
+				if (hts_pos_t(flank_reads.size()) > 4*max_flank) break;
+			}
+			bam_destroy1(flank_read);
+			sam_itr_destroy(flank_iter);
+		}
+	}
+
 	// assembled contigs
 	std::vector<StripedSmithWaterman::Alignment> consensus_contigs_alns;
-	std::vector<std::string> consensus_contigs = generate_reference_guided_consensus(full_junction_sequence, r_cluster, l_cluster, mateseqs, matequals, aligner, harsh_aligner, consensus_contigs_alns, config, stats, hp_tail_quality_model);
+	std::vector<std::string> consensus_contigs = generate_reference_guided_consensus(full_junction_sequence, r_cluster, l_cluster, mateseqs, matequals, aligner, harsh_aligner, consensus_contigs_alns, config, stats, hp_tail_quality_model, dropped_contigs, flank_bam ? &flank_reads : nullptr, max_flank);
 
 	std::string corrected_junction_seq;
 
