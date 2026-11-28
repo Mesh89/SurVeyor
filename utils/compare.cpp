@@ -379,6 +379,28 @@ struct sv_match_t {
 };
 std::vector<sv_match_t> matches;
 
+bool same_alt_haplotype(sv_t* sv1, sv_t* sv2) {
+	hts_pos_t start = std::max(hts_pos_t(0), std::min(sv1->start, sv2->start)-20);
+	hts_pos_t end = std::min(chr_seqs.get_len(sv1->chr)-1, std::max(sv1->end, sv2->end)+20);
+	char* alt1 = generate_alt_allele(sv1, start, end);
+	char* alt2 = generate_alt_allele(sv2, start, end);
+	bool same = strcmp(alt1, alt2) == 0;
+	delete [] alt1;
+	delete [] alt2;
+	return same;
+}
+
+bool unchosen_is_negative(const sv_match_t& match) {
+	sv_t* b_sv = match.b_sv.get(), *c_sv = match.c_sv.get();
+	if (match.exact || std::abs(b_sv->svlen()) >= 50 || std::abs(c_sv->svlen()) >= 50) return false;
+	std::string type = b_sv->svtype();
+	if ((type != "DEL" && type != "INS") || type != c_sv->svtype()) return false;
+	if (b_sv->imprecise || c_sv->imprecise || b_sv->incomplete_ins_seq() || c_sv->incomplete_ins_seq()) return false;
+	if (type == "INS" && (b_sv->ins_seq.empty() || c_sv->ins_seq.empty())) return false;
+	// The ALT comparison requires a reference sequence, which is optional with --ignore-seq.
+	return chr_seqs.seqs.count(b_sv->chr) && !same_alt_haplotype(b_sv, c_sv);
+}
+
 // benchmark variants by chromosome, sorted by start, with their phased alleles (sv_t keeps them sorted), for cn_unresolved_label
 struct benchmark_var_t {
 	hts_pos_t start, end, svlen;
@@ -1112,11 +1134,15 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
-		// these SVs matched to a benchmark SV, but another match for the benchmark SV was chosen instead
-		// report non-exact matches with the benchmark GT, but keep exact unselected matches ignored
+		// A different small DEL/INS allele is a negative.
+		// Exact copies, equivalent representations and SV-size matches stay unknown.
 		for (std::string id : c_unchoosen_ids) {
 			sv_match_t* match = unchoosen_match_by_called[id];
-			called_to_benchmark_gts_fout << id << " " << "./. " << match->exact << " ." << std::endl;
+			if (unchosen_is_negative(*match)) {
+				called_to_benchmark_gts_fout << id << " " << "0/0 0 ." << std::endl;
+			} else {
+				called_to_benchmark_gts_fout << id << " " << "./. " << match->exact << " ." << std::endl;
+			}
 			written_ids.insert(id);
 		}
 
